@@ -2711,6 +2711,112 @@ impl PreviewPane {
         ready
     }
 
+    /// 构建本帧待注入各 host webview 的脚本清单(P4:从产品侧搬进库)。
+    ///
+    /// 与 `take_pending_*_commands_for` 的区别:这里一次处理三条队列并直接
+    /// 产出 `(webview_id, 已包裹的 dispatch 脚本)`,产品只需 `eval`。命令类型
+    /// 与 tab 的 host 种类必须匹配,否则丢弃(等价于旧产品侧 `if !tab.uses_*` 守卫)。
+    /// 未进池(`available_webview_ids` 不含其 webview_id)的命令留在队列里,下一帧再试。
+    pub fn take_host_scripts(
+        &mut self,
+        available_webview_ids: &std::collections::HashSet<usize>,
+        project_id: i64,
+        panel: ViewerPanel,
+    ) -> Vec<(usize, String)> {
+        let mut out = Vec::new();
+        let editors = std::mem::take(&mut self.pending_editor_commands);
+        let mut keep_editors = Vec::new();
+        for (tab_id, command) in editors {
+            let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+                continue;
+            };
+            let TabKind::File(path) = &tab.kind else {
+                continue;
+            };
+            if !tab.uses_editor_host() {
+                continue;
+            }
+            let binding = crate::EditorHostBinding::new(project_id, panel, tab_id, path.clone());
+            if !available_webview_ids.contains(&binding.webview_id()) {
+                keep_editors.push((tab_id, command));
+                continue;
+            }
+            let envelope = crate::encode_command(
+                project_id,
+                panel,
+                tab_id,
+                &binding.document_id(),
+                tab.web_revision,
+                None,
+                command,
+            );
+            out.push((binding.webview_id(), crate::dispatch_script(&envelope)));
+        }
+        self.pending_editor_commands = keep_editors;
+
+        let tabular = std::mem::take(&mut self.pending_tabular_commands);
+        let mut keep_tabular = Vec::new();
+        for (tab_id, command) in tabular {
+            let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+                continue;
+            };
+            let TabKind::File(path) = &tab.kind else {
+                continue;
+            };
+            if !tab.uses_tabular_grid_host() {
+                continue;
+            }
+            let binding = crate::EditorHostBinding::new(project_id, panel, tab_id, path.clone());
+            if !available_webview_ids.contains(&binding.webview_id()) {
+                keep_tabular.push((tab_id, command));
+                continue;
+            }
+            let envelope = crate::encode_tabular_command(
+                project_id,
+                panel,
+                tab_id,
+                &binding.document_id(),
+                tab.web_revision,
+                None,
+                command,
+            );
+            out.push((binding.webview_id(), crate::dispatch_script(&envelope)));
+        }
+        self.pending_tabular_commands = keep_tabular;
+
+        let plantuml = std::mem::take(&mut self.pending_plantuml_commands);
+        let mut keep_plantuml = Vec::new();
+        for (tab_id, command) in plantuml {
+            let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+                continue;
+            };
+            let TabKind::File(path) = &tab.kind else {
+                continue;
+            };
+            if !tab.uses_plantuml_host() {
+                continue;
+            }
+            let binding = crate::EditorHostBinding::new(project_id, panel, tab_id, path.clone());
+            if !available_webview_ids.contains(&binding.webview_id()) {
+                keep_plantuml.push((tab_id, command));
+                continue;
+            }
+            let envelope = crate::encode_plantuml_command(
+                project_id,
+                panel,
+                tab_id,
+                &binding.document_id(),
+                tab.web_revision,
+                None,
+                command,
+            );
+            out.push((binding.webview_id(), crate::dispatch_script(&envelope)));
+        }
+        self.pending_plantuml_commands = keep_plantuml;
+
+        out
+    }
+
     /// 排队一个待下发给 PlantUML viewer host 的命令(`tab_id`, 命令)。
     pub fn queue_plantuml_command(&mut self, tab_id: usize, command: PlantUmlCommand) {
         self.pending_plantuml_commands.push((tab_id, command));

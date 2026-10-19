@@ -8,7 +8,6 @@
 //!   macOS 的 Origin 是 `dozer://flyfish`,跨命名空间 fetch 被 CORS 拦;
 //!   URL 保留原始扩展名,Flyfish 靠它选择渲染管线。
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub use dozer_panel_preview::assets::ProtocolReply;
@@ -31,10 +30,7 @@ pub fn assets_root() -> PathBuf {
     {
         return resources.join("flyfish");
     }
-    PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../dozer-panel-preview/assets/flyfish"
-    ))
+    dozer_panel_preview::assets::from_lib_source()
 }
 
 /// 给定可执行文件路径,若它位于 macOS `.app` 包内(祖先目录名以 `.app`
@@ -113,7 +109,7 @@ fn is_app_namespace(uri: &str) -> bool {
 
 pub fn handle_protocol(
     assets_root: &Path,
-    allowed: &HashSet<PathBuf>,
+    allowed: &dozer_panel_preview::assets::AllowedFiles,
     review_data: Option<&str>,
     uri: &str,
 ) -> ProtocolReply {
@@ -230,7 +226,6 @@ fn mime_for(path: &Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
     use std::fs;
     use std::path::PathBuf;
 
@@ -295,7 +290,7 @@ mod tests {
         let root = scratch();
         let r = handle_protocol(
             &root,
-            &HashSet::new(),
+            &dozer_panel_preview::assets::AllowedFiles::new(),
             Some(r#"[{"Human":{"text":"hi"}}]"#),
             "dozer://review-trace/data.json",
         );
@@ -309,7 +304,7 @@ mod tests {
         let root = scratch();
         let r = handle_protocol(
             &root,
-            &HashSet::new(),
+            &dozer_panel_preview::assets::AllowedFiles::new(),
             None,
             "dozer://review-trace/data.json",
         );
@@ -319,7 +314,12 @@ mod tests {
     #[test]
     fn review_trace_unknown_subpath_404() {
         let root = scratch();
-        let r = handle_protocol(&root, &HashSet::new(), None, "dozer://review-trace/nope");
+        let r = handle_protocol(
+            &root,
+            &dozer_panel_preview::assets::AllowedFiles::new(),
+            None,
+            "dozer://review-trace/nope",
+        );
         assert_eq!(r.status, 404);
     }
 
@@ -379,7 +379,7 @@ mod tests {
         .unwrap();
         let r = handle_protocol(
             &root,
-            &HashSet::new(),
+            &dozer_panel_preview::assets::AllowedFiles::new(),
             None,
             "dozer://usage-content/host.html",
         );
@@ -391,7 +391,12 @@ mod tests {
     fn usage_content_unknown_subpath_404() {
         let root = scratch();
         std::fs::create_dir_all(root.with_file_name("usage-content")).unwrap();
-        let r = handle_protocol(&root, &HashSet::new(), None, "dozer://usage-content/nope");
+        let r = handle_protocol(
+            &root,
+            &dozer_panel_preview::assets::AllowedFiles::new(),
+            None,
+            "dozer://usage-content/nope",
+        );
         assert_eq!(r.status, 404);
     }
 
@@ -406,7 +411,7 @@ mod tests {
         .unwrap();
         let r = handle_protocol(
             &root,
-            &HashSet::new(),
+            &dozer_panel_preview::assets::AllowedFiles::new(),
             None,
             "dozer://codehealth-content/host.html",
         );
@@ -420,7 +425,7 @@ mod tests {
         std::fs::create_dir_all(root.with_file_name("codehealth-content")).unwrap();
         let r = handle_protocol(
             &root,
-            &HashSet::new(),
+            &dozer_panel_preview::assets::AllowedFiles::new(),
             None,
             "dozer://codehealth-content/nope",
         );
@@ -434,7 +439,7 @@ mod tests {
         std::fs::create_dir_all(root.with_file_name("codehealth-content")).unwrap();
         let r = handle_protocol(
             &root,
-            &HashSet::new(),
+            &dozer_panel_preview::assets::AllowedFiles::new(),
             None,
             "dozer://codehealth-content/../usage-content/host.html",
         );
@@ -532,7 +537,7 @@ mod tests {
         .unwrap();
         let r = handle_protocol(
             &root,
-            &HashSet::new(),
+            &dozer_panel_preview::assets::AllowedFiles::new(),
             None,
             "dozer://todo-content/host.html",
         );
@@ -544,7 +549,12 @@ mod tests {
     fn todo_content_unknown_subpath_404() {
         let root = scratch();
         std::fs::create_dir_all(root.with_file_name("todo-content")).unwrap();
-        let r = handle_protocol(&root, &HashSet::new(), None, "dozer://todo-content/nope");
+        let r = handle_protocol(
+            &root,
+            &dozer_panel_preview::assets::AllowedFiles::new(),
+            None,
+            "dozer://todo-content/nope",
+        );
         assert_eq!(r.status, 404);
     }
 
@@ -555,7 +565,7 @@ mod tests {
         std::fs::create_dir_all(root.with_file_name("todo-content")).unwrap();
         let r = handle_protocol(
             &root,
-            &HashSet::new(),
+            &dozer_panel_preview::assets::AllowedFiles::new(),
             None,
             "dozer://todo-content/../usage-content/host.html",
         );
@@ -573,7 +583,7 @@ mod tests {
         .unwrap();
         let r = handle_protocol(
             &root,
-            &HashSet::new(),
+            &dozer_panel_preview::assets::AllowedFiles::new(),
             None,
             "dozer://group-chat-content/host.html",
         );
@@ -587,7 +597,7 @@ mod tests {
         std::fs::create_dir_all(root.with_file_name("group-chat-content")).unwrap();
         let r = handle_protocol(
             &root,
-            &HashSet::new(),
+            &dozer_panel_preview::assets::AllowedFiles::new(),
             None,
             "dozer://group-chat-content/nope",
         );
@@ -601,7 +611,7 @@ mod tests {
         std::fs::create_dir_all(root.with_file_name("group-chat-content")).unwrap();
         let r = handle_protocol(
             &root,
-            &HashSet::new(),
+            &dozer_panel_preview::assets::AllowedFiles::new(),
             None,
             "dozer://group-chat-content/../usage-content/host.html",
         );

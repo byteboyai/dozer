@@ -118,6 +118,14 @@ pub trait PreviewPersistence: Send + Sync {
     fn save(&self, project_id: i64, state: &PreviewState) -> std::io::Result<()>;
     /// 脏 tab 未保存快照目录(见 `dozer_preview_core::recovery`)。
     fn recovery_dir(&self) -> PathBuf;
+    /// 连续失败计数文件(见 `dozer_preview_core::startup`)。默认落到恢复目录的
+    /// 同级,`FilePersistence` 覆盖成 `<config_dir>/preview_failures.json`。
+    fn failures_path(&self) -> PathBuf {
+        self.recovery_dir()
+            .parent()
+            .map(dozer_preview_core::startup::failures_path_in)
+            .unwrap_or_else(|| PathBuf::from("preview_failures.json"))
+    }
 }
 
 /// 按配置目录落盘的实现:`<dir>/preview_state/<project_id>.json` 与 `recovery_dir_in(<dir>)`。
@@ -143,6 +151,9 @@ impl PreviewPersistence for FilePersistence {
     }
     fn recovery_dir(&self) -> PathBuf {
         crate::recovery_dir_in(&self.config_dir)
+    }
+    fn failures_path(&self) -> PathBuf {
+        dozer_preview_core::startup::failures_path_in(&self.config_dir)
     }
 }
 

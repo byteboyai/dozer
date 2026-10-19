@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::capabilities::PreviewCapabilities;
+use crate::host_ipc::HostEvent;
 use crate::*;
 
 fn ctx<'a>(caps: &'a PreviewCapabilities, root: Option<&'a Path>) -> UpdateCtx<'a> {
@@ -20,6 +21,9 @@ fn ctx<'a>(caps: &'a PreviewCapabilities, root: Option<&'a Path>) -> UpdateCtx<'
             persist_tabs: true,
             materialize_suspended: true,
         },
+        recovery_dir: None,
+        failures_path: PathBuf::from("/nonexistent/preview_failures.json"),
+        safe_startup: false,
     }
 }
 
@@ -901,4 +905,430 @@ fn run_effect_notifications_are_noops() {
             persistence.clone(),
         );
     }
+}
+
+// —— P4:页面事件进库 ——
+
+fn editor_binding(panel: ViewerPanel, tab_id: usize, path: &Path) -> EditorHostBinding {
+    EditorHostBinding::new(7, panel, tab_id, path.to_path_buf())
+}
+
+fn editor_event(
+    binding: &EditorHostBinding,
+    revision: u64,
+    payload: EditorEvent,
+) -> WebviewEnvelope<EditorEvent> {
+    WebviewEnvelope {
+        protocol_version: 1,
+        project_id: binding.project_id,
+        panel: binding.panel_token().to_string(),
+        tab_id: binding.tab_id,
+        document_id: binding.document_id(),
+        revision,
+        request_id: None,
+        payload,
+    }
+}
+
+fn open_markdown(st: &mut PreviewPanelState, c: &UpdateCtx<'_>, path: &Path) -> (usize, u64) {
+    let (id, generation, _) = open(st, c, path);
+    let _ = update(
+        st,
+        Message::Profiled {
+            tab_id: id,
+            generation,
+            result: Ok(profile(path)),
+        },
+        c,
+    );
+    let tab = st.pane.tabs().iter().find(|t| t.id == id).unwrap();
+    (id, tab.load_state.generation)
+}
+
+#[test]
+fn editor_ready_advances_to_reading_and_arms_the_watchdog() {
+    let dir = tempfile::tempdir().unwrap();
+    let md = file(dir.path(), "a.md", "# hi\n");
+    let caps = PreviewCapabilities::all();
+    let c = ctx(&caps, None);
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &md);
+    let binding = editor_binding(ViewerPanel::Files, id, &md);
+    let fx = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::Ready {
+                    read_only: false,
+                    language: "markdown".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    assert!(fx.iter().any(|e| matches!(
+        e,
+        Effect::ScheduleLoadTimeout {
+            tab_id,
+            stage: PreviewLoadStage::Reading,
+            ..
+        } if *tab_id == id
+    )));
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::ContextChanged { .. }))
+    );
+    let tab = st.pane.tabs().iter().find(|t| t.id == id).unwrap();
+    assert_eq!(tab.web_revision, generation);
+}
+
+#[test]
+fn editor_document_loaded_finishes_the_load() {
+    let dir = tempfile::tempdir().unwrap();
+    let md = file(dir.path(), "a.md", "# hi\n");
+    let caps = PreviewCapabilities::all();
+    let mut c = ctx(&caps, None);
+    c.failures_path = dir.path().join("preview_failures.json");
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &md);
+    let binding = editor_binding(ViewerPanel::Files, id, &md);
+    let _ = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::Ready {
+                    read_only: false,
+                    language: "markdown".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let fx = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::DocumentLoaded {
+                    revision: generation,
+                    bytes: 6,
+                    error: None,
+                },
+            ),
+        }),
+        &c,
+    );
+    let tab = st.pane.tabs().iter().find(|t| t.id == id).unwrap();
+    assert!(!tab.load_state.is_active(), "正文落地后结束加载");
+    assert!(tab.web_error.is_none());
+    assert!(!fx.iter().any(|e| matches!(
+        e,
+        Effect::ScheduleLoadTimeout {
+            stage: PreviewLoadStage::Reading,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn editor_save_requested_emits_save_file_and_save_finished_clears_dirty() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let mut c = ctx(&caps, None);
+    c.failures_path = dir.path().join("preview_failures.json");
+    c.recovery_dir = Some(dir.path());
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let binding = editor_binding(ViewerPanel::Files, id, &rs);
+    let _ = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::Ready {
+                    read_only: false,
+                    language: "rust".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let fx = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::DocumentChanged {
+                    revision: generation,
+                    length: 24,
+                    changes: Vec::new(),
+                },
+            ),
+        }),
+        &c,
+    );
+    assert!(fx.is_empty(), "DocumentChanged 只标脏");
+    assert!(st.pane.tabs().iter().find(|t| t.id == id).unwrap().dirty);
+
+    let fx = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::SaveRequested {
+                    revision: generation,
+                    text: "fn main() { println!(); }\n".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let saved = fx
+        .iter()
+        .find_map(|e| match e {
+            Effect::SaveFile { path, text, .. } => Some((path.clone(), text.clone())),
+            _ => None,
+        })
+        .expect("SaveRequested 应产出 SaveFile");
+    assert_eq!(saved.0, rs);
+    assert_eq!(saved.1, "fn main() { println!(); }\n");
+
+    let fx = update(
+        &mut st,
+        Message::SaveFinished {
+            tab_id: id,
+            result: Ok(()),
+        },
+        &c,
+    );
+    let tab = st.pane.tabs().iter().find(|t| t.id == id).unwrap();
+    assert!(!tab.dirty);
+    assert!(!tab.recovery_written);
+    assert!(fx.iter().any(|e| matches!(
+        e,
+        Effect::ClearRecoverySnapshot { path, .. } if *path == rs
+    )));
+}
+
+#[test]
+fn editor_save_finished_error_sets_web_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let mut c = ctx(&caps, None);
+    c.failures_path = dir.path().join("preview_failures.json");
+    let mut st = PreviewPanelState::default();
+    let (id, _) = open_markdown(&mut st, &c, &rs);
+    let _ = update(
+        &mut st,
+        Message::SaveFinished {
+            tab_id: id,
+            result: Err("disk full".into()),
+        },
+        &c,
+    );
+    let tab = st.pane.tabs().iter().find(|t| t.id == id).unwrap();
+    assert!(tab.web_error.as_deref().unwrap().contains("disk full"));
+}
+
+#[test]
+fn editor_snapshot_writes_recovery_only_with_a_recovery_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let c = ctx(&caps, None);
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let binding = editor_binding(ViewerPanel::Files, id, &rs);
+    let snapshot = |rev| {
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                rev,
+                EditorEvent::Snapshot {
+                    revision: rev,
+                    text: "fn main() {}\n".into(),
+                },
+            ),
+        })
+    };
+    let fx = update(&mut st, snapshot(generation), &c);
+    assert!(
+        !fx.iter()
+            .any(|e| matches!(e, Effect::WriteRecoverySnapshot { .. })),
+        "没有恢复目录的产品不落快照"
+    );
+    let mut c2 = ctx(&caps, None);
+    c2.recovery_dir = Some(dir.path());
+    let fx = update(&mut st, snapshot(generation + 1), &c2);
+    assert!(fx.iter().any(|e| matches!(
+        e,
+        Effect::WriteRecoverySnapshot { tab_id, .. } if *tab_id == id
+    )));
+}
+
+#[test]
+fn editor_context_menu_requested_emits_selection_context_menu() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let c = ctx(&caps, None);
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let binding = editor_binding(ViewerPanel::Files, id, &rs);
+    let fx = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::ContextMenuRequested {
+                    x: 10.0,
+                    y: 20.0,
+                    range: TextRange {
+                        start: TextPosition { line: 1, column: 1 },
+                        end: TextPosition { line: 1, column: 3 },
+                    },
+                    selected_text: "fn".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let effect = fx
+        .iter()
+        .find_map(|e| match e {
+            Effect::SelectionContextMenu {
+                tab_id,
+                path,
+                x,
+                y,
+                selected_text,
+                ..
+            } => Some((*tab_id, path.clone(), *x, *y, selected_text.clone())),
+            _ => None,
+        })
+        .expect("ContextMenuRequested 应产出 SelectionContextMenu");
+    assert_eq!(effect, (id, rs, 10.0, 20.0, "fn".to_string()));
+}
+
+#[test]
+fn editor_failed_bumps_the_failure_counter() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let mut c = ctx(&caps, None);
+    c.failures_path = dir.path().join("preview_failures.json");
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let binding = editor_binding(ViewerPanel::Files, id, &rs);
+    for _ in 0..FAILURE_THRESHOLD {
+        let _ = update(
+            &mut st,
+            Message::Host(HostEvent::Editor {
+                binding: binding.clone(),
+                envelope: editor_event(
+                    &binding,
+                    generation,
+                    EditorEvent::Failed {
+                        message: "boom".into(),
+                        recoverable: true,
+                    },
+                ),
+            }),
+            &c,
+        );
+    }
+    let raw = std::fs::read_to_string(&c.failures_path).unwrap();
+    assert!(raw.contains("a.rs"), "失败计数按路径落盘: {raw}");
+    let tab = st.pane.tabs().iter().find(|t| t.id == id).unwrap();
+    let error = tab.web_error.as_deref().unwrap();
+    assert!(error.contains("boom"), "{error}");
+    assert!(error.contains('3'), "达到阈值应附连续失败次数: {error}");
+}
+
+#[test]
+fn editor_event_for_a_foreign_path_is_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let other = file(dir.path(), "b.rs", "fn other() {}\n");
+    let caps = PreviewCapabilities::all();
+    let c = ctx(&caps, None);
+    let mut st = PreviewPanelState::default();
+    let (id, _generation) = open_markdown(&mut st, &c, &rs);
+    let revision = st
+        .pane
+        .tabs()
+        .iter()
+        .find(|t| t.id == id)
+        .unwrap()
+        .load_state
+        .generation;
+    // binding 与事件的 envelope 一致(都是 b.rs),但与 tab 的 a.rs 不符。
+    let binding = editor_binding(ViewerPanel::Files, id, &other);
+    let fx = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                revision,
+                EditorEvent::Ready {
+                    read_only: false,
+                    language: "rust".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    assert!(fx.is_empty(), "{fx:?}");
+    let tab = st.pane.tabs().iter().find(|t| t.id == id).unwrap();
+    assert!(tab.load_state.is_active(), "路径失配的 ready 不得推进阶段");
+}
+
+#[test]
+fn take_host_scripts_skips_unpooled_webviews_and_encodes_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let md = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities {
+        rendered: false,
+        ..PreviewCapabilities::all()
+    };
+    let c = ctx(&caps, None);
+    let mut st = PreviewPanelState::default();
+    let (id, _) = open_markdown(&mut st, &c, &md);
+    st.pane
+        .queue_editor_command(id, EditorCommand::RevealPosition { line: 1, column: 1 });
+    let webview_id = EditorHostBinding::new(7, ViewerPanel::Files, id, md.clone()).webview_id();
+
+    let scripts =
+        st.pane
+            .take_host_scripts(&std::collections::HashSet::new(), 7, ViewerPanel::Files);
+    assert!(scripts.is_empty(), "未进池的命令必须留队");
+    let scripts = st.pane.take_host_scripts(
+        &std::collections::HashSet::from([webview_id]),
+        7,
+        ViewerPanel::Files,
+    );
+    assert_eq!(scripts.len(), 1, "{scripts:?}");
+    assert_eq!(scripts[0].0, webview_id);
+    assert!(scripts[0].1.contains("__dozer.dispatch"));
+    assert!(scripts[0].1.contains("reveal_position"));
 }

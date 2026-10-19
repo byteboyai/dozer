@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use crate::tabular::SheetLoadRequest;
-use crate::{Message, PreviewLoadStage, PreviewPersistence, PreviewState};
+use crate::{Message, PreviewLoadStage, PreviewPersistence, PreviewState, ViewerPanel};
 
 #[derive(Debug, Clone)]
 pub enum Effect {
@@ -74,6 +74,46 @@ pub enum Effect {
     OpenExternal {
         path: PathBuf,
     },
+    /// 把编辑器缓冲原子写回绑定路径(`save_text_atomic`),结果 `Message::SaveFinished`。
+    /// 路径来自 Rust 侧页签绑定,不采信页面自报;`run_effect` 不校验项目根(Task 2
+    /// 的校验在 `update` 里做,委托方拿到的已经是校验过的路径)。
+    SaveFile {
+        tab_id: usize,
+        path: PathBuf,
+        text: String,
+    },
+    /// 把一段已编码的注入脚本交给产品的 webview 宿主执行(恢复正文 / 视图状态)。
+    /// 页面事件处理体排出的「立即注入一条 host 脚本」。宿主每帧调
+    /// `PreviewPane::take_host_scripts` 时把这里排的一并取走。
+    PushHostScript {
+        webview_id: usize,
+        script: String,
+    },
+    /// 后台建窗口化行索引,结果 `Message::WindowIndex`。
+    BuildLineIndex {
+        tab_id: usize,
+        path: PathBuf,
+        revision: u64,
+        cancel: Arc<AtomicBool>,
+    },
+    /// 防抖脏快照原子写 recovery;成功回 `Message::RecoveryWritten`。
+    WriteRecoverySnapshot {
+        dir: PathBuf,
+        project_id: i64,
+        path: PathBuf,
+        revision: u64,
+        cursor: Option<crate::TextPosition>,
+        selection: Option<crate::TextRange>,
+        top_line: Option<u32>,
+        text: String,
+        tab_id: usize,
+    },
+    /// 保存成功后清掉该文件的 recovery 快照。
+    ClearRecoverySnapshot {
+        dir: PathBuf,
+        project_id: i64,
+        path: PathBuf,
+    },
     /// 异步写页签持久化状态。
     PersistTabs {
         project_id: i64,
@@ -96,6 +136,17 @@ pub enum Effect {
     TabClosed {
         index: usize,
         old_len: usize,
+    },
+    /// 预览内选区右键:坐标是 webview 本地坐标,产品自己换算窗口坐标并弹菜单
+    /// (Dozer 有「复制 / 发送给 Agent」,Digger 第一批忽略)。
+    SelectionContextMenu {
+        panel: ViewerPanel,
+        tab_id: usize,
+        path: PathBuf,
+        x: f32,
+        y: f32,
+        range: crate::TextRange,
+        selected_text: String,
     },
 }
 
@@ -307,6 +358,77 @@ pub fn run_effect(
                 }
             });
         }
+        Effect::SaveFile { tab_id, path, text } => {
+            handle.spawn_blocking(move || {
+                let result = crate::save_text_atomic(&path, &text).map_err(|e| e.to_string());
+                emit(Message::SaveFinished { tab_id, result });
+            });
+        }
+        Effect::BuildLineIndex {
+            tab_id,
+            path,
+            revision,
+            cancel,
+        } => {
+            handle.spawn_blocking(move || {
+                // 按 chunk 检查取消信号(置位即提前返回 `Ok(None)`)。
+                let cancelled = {
+                    let cancel = cancel.clone();
+                    move || cancel.load(std::sync::atomic::Ordering::Relaxed)
+                };
+                let result = crate::LineIndex::build_cancellable(&path, 1000, revision, cancelled)
+                    .and_then(|index| index.ok_or_else(|| std::io::Error::other("index cancelled")))
+                    .map(std::sync::Arc::new)
+                    .map_err(|e| e.to_string());
+                emit(Message::WindowIndex { tab_id, result });
+            });
+        }
+        Effect::WriteRecoverySnapshot {
+            dir,
+            project_id,
+            path,
+            revision,
+            cursor,
+            selection,
+            top_line,
+            text,
+            tab_id,
+        } => {
+            handle.spawn_blocking(move || {
+                let ok = crate::profile_file(&path)
+                    .map(|profile| {
+                        let manifest = crate::RecoveryManifest::from_profile(
+                            path.clone(),
+                            &profile,
+                            revision,
+                            cursor,
+                            selection,
+                            top_line,
+                        );
+                        crate::write_snapshot(
+                            &dir,
+                            project_id,
+                            crate::path_key(&path),
+                            &manifest,
+                            &text,
+                        )
+                        .is_ok()
+                    })
+                    .unwrap_or(false);
+                if ok {
+                    emit(Message::RecoveryWritten(tab_id));
+                }
+            });
+        }
+        Effect::ClearRecoverySnapshot {
+            dir,
+            project_id,
+            path,
+        } => {
+            handle.spawn_blocking(move || {
+                crate::clear_snapshot(&dir, project_id, crate::path_key(&path));
+            });
+        }
         Effect::PersistTabs { project_id, state } => {
             handle.spawn(async move {
                 if let Err(error) = persistence.save(project_id, &state) {
@@ -318,7 +440,11 @@ pub fn run_effect(
         | Effect::PathOpened(_)
         | Effect::ContextChanged { .. }
         | Effect::TabSelected { .. }
-        | Effect::TabClosed { .. } => {}
+        | Effect::TabClosed { .. }
+        | Effect::SelectionContextMenu { .. } => {}
+        Effect::PushHostScript { webview_id, script } => {
+            let _ = (webview_id, script);
+        }
     }
 }
 

@@ -114,4 +114,12 @@ pub enum Message {
         generation: u64,
         result: Result<PlantUmlDocument, PlantUmlLoadError>,
     },
+    // —— 页面事件(P4 进库)——
+    /// 一条已由 `host_ipc::classify_ipc` 解析并校验归属的 webview 事件。
+    Host(crate::host_ipc::HostEvent),
+    /// `Effect::SaveFile` 的落盘回执。
+    SaveFinished {
+        tab_id: usize,
+        result: Result<(), String>,
+    },
 }

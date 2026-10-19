@@ -37,6 +37,12 @@ pub struct UpdateCtx<'a> {
     /// 激活页签的 webview 池 key(webview 档查找用),没有则 `None`。
     pub active_webview_pool_id: Option<usize>,
     pub behavior: PanelBehavior,
+    /// 恢复目录(脏快照落盘)。`None` = 该产品不持久化恢复数据。
+    pub recovery_dir: Option<&'a Path>,
+    /// 连续失败计数文件(`PreviewPersistence::failures_path`)。
+    pub failures_path: PathBuf,
+    /// 该产品是否已经完成启动(安全启动下不应调度索引 / 快照类后台任务)。
+    pub safe_startup: bool,
 }
 
 /// 处理一条消息,返回待执行的效果。
@@ -235,6 +241,10 @@ pub fn update(state: &mut PreviewPanelState, msg: Message, ctx: &UpdateCtx<'_>) 
                 .pane
                 .apply_plantuml_load_error(tab_id, generation, &error, ctx.locale),
         },
+        Message::Host(event) => crate::host_update::host_event(state, event, ctx, &mut fx),
+        Message::SaveFinished { tab_id, result } => {
+            crate::host_update::save_finished(state, tab_id, result, ctx, &mut fx)
+        }
     }
     fx
 }

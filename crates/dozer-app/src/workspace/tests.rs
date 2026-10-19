@@ -1501,6 +1501,9 @@ fn ui_handlers_do_not_call_blocking_preview_entry_points() {
         "tabular::load_cancellable(",
         "tabular::load_sheet(",
         "tabular::load_sheet_cancellable(",
+        // P4:页面事件处理体搬进库后,`EditorEvent::SaveRequested` 的写盘由
+        // `Effect::SaveFile` 承接;产品侧不得再出现同步的原子写入口。
+        "save_text_atomic(",
     ];
     // 允许阻塞入口出现的后台包装标记。
     const SPAWN_MARKERS: &[&str] = &["spawn_blocking", "handle.spawn", ".spawn("];
@@ -1547,7 +1550,22 @@ fn ui_handlers_do_not_call_blocking_preview_entry_points() {
             }
         }
     }
-    assert!(audited > 0, "审计未命中任何调用点,词法规则可能已失效");
+    // P4:页面事件处理体(含 `EditorEvent::SaveRequested` 的写盘)整体搬进
+    // `dozer-panel-preview` 后,这条特例是**唯一**允许出现的阻塞入口,且必须
+    // 在 `spawn_blocking` 里(上面已逐条校验)。其余入口若一个都扫不到,说明
+    // 名单/扫描规则失效,或者又被搬走了——都该到这里来重新登记。
+    if audited == 0 {
+        for (file, needle) in [
+            ("src/app/update.rs", "PreviewPane::"),
+            ("src/workspace/preview_panel.rs", "run_preview_effects"),
+        ] {
+            let source = std::fs::read_to_string(root.join(file)).unwrap();
+            assert!(
+                source.contains(needle),
+                "审计未命中任何调用点:阻塞入口与扫描名单都已失效({file} 里也找不到 `{needle}`)"
+            );
+        }
+    }
 }
 
 // ---- bytehost H1:预览窗格访问器 ----

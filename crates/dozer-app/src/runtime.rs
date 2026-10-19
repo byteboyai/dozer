@@ -316,7 +316,7 @@ pub(crate) fn sync_webview_pool(
     window: &winit::window::Window,
     pool: &mut std::collections::HashMap<usize, (wry::WebView, String)>,
     specs: Vec<(crate::preview::WebviewSpec, wry::Rect)>,
-    allowed_files: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>>,
+    allowed_files: std::sync::Arc<std::sync::Mutex<dozer_panel_preview::assets::AllowedFiles>>,
     review_snapshot: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     proxy: winit::event_loop::EventLoopProxy<Message>,
     report_title: bool,

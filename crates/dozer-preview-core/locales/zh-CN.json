@@ -61,6 +61,10 @@
   "view.readonly_or_not_writable": "只读或不可写 backend",
   "view.replace_needs_revision": "replace 必须携带 expected_revision",
   "text_save.temp_create_failed": "无法创建保存临时文件",
+  "text_save.readonly": "该文件为只读/非 UTF-8 文本,已禁用保存以免破坏原文件",
+  "text_save.conflict": "磁盘文件已被外部修改,请先选择「保留我的修改」或「重载磁盘」。",
+  "text_save.failed": "保存失败：{message}",
+  "text_save.repeated_failure": "{message}(已连续失败 {count} 次,请改用纯文本/外部打开)",
 
   "editor.not_utf8_readonly": "该文件不是有效的 UTF-8 文本,仅只读显示;保存已禁用以免破坏原文件",
   "editor.utf16_readonly": "该文件是 UTF-16 编码,已转码为只读文本;保存已禁用以免改变原编码",

@@ -434,7 +434,7 @@ pub struct Workspace {
     pub(crate) agent_context: crate::extensions::agent_context::State,
     /// `dozer://flyfish/__file__` 端点的文件白名单;与 main.rs 的协议
     /// 闭包共享(Arc),打开文件时插入.
-    pub(crate) allowed_files: Arc<Mutex<HashSet<PathBuf>>>,
+    pub(crate) allowed_files: Arc<Mutex<dozer_panel_preview::assets::AllowedFiles>>,
     /// 进行中的会话审阅（审阅 tab 内容;None=未打开;P1i）。
     pub(crate) review: Option<ReviewView>,
     /// `dozer://review-trace/data.json` 协议端点回显的当前审阅内容快照
@@ -574,7 +574,7 @@ impl Workspace {
     pub(crate) fn from_restore(
         io: &ShellIo,
         restore: ProjectRestore,
-        allowed_files: Option<Arc<Mutex<HashSet<PathBuf>>>>,
+        allowed_files: Option<Arc<Mutex<dozer_panel_preview::assets::AllowedFiles>>>,
     ) -> Self {
         let ProjectRestore {
             project,
@@ -634,7 +634,9 @@ impl Workspace {
             recent_projects,
             // 必须在 `restore_preview_state()` **之前**就位:那一步会把重开的
             // 预览文件写进白名单,写晚了就写到了一个没人看的 Arc 上。
-            allowed_files: allowed_files.unwrap_or_else(|| Arc::new(Mutex::new(HashSet::new()))),
+            allowed_files: allowed_files.unwrap_or_else(|| {
+                Arc::new(Mutex::new(dozer_panel_preview::assets::AllowedFiles::new()))
+            }),
             ..Self::empty_for_project_placeholder()
         };
         // 预览面板共享同一份启动能力快照(见 `ShellIo::capabilities`)。
@@ -722,7 +724,7 @@ impl Workspace {
             preview_context_nonce: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             browser: browser::State::default(),
             agent_context: Default::default(),
-            allowed_files: Arc::new(Mutex::new(HashSet::new())),
+            allowed_files: Arc::new(Mutex::new(dozer_panel_preview::assets::AllowedFiles::new())),
             review: None,
             review_snapshot: Arc::new(Mutex::new(None)),
             review_nonce: 0,
@@ -2275,7 +2277,7 @@ text: dozer_model::LocalizedText::keyed(
     }
 
     /// 协议闭包共享的文件白名单句柄.
-    pub fn allowed_files(&self) -> Arc<Mutex<HashSet<PathBuf>>> {
+    pub fn allowed_files(&self) -> Arc<Mutex<dozer_panel_preview::assets::AllowedFiles>> {
         Arc::clone(&self.allowed_files)
     }
 

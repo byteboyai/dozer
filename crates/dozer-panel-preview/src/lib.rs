@@ -14,6 +14,7 @@ pub mod display;
 pub mod effects;
 pub mod host_ipc;
 pub mod host_script;
+mod host_update;
 pub mod i18n;
 pub mod message;
 pub mod pane;

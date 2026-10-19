@@ -21,6 +21,109 @@ use std::path::{Path, PathBuf};
 
 use crate::file_profile::decode_utf16_to_utf8;
 
+/// 协议端点可读文件的**规范化**白名单(S5b-2 P4 Task 3)。
+///
+/// 产品用 `insert` / `clear` 把「用户显式打开过的文件」登记进来;协议闭包
+/// 用 `contains` 判断能否读。未做任何 I/O 规范化的 `PathBuf` 直接比较会漏掉
+/// `./a/b`、`a//b`、`a/b/` 这类等价写法(Windows/macOS 大小写与尾斜杠尤其
+/// 明显),所以 `insert` 时统一 `clean` 成绝对、无 `.`/`..`、无重复分隔符、
+/// 去尾斜杠的形式;**不**碰文件系统(不 canonicalize,符号链接语义保持原样,
+/// 白名单只该信任调用方给的路径)。
+#[derive(Debug, Clone, Default)]
+pub struct AllowedFiles {
+    inner: HashSet<PathBuf>,
+}
+
+impl AllowedFiles {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 登记一个文件;返回内部实际保存的规范化路径。
+    pub fn insert(&mut self, path: impl Into<PathBuf>) -> PathBuf {
+        let cleaned = clean_allowed_path(&path.into());
+        self.inner.insert(cleaned.clone());
+        cleaned
+    }
+
+    /// 撤销登记(同样先规范化再删)。
+    pub fn remove(&mut self, path: &Path) {
+        self.inner.remove(&clean_allowed_path(path));
+    }
+
+    /// 白名单是否含该文件。查询路径同样先规范化,`./a/b` 与 `a/b` 等价。
+    pub fn contains(&self, path: &Path) -> bool {
+        self.inner.contains(&clean_allowed_path(path))
+    }
+
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// 遍历**已规范化**的登记项(`assets` 的 `html` 目录闸门要用)。
+    pub fn iter(&self) -> impl Iterator<Item = &PathBuf> {
+        self.inner.iter()
+    }
+}
+
+impl FromIterator<PathBuf> for AllowedFiles {
+    fn from_iter<I: IntoIterator<Item = PathBuf>>(iter: I) -> Self {
+        let mut out = Self::new();
+        for path in iter {
+            out.insert(path);
+        }
+        out
+    }
+}
+
+/// 把路径整理成白名单比较用的固定形式。
+///
+/// - 保留「绝对 / 相对」属性(相对路径先接当前目录,产品传入的都是绝对
+///   路径,但规范化不应悄悄把它变成别的盘/根);
+/// - 去掉 `.` 分量、消解 `..`(不越出根)、合并重复分隔符、去尾斜杠。
+///
+/// 纯字符串处理:符号链接、大小写、Unicode 归一化都不碰——那些需要碰文件
+/// 系统,而白名单是"用户打开过哪些**路径**",不是"哪些 inode"。
+pub fn clean_allowed_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let absolute = path.is_absolute();
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::Prefix(_) | Component::RootDir | Component::CurDir => {
+                out.push(comp.as_os_str())
+            }
+            Component::ParentDir => {
+                if !out.pop() && !absolute {
+                    out.push("..");
+                }
+            }
+            Component::Normal(part) => out.push(part),
+        }
+    }
+    if !absolute {
+        let joined = if out.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            out
+        };
+        if let Ok(cwd) = std::env::current_dir() {
+            return clean_allowed_path(&cwd.join(joined));
+        }
+        return joined;
+    }
+    out
+}
+
 /// 一次协议应答(状态码 / MIME / 字节)。产品把它转成自家 webview 的响应类型。
 pub struct ProtocolReply {
     pub status: u16,
@@ -48,6 +151,15 @@ pub fn bundled_assets_root(exe: &Path, dev_root: &Path) -> PathBuf {
         Some(resources) => resources.join("flyfish"),
         None => dev_root.to_path_buf(),
     }
+}
+
+/// 开发态资源根:本 crate 源码树里的 `assets/flyfish`。
+///
+/// 产品在 dev 形态(cargo run)没有自己的资源副本,直接读这里;打包态请走
+/// `bundled_assets_root(exe, from_lib_source())`。编辑这里会同时影响所有
+/// 依赖方,但只影响 dev 运行,不进任何产物。
+pub fn from_lib_source() -> PathBuf {
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/flyfish"))
 }
 
 /// 给定可执行文件路径,若它位于 macOS `.app` 包内(祖先目录名以 `.app`
@@ -137,7 +249,7 @@ fn serve_vendored(root: &Path, encoded_path: &str) -> ProtocolReply {
 }
 
 /// 本地文件端点 `__file__/<百分号编码的绝对路径>`:仅白名单内路径可读。
-fn serve_allowlisted_file(encoded: &str, allowed: &HashSet<PathBuf>) -> ProtocolReply {
+fn serve_allowlisted_file(encoded: &str, allowed: &AllowedFiles) -> ProtocolReply {
     let Some(decoded) = percent_decode(encoded) else {
         return not_found();
     };
@@ -176,7 +288,7 @@ fn editor_root_for(flyfish_root: &Path) -> PathBuf {
 /// 宽一点:允许**已打开文件所在目录子树**(相对资源 css/js/图片要能加载),
 /// 但不允许跨出这些目录,且拒绝任何 `..` 分量 + 再 canonicalize 复核(防符号
 /// 链接逃逸)。`allowed` 是应用维护的"用户显式打开过的文件"集合。
-fn serve_html_file(encoded: &str, allowed: &HashSet<PathBuf>) -> ProtocolReply {
+fn serve_html_file(encoded: &str, allowed: &AllowedFiles) -> ProtocolReply {
     let Some(decoded) = percent_decode(encoded) else {
         return not_found();
     };
@@ -246,7 +358,7 @@ const IMAGE_ANNOTATE_HOST: &str = include_str!("../assets/image_annotate_host.ht
 /// todo-content / group-chat-content 等应用级命名空间)。
 pub fn handle_protocol(
     assets_root: &Path,
-    allowed: &HashSet<PathBuf>,
+    allowed: &AllowedFiles,
     uri: &str,
 ) -> Option<ProtocolReply> {
     let rest = uri.strip_prefix("dozer://")?;
@@ -272,7 +384,7 @@ const PREVIEW_NAMESPACES: [&str; 7] = [
 
 /// `rest` 是去掉 `dozer://` 与 query 之后的路径。非预览命名空间 → 404 之外的
 /// 情形由调用方(`handle_protocol`)判 `None`;这里默认按 404 应答。
-fn serve(assets_root: &Path, allowed: &HashSet<PathBuf>, rest: &str) -> ProtocolReply {
+fn serve(assets_root: &Path, allowed: &AllowedFiles, rest: &str) -> ProtocolReply {
     // editor host:页面/脚本/样式/字体从 editor 根服务;`__file__/<abs>` 复用
     // 同一份白名单读取当前预览文件。JS 不能自报任意路径(不入白名单即 404)。
     if let Some(path) = rest.strip_prefix("editor/") {
@@ -354,7 +466,6 @@ fn serve(assets_root: &Path, allowed: &HashSet<PathBuf>, rest: &str) -> Protocol
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
     use std::fs;
     use std::path::PathBuf;
 
@@ -398,7 +509,7 @@ mod tests {
         let escaped = base.join("secret.txt");
         fs::write(&escaped, b"nope").unwrap();
 
-        let mut allowed = HashSet::new();
+        let mut allowed = AllowedFiles::new();
         allowed.insert(allowed_file.clone());
         let enc = |p: &std::path::Path| {
             p.to_string_lossy()
@@ -492,13 +603,13 @@ mod tests {
     #[test]
     fn serves_vendored_asset_with_mime() {
         let root = scratch();
-        let r = handle_protocol(&root, &HashSet::new(), "dozer://flyfish/host.html")
+        let r = handle_protocol(&root, &AllowedFiles::new(), "dozer://flyfish/host.html")
             .expect("预览命名空间");
         assert_eq!(r.status, 200);
         assert_eq!(r.mime, "text/html");
         assert_eq!(r.body, b"<html>");
         // 查询串被剥离(缓存破坏参数),不参与路径。
-        let r = handle_protocol(&root, &HashSet::new(), "dozer://flyfish/sub/a.js?v=1")
+        let r = handle_protocol(&root, &AllowedFiles::new(), "dozer://flyfish/sub/a.js?v=1")
             .expect("预览命名空间");
         assert_eq!(r.status, 200);
         assert_eq!(r.mime, "text/javascript");
@@ -512,7 +623,7 @@ mod tests {
             "dozer://flyfish/sub/../../etc/passwd",
         ] {
             assert_eq!(
-                handle_protocol(&root, &HashSet::new(), uri)
+                handle_protocol(&root, &AllowedFiles::new(), uri)
                     .expect("预览命名空间")
                     .status,
                 404,
@@ -520,9 +631,9 @@ mod tests {
             );
         }
         // 不属于预览的命名空间不再被当作 flyfish 根下的相对路径。
-        assert!(handle_protocol(&root, &HashSet::new(), "dozer://other/x").is_none());
+        assert!(handle_protocol(&root, &AllowedFiles::new(), "dozer://other/x").is_none());
         assert_eq!(
-            handle_protocol(&root, &HashSet::new(), "dozer://flyfish/nope.js")
+            handle_protocol(&root, &AllowedFiles::new(), "dozer://flyfish/nope.js")
                 .expect("预览命名空间")
                 .status,
             404
@@ -535,12 +646,12 @@ mod tests {
         let f = root.join("sub").join("a.js");
         let uri = format!("dozer://flyfish/__file__{}", f.to_string_lossy());
         assert_eq!(
-            handle_protocol(&root, &HashSet::new(), &uri)
+            handle_protocol(&root, &AllowedFiles::new(), &uri)
                 .expect("预览命名空间")
                 .status,
             404
         );
-        let allowed: HashSet<PathBuf> = [f.clone()].into_iter().collect();
+        let allowed: AllowedFiles = [f.clone()].into_iter().collect();
         let r = handle_protocol(&root, &allowed, &uri).expect("预览命名空间");
         assert_eq!(r.status, 200);
         assert_eq!(r.body, b"js");
@@ -555,7 +666,7 @@ mod tests {
             bytes.extend_from_slice(&u.to_le_bytes());
         }
         fs::write(&f, &bytes).unwrap();
-        let allowed: HashSet<PathBuf> = [f.clone()].into_iter().collect();
+        let allowed: AllowedFiles = [f.clone()].into_iter().collect();
         let uri = format!("dozer://editor/__file__{}", f.to_string_lossy());
         let r = handle_protocol(&root, &allowed, &uri).expect("预览命名空间");
         assert_eq!(r.status, 200);
@@ -567,7 +678,7 @@ mod tests {
         let root = scratch();
         let f = root.join("u8.rs");
         fs::write(&f, b"fn main() {}\n").unwrap();
-        let allowed: HashSet<PathBuf> = [f.clone()].into_iter().collect();
+        let allowed: AllowedFiles = [f.clone()].into_iter().collect();
         let uri = format!("dozer://editor/__file__{}", f.to_string_lossy());
         let r = handle_protocol(&root, &allowed, &uri).expect("预览命名空间");
         assert_eq!(r.body, b"fn main() {}\n");
@@ -578,7 +689,7 @@ mod tests {
         let root = scratch();
         let f = root.join("odd.bin");
         fs::write(&f, [0xFF, 0xFE, 0x41]).unwrap();
-        let allowed: HashSet<PathBuf> = [f.clone()].into_iter().collect();
+        let allowed: AllowedFiles = [f.clone()].into_iter().collect();
         let uri = format!("dozer://editor/__file__{}", f.to_string_lossy());
         let r = handle_protocol(&root, &allowed, &uri).expect("预览命名空间");
         assert_eq!(r.body, [0xFF, 0xFE, 0x41]);
@@ -593,7 +704,7 @@ mod tests {
             "dozer://flyfish/sub/%2e%2e/%2e%2e/etc/passwd",
         ] {
             assert_eq!(
-                handle_protocol(&root, &HashSet::new(), uri)
+                handle_protocol(&root, &AllowedFiles::new(), uri)
                     .expect("预览命名空间")
                     .status,
                 404,
@@ -648,12 +759,12 @@ mod tests {
     #[test]
     fn serves_editor_host_and_assets() {
         let (flyfish, _) = scratch_editor();
-        let r = handle_protocol(&flyfish, &HashSet::new(), "dozer://editor/index.html")
+        let r = handle_protocol(&flyfish, &AllowedFiles::new(), "dozer://editor/index.html")
             .expect("预览命名空间");
         assert_eq!(r.status, 200);
         assert_eq!(r.mime, "text/html");
         assert_eq!(r.body, b"<html>editor");
-        let r = handle_protocol(&flyfish, &HashSet::new(), "dozer://editor/main.js?v=2")
+        let r = handle_protocol(&flyfish, &AllowedFiles::new(), "dozer://editor/main.js?v=2")
             .expect("预览命名空间");
         assert_eq!(r.status, 200);
         assert_eq!(r.mime, "text/javascript");
@@ -666,12 +777,12 @@ mod tests {
         fs::write(&f, b"fn main() {}").unwrap();
         let uri = format!("dozer://editor/__file__{}", f.to_string_lossy());
         assert_eq!(
-            handle_protocol(&flyfish, &HashSet::new(), &uri)
+            handle_protocol(&flyfish, &AllowedFiles::new(), &uri)
                 .expect("预览命名空间")
                 .status,
             404
         );
-        let allowed: HashSet<PathBuf> = [f.clone()].into_iter().collect();
+        let allowed: AllowedFiles = [f.clone()].into_iter().collect();
         let r = handle_protocol(&flyfish, &allowed, &uri).expect("预览命名空间");
         assert_eq!(r.status, 200);
         assert_eq!(r.body, b"fn main() {}");
@@ -686,7 +797,7 @@ mod tests {
             "dozer://editor/nope.js",
         ] {
             assert_eq!(
-                handle_protocol(&flyfish, &HashSet::new(), uri)
+                handle_protocol(&flyfish, &AllowedFiles::new(), uri)
                     .expect("预览命名空间")
                     .status,
                 404,
@@ -701,20 +812,24 @@ mod tests {
         let json = base.join("json-editor");
         fs::create_dir_all(&json).unwrap();
         fs::write(json.join("index.html"), b"<html>json").unwrap();
-        let r = handle_protocol(&flyfish, &HashSet::new(), "dozer://json-editor/index.html")
-            .expect("预览命名空间");
+        let r = handle_protocol(
+            &flyfish,
+            &AllowedFiles::new(),
+            "dozer://json-editor/index.html",
+        )
+        .expect("预览命名空间");
         assert_eq!(r.status, 200);
         assert_eq!(r.body, b"<html>json");
         let f = base.join("d.json");
         fs::write(&f, b"{}").unwrap();
         let uri = format!("dozer://json-editor/__file__{}", f.to_string_lossy());
         assert_eq!(
-            handle_protocol(&flyfish, &HashSet::new(), &uri)
+            handle_protocol(&flyfish, &AllowedFiles::new(), &uri)
                 .expect("预览命名空间")
                 .status,
             404
         );
-        let allowed: HashSet<PathBuf> = [f].into_iter().collect();
+        let allowed: AllowedFiles = [f].into_iter().collect();
         assert_eq!(
             handle_protocol(&flyfish, &allowed, &uri)
                 .expect("预览命名空间")
@@ -729,12 +844,12 @@ mod tests {
         let tab = base.join("tabular-host");
         fs::create_dir_all(&tab).unwrap();
         fs::write(tab.join("index.html"), b"<html>tabular").unwrap();
-        let r = handle_protocol(&flyfish, &HashSet::new(), "dozer://tabular/index.html")
+        let r = handle_protocol(&flyfish, &AllowedFiles::new(), "dozer://tabular/index.html")
             .expect("预览命名空间");
         assert_eq!(r.status, 200);
         assert_eq!(r.body, b"<html>tabular");
         assert_eq!(
-            handle_protocol(&flyfish, &HashSet::new(), "dozer://tabular/nope.js")
+            handle_protocol(&flyfish, &AllowedFiles::new(), "dozer://tabular/nope.js")
                 .expect("预览命名空间")
                 .status,
             404
@@ -742,7 +857,7 @@ mod tests {
         // 没有 `__file__` 端点(数据只走 evaluate_script 推送)。
         let f = base.join("s.csv");
         fs::write(&f, b"a,b").unwrap();
-        let allowed: HashSet<PathBuf> = [f.clone()].into_iter().collect();
+        let allowed: AllowedFiles = [f.clone()].into_iter().collect();
         let uri = format!("dozer://tabular/__file__{}", f.to_string_lossy());
         assert_eq!(
             handle_protocol(&flyfish, &allowed, &uri)
@@ -755,7 +870,7 @@ mod tests {
     #[test]
     fn serves_html_host_with_sandbox_and_strict_csp() {
         let (flyfish, _) = scratch_editor();
-        let r = handle_protocol(&flyfish, &HashSet::new(), "dozer://html/host.html")
+        let r = handle_protocol(&flyfish, &AllowedFiles::new(), "dozer://html/host.html")
             .expect("预览命名空间");
         assert_eq!(r.status, 200);
         assert_eq!(r.mime, "text/html");
@@ -778,7 +893,7 @@ mod tests {
         fs::write(&opened, b"<html>").unwrap();
         fs::write(&sibling, b"body{}").unwrap();
         fs::write(&outside, b"x").unwrap();
-        let allowed: HashSet<PathBuf> = [opened.clone()].into_iter().collect();
+        let allowed: AllowedFiles = [opened.clone()].into_iter().collect();
 
         // 已打开文件本身。
         let uri = format!("dozer://html/__file__{}", opened.to_string_lossy());
@@ -803,7 +918,7 @@ mod tests {
         );
         // 未打开的未知页面 → 未知子路径。
         assert_eq!(
-            handle_protocol(&flyfish, &HashSet::new(), "dozer://html/nope.html")
+            handle_protocol(&flyfish, &AllowedFiles::new(), "dozer://html/nope.html")
                 .expect("预览命名空间")
                 .status,
             404
@@ -819,7 +934,7 @@ mod tests {
         fs::write(img.join("marker.png"), b"img").unwrap();
         let r = handle_protocol(
             &flyfish,
-            &HashSet::new(),
+            &AllowedFiles::new(),
             "dozer://image-annotate/host.html",
         )
         .expect("预览命名空间");
@@ -832,7 +947,7 @@ mod tests {
         );
         let r = handle_protocol(
             &flyfish,
-            &HashSet::new(),
+            &AllowedFiles::new(),
             "dozer://image-annotate/marker.png",
         )
         .expect("预览命名空间");
@@ -843,12 +958,12 @@ mod tests {
         fs::write(&f, b"png").unwrap();
         let uri = format!("dozer://image-annotate/__file__{}", f.to_string_lossy());
         assert_eq!(
-            handle_protocol(&flyfish, &HashSet::new(), &uri)
+            handle_protocol(&flyfish, &AllowedFiles::new(), &uri)
                 .expect("预览命名空间")
                 .status,
             404
         );
-        let allowed: HashSet<PathBuf> = [f].into_iter().collect();
+        let allowed: AllowedFiles = [f].into_iter().collect();
         assert_eq!(
             handle_protocol(&flyfish, &allowed, &uri)
                 .expect("预览命名空间")
@@ -865,7 +980,7 @@ mod tests {
             "dozer://image-annotate/nope.png",
         ] {
             assert_eq!(
-                handle_protocol(&flyfish, &HashSet::new(), uri)
+                handle_protocol(&flyfish, &AllowedFiles::new(), uri)
                     .expect("预览命名空间")
                     .status,
                 404,
@@ -883,7 +998,7 @@ mod tests {
         fs::write(puml.join("engine").join("viz.js"), b"js").unwrap();
         let r = handle_protocol(
             &flyfish,
-            &HashSet::new(),
+            &AllowedFiles::new(),
             "dozer://plantuml-viewer/index.html",
         )
         .expect("预览命名空间");
@@ -891,7 +1006,7 @@ mod tests {
         assert_eq!(r.body, b"<html>puml");
         let r = handle_protocol(
             &flyfish,
-            &HashSet::new(),
+            &AllowedFiles::new(),
             "dozer://plantuml-viewer/engine/viz.js",
         )
         .expect("预览命名空间");
@@ -909,7 +1024,7 @@ mod tests {
             "dozer://plantuml-viewer/%2e%2e/etc/passwd",
         ] {
             assert_eq!(
-                handle_protocol(&flyfish, &HashSet::new(), uri)
+                handle_protocol(&flyfish, &AllowedFiles::new(), uri)
                     .expect("预览命名空间")
                     .status,
                 404,
@@ -918,7 +1033,7 @@ mod tests {
         }
         let f = base.join("a.puml");
         fs::write(&f, b"@startuml").unwrap();
-        let allowed: HashSet<PathBuf> = [f.clone()].into_iter().collect();
+        let allowed: AllowedFiles = [f.clone()].into_iter().collect();
         let uri = format!("dozer://plantuml-viewer/__file__{}", f.to_string_lossy());
         assert_eq!(
             handle_protocol(&flyfish, &allowed, &uri)
@@ -931,10 +1046,10 @@ mod tests {
     #[test]
     fn unknown_scheme_and_foreign_namespaces_are_left_to_the_shell() {
         let root = scratch();
-        assert!(handle_protocol(&root, &HashSet::new(), "https://x/y").is_none());
+        assert!(handle_protocol(&root, &AllowedFiles::new(), "https://x/y").is_none());
         // `dozer://` 裸 scheme 也照旧 404(搬迁前的行为,不是"交给外壳")。
         assert_eq!(
-            handle_protocol(&root, &HashSet::new(), "dozer://")
+            handle_protocol(&root, &AllowedFiles::new(), "dozer://")
                 .expect("dozer:// 本身仍由预览应答")
                 .status,
             404
@@ -947,13 +1062,13 @@ mod tests {
             "dozer://review-trace/data.json",
         ] {
             assert!(
-                handle_protocol(&root, &HashSet::new(), foreign).is_none(),
+                handle_protocol(&root, &AllowedFiles::new(), foreign).is_none(),
                 "{foreign}"
             );
         }
         // 预览命名空间里的空路径仍然是 404(不是"交给外壳")。
         assert_eq!(
-            handle_protocol(&root, &HashSet::new(), "dozer://flyfish/")
+            handle_protocol(&root, &AllowedFiles::new(), "dozer://flyfish/")
                 .expect("预览命名空间")
                 .status,
             404
@@ -1216,14 +1331,69 @@ mod tests {
         fs::write(&f, b"\x89PNG\r\n").unwrap();
         let uri = format!("dozer://image-annotate/__file__{}", f.to_string_lossy());
         assert_eq!(
-            handle_protocol(&root, &HashSet::new(), &uri)
+            handle_protocol(&root, &AllowedFiles::new(), &uri)
                 .expect("预览命名空间")
                 .status,
             404
         );
-        let mut allowed = HashSet::new();
+        let mut allowed = AllowedFiles::new();
         allowed.insert(f.clone());
         let r = handle_protocol(&root, &allowed, &uri).expect("预览命名空间");
         assert_eq!((r.status, r.mime), (200, "image/png"));
+    }
+}
+
+#[cfg(test)]
+mod allowed_files_tests {
+    use super::*;
+
+    #[test]
+    fn equivalent_spellings_share_one_entry() {
+        let base = if cfg!(windows) {
+            PathBuf::from("C:\\base")
+        } else {
+            PathBuf::from("/base")
+        };
+        let canonical = base.join("a").join("b.txt");
+        let mut allowed = AllowedFiles::new();
+        allowed.insert(base.join("./a//b.txt"));
+        allowed.insert(base.join("a").join("b.txt").join(""));
+        assert_eq!(allowed.len(), 1);
+        assert!(allowed.contains(&canonical));
+        let dotted = base.join("x").join("..").join("a").join("b.txt");
+        assert!(allowed.contains(&dotted), ".. 被消解后等价");
+    }
+
+    #[test]
+    fn remove_and_clear() {
+        let mut allowed: AllowedFiles = [PathBuf::from("/base/a.txt")].into_iter().collect();
+        assert!(allowed.contains(Path::new("/base/a.txt")));
+        allowed.remove(Path::new("/base/./a.txt"));
+        assert!(!allowed.contains(Path::new("/base/a.txt")));
+        allowed.insert("/base/b.txt");
+        allowed.clear();
+        assert!(allowed.is_empty());
+    }
+
+    #[test]
+    fn no_parent_escape_past_the_root() {
+        assert_eq!(
+            clean_allowed_path(Path::new("/base/../../etc/passwd")),
+            PathBuf::from("/etc/passwd"),
+            ".. 不能越过根,但根内的消解照常"
+        );
+        assert_eq!(
+            clean_allowed_path(Path::new("/a/b/../../../c")),
+            PathBuf::from("/c")
+        );
+    }
+
+    #[test]
+    fn relative_paths_are_anchored_to_the_current_dir() {
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(
+            clean_allowed_path(Path::new("rel/./x")),
+            clean_allowed_path(&cwd.join("rel/x"))
+        );
     }
 }

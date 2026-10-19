@@ -61,6 +61,10 @@
   "view.readonly_or_not_writable": "Read-only or non-writable backend",
   "view.replace_needs_revision": "replace must carry expected_revision",
   "text_save.temp_create_failed": "Cannot create temporary save file",
+  "text_save.readonly": "This file is read-only or non-UTF-8 text; saving is disabled to avoid corrupting the original",
+  "text_save.conflict": "The file on disk changed externally; first choose \"Keep my changes\" or \"Reload from disk\".",
+  "text_save.failed": "Save failed: {message}",
+  "text_save.repeated_failure": "{message} (failed {count} times in a row; switch to plain text or open externally)",
 
   "editor.not_utf8_readonly": "This file is not valid UTF-8 text; shown read-only and saving is disabled to avoid corrupting the original file",
   "editor.utf16_readonly": "This file is UTF-16; it has been transcoded to read-only text and saving is disabled to preserve the original encoding",

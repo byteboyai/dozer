@@ -243,7 +243,7 @@ impl EditHistoryOverlay {
     pub(crate) fn sync_diff_webview(
         &mut self,
         app: &mut App,
-        allowed_files: Arc<std::sync::Mutex<std::collections::HashSet<PathBuf>>>,
+        allowed_files: Arc<std::sync::Mutex<dozer_panel_preview::assets::AllowedFiles>>,
         proxy: winit::event_loop::EventLoopProxy<Message>,
     ) {
         let Some(entry) = app

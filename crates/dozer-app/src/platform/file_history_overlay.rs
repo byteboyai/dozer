@@ -4,7 +4,6 @@
 //! 输入,所以没有 IME/原生右键菜单挂靠、没有查询框自动聚焦这些机制,
 //! 比 `SearchOverlay` 更简单。
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use bytegit::CommitId;
@@ -223,7 +222,7 @@ impl FileHistoryOverlay {
     pub(crate) fn sync_diff_webview(
         &mut self,
         app: &mut App,
-        allowed_files: Arc<std::sync::Mutex<std::collections::HashSet<PathBuf>>>,
+        allowed_files: Arc<std::sync::Mutex<dozer_panel_preview::assets::AllowedFiles>>,
         proxy: winit::event_loop::EventLoopProxy<Message>,
     ) {
         let desired = app.file_history.as_ref().and_then(|s| {

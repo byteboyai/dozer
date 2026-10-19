@@ -86,6 +86,9 @@ impl Workspace {
         let pool_id = self.active_preview_webview_id(kind);
         let caps = dozer_caps();
         let width = |title: &str| preview_tab_display_width(title);
+        let recovery_dir = crate::preview::recovery_dir();
+        let failures_path = crate::preview::failures_path();
+        let safe_startup = io.safe_startup;
         let mut state = self.take_preview_panel(kind);
         let fx = {
             let ctx = UpdateCtx {
@@ -98,6 +101,9 @@ impl Workspace {
                 tab_display_width: &width,
                 active_webview_pool_id: pool_id,
                 behavior: behavior_of(panel),
+                recovery_dir: Some(&recovery_dir),
+                failures_path,
+                safe_startup,
             };
             f(&mut state, &ctx)
         };

@@ -430,14 +430,8 @@ pub enum Message {
     /// webview 池 key。副作用全在 `window_events::dispatch`,`App::update`
     /// 不处理(同 `WebViewFindFocus`)。
     WebViewPasteRequest(usize),
-    /// CodeMirror host 发回的已校验协议事件。binding 由 Rust 创建 WebView 时
-    /// 捕获，不采信 JS 自报路径。
-    EditorWebviewEvent(
-        crate::preview::EditorHostBinding,
-        crate::preview::WebviewEnvelope<crate::preview::EditorEvent>,
-    ),
     /// Git Log diff webview 发回的已校验协议事件。走独立分支而不是
-    /// `EditorWebviewEvent`,因为那个 handler 硬编码假设 `ws.preview`/
+    /// `HostEvent::Editor`,因为那条路径假设 `ws.preview`/
     /// `ws.project_preview` 的 tab 模型(`PreviewTab`/`TabKind::File`)——
     /// git log 面板没有 tab,直接命中会要么找不到 tab 静默丢弃事件,要么
     /// (更糟)撞上 Files 预览恰好也是 tab_id=0 的 tab。绑定用轻量
@@ -449,7 +443,7 @@ pub enum Message {
     ),
     /// 文件历史弹窗 diff webview 发回的已校验协议事件。这扇窗口的 webview
     /// 不进主窗口的 `webviews`/`browser_webviews` 池,绑定同样用轻量
-    /// `HostBinding`,不走 `EditorWebviewEvent` 的 tab 查找路径(这个弹窗
+    /// `HostBinding`,不走 `HostEvent::Editor` 的 tab 查找路径(这个弹窗
     /// 没有 tab)。
     FileHistoryDiffWebviewEvent(
         crate::preview::HostBinding,
@@ -491,41 +485,13 @@ pub enum Message {
     /// `document_loaded`)。不带 binding——`ws.review` 是"当前聚焦项目"的
     /// 直接字段,不按 project_id/tab_id 路由,没有身份需要校验。
     ReviewTraceWebviewEvent(crate::preview::ReviewTraceEvent),
-    /// JSON host(vanilla-jsoneditor)发回的事件(对照期 feature)。
-    JsonEditorEvent(
-        crate::preview::EditorHostBinding,
-        crate::preview::WebviewEnvelope<crate::preview::JsonEvent>,
-    ),
-    /// T9:Flyfish 渲染 host 发回的已校验事件(ready/failed/title/search_state)。
-    /// binding 由 Rust 从 webview URL 解析,不采信 JS 自报归属。
-    FlyfishEvent(
-        crate::preview::HostBinding,
-        crate::preview::WebviewEnvelope<crate::preview::FlyfishEvent>,
-    ),
     /// image-annotate host(OpenSeadragon + Annotorious)发回的已校验事件
     /// (ready/document_loaded/failed/annotations_changed)。binding 由 Rust 从
     /// webview URL 解析,不采信 JS 自报归属。
-    ImageAnnotateEvent(
-        crate::preview::HostBinding,
-        crate::preview::WebviewEnvelope<crate::preview::ImageAnnotateEvent>,
-    ),
-    /// PlantUML viewer host(`dozer://plantuml-viewer/`)发回的已校验事件
-    /// (ready/rendered/failed/open_source)。binding 由 Rust 从 webview URL
-    /// 解析,不采信 JS 自报归属。
-    PlantUmlEvent(
-        crate::preview::HostBinding,
-        crate::preview::WebviewEnvelope<crate::preview::PlantUmlEvent>,
-    ),
-    /// Tabular(ag-grid)预览 host 发回的已校验事件(ready/sheet_selected/
-    /// window_request/window_applied/failed)。binding 由 Rust 从 webview URL
-    /// 解析,不采信 JS 自报归属。
-    TabularHostEvent(
-        crate::preview::EditorHostBinding,
-        crate::preview::WebviewEnvelope<crate::preview::TabularEvent>,
-    ),
     /// S5b-2 P3:预览 host 事件统一入口,由 `runtime` 的 IPC 闭包经
-    /// `host_ipc::classify_ipc` 解析+校验后发出。上面按家族拆分的变体是它的
-    /// 落点(处理器逻辑不变),新代码只认这一条。
+    /// `host_ipc::classify_ipc` 解析+校验后发出。P4 起 Editor / JSON / Tabular /
+    /// Flyfish / ImageAnnotate / PlantUml 的处理体在 `dozer-panel-preview`,这里只
+    /// 转发;GitLogDiff / FileHistory / EditHistory / ReviewTrace 仍在本 crate。
     Host(dozer_panel_preview::host_ipc::HostEvent),
     /// 预览面板的 UI 消息(Files / Project 两个面板共用,`PanelKind` 区分),作用于当前聚焦项目。
     /// 语义与全部处理器在 `dozer-panel-preview::update`。

@@ -29,7 +29,7 @@ use byteui::interaction::icons;
 use dozer_client::Client;
 use dozer_core::protocol::ProjectInfo;
 use iced_winit::winit::event_loop::EventLoopProxy;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Handle;
@@ -1092,52 +1092,7 @@ impl App {
         kind: PanelKind,
         available_webview_ids: &std::collections::HashSet<usize>,
     ) -> Vec<(usize, String)> {
-        let Some(ws) = self.active_workspace_mut() else {
-            return Vec::new();
-        };
-        let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
-            return Vec::new();
-        };
-        let pane = ws.preview_pane_mut(kind);
-        let pending =
-            pane.take_pending_editor_commands_for(available_webview_ids, project_id, kind.into());
-        let mut out = Vec::new();
-        for (tab_id, command) in pending {
-            let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
-                continue;
-            };
-            // 命令目标是 CodeMirror **host**，不等同于普通整文件
-            // `uses_codemirror()`：窗口化大文件也复用同一个 host，只是正文
-            // 不由页面 fetch，而由 Rust 经 `SetWindow` 分块推送。
-            // 这里若用 `uses_codemirror()`，它对 `windowed` 明确返回 false，
-            // 首个 SetWindow 会在取出队列后被静默丢弃，页面便只剩行号 1。
-            if !tab.uses_editor_host() {
-                continue;
-            }
-            let crate::preview::TabKind::File(path) = &tab.kind else {
-                continue;
-            };
-            let binding = crate::preview::EditorHostBinding::new(
-                project_id,
-                kind.into(),
-                tab_id,
-                path.clone(),
-            );
-            let envelope = crate::preview::encode_command(
-                project_id,
-                kind.into(),
-                tab_id,
-                &binding.document_id(),
-                tab.web_revision,
-                None,
-                command,
-            );
-            out.push((
-                binding.webview_id(),
-                crate::preview::dispatch_script(&envelope),
-            ));
-        }
-        out
+        self.take_preview_host_scripts(kind, available_webview_ids)
     }
 
     /// 构建本帧待注入 Tabular webview host 的脚本清单,同
@@ -1147,52 +1102,22 @@ impl App {
         kind: PanelKind,
         available_webview_ids: &std::collections::HashSet<usize>,
     ) -> Vec<(usize, String)> {
-        let Some(ws) = self.active_workspace_mut() else {
-            return Vec::new();
-        };
-        let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
-            return Vec::new();
-        };
-        let pane = ws.preview_pane_mut(kind);
-        let pending =
-            pane.take_pending_tabular_commands_for(available_webview_ids, project_id, kind.into());
-        let mut out = Vec::new();
-        for (tab_id, command) in pending {
-            let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
-                continue;
-            };
-            if !tab.uses_tabular_grid_host() {
-                continue;
-            }
-            let crate::preview::TabKind::File(path) = &tab.kind else {
-                continue;
-            };
-            let binding = crate::preview::EditorHostBinding::new(
-                project_id,
-                kind.into(),
-                tab_id,
-                path.clone(),
-            );
-            let envelope = crate::preview::encode_tabular_command(
-                project_id,
-                kind.into(),
-                tab_id,
-                &binding.document_id(),
-                tab.web_revision,
-                None,
-                command,
-            );
-            out.push((
-                binding.webview_id(),
-                crate::preview::dispatch_script(&envelope),
-            ));
-        }
-        out
+        self.take_preview_host_scripts(kind, available_webview_ids)
     }
 
     /// 构建本帧待注入 PlantUML viewer host 的脚本清单,同
     /// `take_preview_tabular_scripts` 的节奏。
     pub fn take_preview_plantuml_scripts(
+        &mut self,
+        kind: PanelKind,
+        available_webview_ids: &std::collections::HashSet<usize>,
+    ) -> Vec<(usize, String)> {
+        self.take_preview_host_scripts(kind, available_webview_ids)
+    }
+
+    /// P4:三条 host 命令队列的取出/编码已搬进 `dozer-panel-preview`
+    /// (`PreviewPane::take_host_scripts`),产品只负责 `eval`。
+    fn take_preview_host_scripts(
         &mut self,
         kind: PanelKind,
         available_webview_ids: &std::collections::HashSet<usize>,
@@ -1203,41 +1128,8 @@ impl App {
         let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
             return Vec::new();
         };
-        let pane = ws.preview_pane_mut(kind);
-        let pending =
-            pane.take_pending_plantuml_commands_for(available_webview_ids, project_id, kind.into());
-        let mut out = Vec::new();
-        for (tab_id, command) in pending {
-            let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
-                continue;
-            };
-            if !tab.uses_plantuml_host() {
-                continue;
-            }
-            let crate::preview::TabKind::File(path) = &tab.kind else {
-                continue;
-            };
-            let binding = crate::preview::EditorHostBinding::new(
-                project_id,
-                kind.into(),
-                tab_id,
-                path.clone(),
-            );
-            let envelope = crate::preview::encode_plantuml_command(
-                project_id,
-                kind.into(),
-                tab_id,
-                &binding.document_id(),
-                tab.web_revision,
-                None,
-                command,
-            );
-            out.push((
-                binding.webview_id(),
-                crate::preview::dispatch_script(&envelope),
-            ));
-        }
-        out
+        ws.preview_pane_mut(kind)
+            .take_host_scripts(available_webview_ids, project_id, kind.into())
     }
 
     /// Git Log diff webview 的待注入脚本(0 或 1 条)。与
@@ -2878,10 +2770,10 @@ impl App {
     /// 协议闭包共享的文件白名单句柄(当前项目的那一份)。没有项目打开时
     /// `preview_desired`/`browser_desired` 也必然为空、不会有 webview 去查
     /// 这个白名单,给一个空的即可。
-    pub fn allowed_files(&self) -> Arc<Mutex<HashSet<PathBuf>>> {
+    pub fn allowed_files(&self) -> Arc<Mutex<dozer_panel_preview::assets::AllowedFiles>> {
         match self.active_workspace() {
             Some(ws) => ws.allowed_files(),
-            None => Arc::new(Mutex::new(HashSet::new())),
+            None => Arc::new(Mutex::new(dozer_panel_preview::assets::AllowedFiles::new())),
         }
     }
 
