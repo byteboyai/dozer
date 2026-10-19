@@ -523,6 +523,10 @@ pub enum Message {
         crate::preview::EditorHostBinding,
         crate::preview::WebviewEnvelope<crate::preview::TabularEvent>,
     ),
+    /// S5b-2 P3:预览 host 事件统一入口,由 `runtime` 的 IPC 闭包经
+    /// `host_ipc::classify_ipc` 解析+校验后发出。上面按家族拆分的变体是它的
+    /// 落点(处理器逻辑不变),新代码只认这一条。
+    Host(dozer_panel_preview::host_ipc::HostEvent),
     /// 预览面板的 UI 消息(Files / Project 两个面板共用,`PanelKind` 区分),作用于当前聚焦项目。
     /// 语义与全部处理器在 `dozer-panel-preview::update`。
     Preview(PanelKind, dozer_panel_preview::Message),

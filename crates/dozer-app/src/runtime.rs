@@ -536,71 +536,25 @@ pub(crate) fn sync_webview_pool(
                 // Usage)。IPC 回传时带上它,由 `App::update` 经 Surface 路由层
                 // 校验归属——旧代数的在途事件被拒。
                 let surface = spec.surface;
-                let is_json_host = crate::preview::is_json_editor_url(&spec.url);
-                let is_tabular_host = crate::preview::is_tabular_url(&spec.url);
-                // T9:Flyfish host 的绑定从 URL 查询串解析(proj/panel/tab/doc),
-                // host 回传的 envelope 据此校验归属。
-                let flyfish_binding = crate::preview::flyfish_binding_from_url(&spec.url);
-                // `flyfish_binding_from_url` 同时覆盖 Flyfish、隔离 HTML 与
-                // image-annotate host；只有 Flyfish 暴露 `searchDocument` 等文档搜索
-                // API。这个标记还用于把 WebView 聚焦态的 Cmd/Ctrl+F 路由回 Dozer
-                // Find 条。
-                let is_flyfish_host = spec.url.starts_with("dozer://flyfish/");
-                // image-annotate host 的 envelope payload 与 Flyfish 不同
-                // (annotations_changed),解析器必须分开,不能几何共享。
-                let is_image_annotate_host = spec.url.starts_with("dozer://image-annotate/");
-                // PlantUML viewer host 的 envelope(ready/rendered/failed/
-                // open_source)与 Flyfish 不同,解析器必须分开;binding 同样从
-                // URL 解析(PlantUML host `editor_binding` 为 `None`)。
-                let is_plantuml_host = spec.url.starts_with("dozer://plantuml-viewer/");
-                // 常驻注入脚本:焦点/拖拽/缩放三件套(所有 webview);浏览器
-                // 面板(`report_title`)额外附一段"页面标题回报":把
+                let ipc_context = dozer_panel_preview::host_ipc::IpcContext::new(
+                    webview_id,
+                    &spec.url,
+                    editor_binding.clone(),
+                );
+                // 常驻注入脚本:焦点/拖拽/缩放三件套 + 文本编辑 + ⌘F,逐字来自
+                // `dozer-panel-preview::host_script`(搬迁前后由同一份黄金钉住)。
+                // 浏览器面板(`report_title`)额外附一段"页面标题回报":把
                 // `window.__dozer_webview` 记成本 webview 的 id,页面
                 // DOMContentLoaded 与 `document.title` 变化(MutationObserver)
                 // 时经 IPC 发 `title:<id>:<title>`,让 tab 标题在页面加载
-                // 完成后从 URL 切换到 HTML `<title>`。预览 webview 不掺和。
-                let mut script = String::from(
-                    "document.addEventListener('mousedown',function(){window.ipc.postMessage('focus')},true);document.addEventListener('mouseup',function(){window.ipc.postMessage('mouseup')},true);document.addEventListener('keydown',function(e){if(e.ctrlKey){var c=e.code,k=e.key;if(c==='Equal'||k==='+'||k==='='){e.preventDefault();window.ipc.postMessage('zoom_in');}else if(c==='Minus'||k==='-'){e.preventDefault();window.ipc.postMessage('zoom_out');}else if(c==='Digit1'||k==='1'){e.preventDefault();window.ipc.postMessage('zoom_reset');}}},true);",
+                // 完成后从 URL 切换到 HTML `<title>`。预览面板不掺和。
+                let mut script = dozer_panel_preview::host_script::preview_host_script(
+                    dozer_panel_preview::host_script::HostScriptOptions {
+                        text_editing: ipc_context.kind.wants_text_editing(),
+                        flyfish: ipc_context.kind
+                            == dozer_panel_preview::host_ipc::WebviewKind::Flyfish,
+                    },
                 );
-                // 文本光标 + Ctrl/Cmd+C 复制(所有 webview):
-                // - 默认让普通文字显示 I 形文本光标;链接/按钮等可交互元素
-                //   仍是手形(继承自 `cursor: text` 时会被 `cursor: pointer`
-                //   覆盖,因为后写、同为 `!important`)。
-                // - Ctrl+C / Cmd+C 都拦截复制当前选区:webview 成为 first
-                //   responder 后 keydown 被它吃掉、到不了 winit,得在这段
-                //   注入 JS 里自己拦。用 `document.execCommand('copy')`
-                //   (用户手势触发,WKWebView 会放行);个别方案拿不到选区
-                //   或失败时再退回 `navigator.clipboard`。`Cmd+Meta` 双键
-                //   都按,保证两套快捷键一致触发。用 `e.code` 判断,避免
-                //   键盘布局差异影响 `e.key`。
-                if editor_binding.is_none() {
-                    script.push_str(
-                        "(function(){var s=document.createElement('style');s.textContent=\"html,body,body *{cursor:text!important}a,a *,button,*[role='link'],*[role='button'],summary,*[onclick],label[for]{cursor:pointer!important}\";(document.head||document.documentElement).appendChild(s);document.addEventListener('keydown',function(e){if((e.ctrlKey||e.metaKey)&&e.code==='KeyC'){e.preventDefault();var ok=false;try{ok=document.execCommand('copy')}catch(_){}if(!ok){var g=window.getSelection&&window.getSelection();if(g&&g.toString()){try{navigator.clipboard.writeText(g.toString()).then(function(){},function(){})}catch(_){}}}}});})();",
-                    );
-                    // 剪切/粘贴/全选(所有 webview 的可编辑元素):本应用没有
-                    // macOS Edit 菜单,WKWebView 不派发 cut:/paste:/selectAll:,
-                    // 这三个组合键在页面输入框里默认全部失效。⌘X/⌘A 在页面内
-                    // 自己解决;⌘V 读剪贴板必须宿主代劳(WKWebView 禁止页面读
-                    // 剪贴板),经 IPC 发 `paste_request`、宿主回灌
-                    // `window.__dozerPaste(text)` 插进聚焦元素。
-                    script.push_str(
-                        "(function(){function _dozEdit(el){if(!el)return false;var t=el.tagName;if(t==='TEXTAREA'||el.isContentEditable)return true;if(t==='INPUT'){var y=el.type;return !y||y==='text'||y==='search'||y==='url'||y==='tel'||y==='password'||y==='number';}return false;}window.__dozerPaste=function(text){var el=document.activeElement;if(!_dozEdit(el))return;if(el.setRangeText){var s=el.selectionStart??0;el.setRangeText(text,s,el.selectionEnd??s,'end');el.setSelectionRange(s+text.length,s+text.length);el.dispatchEvent(new Event('input',{bubbles:true}));}else{try{document.execCommand('insertText',false,text)}catch(_){}}};document.addEventListener('keydown',function(e){if(!(e.ctrlKey||e.metaKey))return;var c=e.code;if(c==='KeyV'){if(_dozEdit(document.activeElement)){e.preventDefault();window.ipc&&window.ipc.postMessage('paste_request');}}else if(c==='KeyX'){e.preventDefault();try{document.execCommand('cut')}catch(_){}}else if(c==='KeyA'){e.preventDefault();var el=document.activeElement;if(_dozEdit(el)){if(el.setSelectionRange)el.setSelectionRange(0,el.value?el.value.length:0);else try{document.execCommand('selectAll')}catch(_){}}else{var g=window.getSelection&&window.getSelection();g&&g.selectAllChildren(document);}}},true);})();",
-                    );
-                    if is_flyfish_host {
-                        // Flyfish host 明确关闭了自带 toolbar，因此页面内没有可聚焦
-                        // 的搜索框。WebView 聚焦时直接把 Cmd/Ctrl+F 交还给 Dozer，
-                        // 由统一 Find 条收 query，再调用 Flyfish `searchDocument`。
-                        script.push_str(
-                            "document.addEventListener('keydown',function(e){if((e.metaKey||e.ctrlKey)&&e.code==='KeyF'){e.preventDefault();e.stopPropagation();window.ipc.postMessage('find_preview');}},true);",
-                        );
-                    } else {
-                        // 浏览器/隔离 HTML 等普通页面仍优先使用页面自己的搜索框，
-                        // 找不到时退回平台原生页内查找。
-                        script.push_str(
-                            "(function(){function _dozPick(root){var best=null;function walk(n){if(!n||n.nodeType!==1&&n.nodeType!==9&&n.nodeType!==11)return;var list=n.querySelectorAll?n.querySelectorAll('input[type=search]'):[];for(var i=0;i<list.length;i++){var el=list[i];if(el.disabled||el.readOnly)continue;if(!best)best=el;}if(!best){var any=n.querySelectorAll?n.querySelectorAll('input[type=text],input:not([type])'):[];for(var j=0;j<any.length;j++){var a=any[j];if(a.disabled||a.readOnly)continue;var box=a.closest&&(a.closest('[role=search]')||a.closest('.file-viewer-web-search')||a.closest('form[role=search]'));if(box){best=a;break;}}}var hosts=n.querySelectorAll?n.querySelectorAll('*'):[];for(var k=0;k<hosts.length;k++){var sr=hosts[k].shadowRoot;if(sr)walk(sr);}}walk(root||document);return best;}document.addEventListener('keydown',function(e){if((e.metaKey||e.ctrlKey)&&e.code==='KeyF'){e.preventDefault();var box=_dozPick(document);if(box){try{box.focus();if(box.select)box.select();}catch(_){}window.ipc.postMessage('find_page');}else{window.ipc.postMessage('find_native');}}},true);})();",
-                        );
-                    }
-                }
                 if report_title {
                     script.push_str("window.__dozer_webview=");
                     script.push_str(webview_id.to_string().as_str());
@@ -628,298 +582,91 @@ pub(crate) fn sync_webview_pool(
                     // (`WebViewMouseUp`)。
                     .with_initialization_script(script)
                     .with_ipc_handler(move |_req| {
-                        let body = _req.body().as_str();
-                        match body {
-                            "mouseup" => {
-                                let _ = ipc_proxy.send_event(Message::WebViewMouseUp);
+                        use dozer_panel_preview::host_ipc::IpcMessage;
+                        // 解析 + 归属校验都在库侧(`classify_ipc`),产品只把结论
+                        // 翻译成消息。浏览器标题回报与免解析的页内命令不属于预览
+                        // 面板,但共用这段闭包,所以也一并在这里转。
+                        let message = match dozer_panel_preview::host_ipc::classify_ipc(
+                            &ipc_context,
+                            _req.body().as_str(),
+                        ) {
+                            IpcMessage::MouseUp => Message::WebViewMouseUp,
+                            IpcMessage::ZoomIn => Message::ZoomIn,
+                            IpcMessage::ZoomOut => Message::ZoomOut,
+                            IpcMessage::ZoomReset => Message::ZoomReset,
+                            IpcMessage::Focus => Message::WebViewFocused,
+                            // Flyfish host 没有页面搜索框,⌘F 直接进 Dozer 的 Find
+                            // 状态机;后面的查询/跳转仍走 Flyfish 搜索 API。
+                            IpcMessage::FindPreview => {
+                                let Some(binding) = ipc_context.host_binding.as_ref() else {
+                                    return;
+                                };
+                                Message::Preview(
+                                    binding.panel.into(),
+                                    dozer_panel_preview::Message::FindOpen,
+                                )
                             }
-                            // 子 webview 抢到键盘焦点(首次点击后 WKWebView
-                            // 成为 first responder)时,Ctrl++/-/1 这类全局缩放
-                            // 快捷键不会再回到 winit,会被 webview 自己吃掉。
-                            // 这里在 keydown 捕获阶段拦下这几个组合键、转发给
-                            // 宿主走 `icon_size::zoom_by`,使首页/预览/浏览器
-                            // 各种 webview 聚焦态下缩放都和终端/自绘面板一致。
-                            "zoom_in" => {
-                                let _ = ipc_proxy.send_event(Message::ZoomIn);
+                            // ⌘F 页内查找的原生副作用(设 first responder / 调
+                            // WKWebView `findString:`)都要落到持有 webview 句柄的
+                            // 事件环里,所以带 webview id 送回主循环,由 `dispatch`
+                            // 在池里找回句柄执行(同 `WebViewFocused`/`BrowserNav`)。
+                            IpcMessage::FindPage => Message::WebViewFindFocus(webview_id),
+                            IpcMessage::FindNative => Message::WebViewFindNative(webview_id),
+                            // ⌘V:页面无权读剪贴板,宿主读文本后回灌
+                            // `window.__dozerPaste`(同 find_page 找回句柄)。
+                            IpcMessage::PasteRequest => Message::WebViewPasteRequest(webview_id),
+                            IpcMessage::BrowserTitle { webview_id: id, title } => {
+                                Message::BrowserTitle(id, title)
                             }
-                            "zoom_out" => {
-                                let _ = ipc_proxy.send_event(Message::ZoomOut);
-                            }
-                            "zoom_reset" => {
-                                let _ = ipc_proxy.send_event(Message::ZoomReset);
-                            }
-                            "focus" => {
-                                let _ = ipc_proxy.send_event(Message::WebViewFocused);
-                            }
-                            // Flyfish WebView 获得 first responder 后，Cmd/Ctrl+F
-                            // 不会再到达 winit。直接进入现有 Dozer Find 状态机；
-                            // 查询和跳转随后仍由 Flyfish 搜索 API 执行。
-                            "find_preview" if is_flyfish_host => {
-                                if let Some(binding) = flyfish_binding.as_ref() {
-                                    let _ = ipc_proxy
-                                        .send_event(Message::Preview(
-                                            binding.panel.into(),
-                                            dozer_panel_preview::Message::FindOpen,
-                                        ));
-                                }
-                            }
-                            // ⌘F 页内查找:JS 找到并聚焦了页面自带搜索框
-                            // (`find_page`),或没找到、要退回原生查找条
-                            // (`find_native`)。二者的原生副作用(设 first
-                            // responder / 调 WKWebView `findString:`)都要落到
-                            // 持有 webview 句柄的事件环里,所以带 webview id
-                            // 送回主循环,由 `dispatch` 在 `webviews`/
-                            // `browser_webviews` 池里找回句柄执行(同
-                            // `WebViewFocused`/`BrowserNav` 的"句柄只活在
-                            // 事件分发环"手法)。
-                            "find_page" => {
-                                let _ = ipc_proxy.send_event(Message::WebViewFindFocus(webview_id));
-                            }
-                            "find_native" => {
-                                let _ =
-                                    ipc_proxy.send_event(Message::WebViewFindNative(webview_id));
-                            }
-                            // ⌘V 粘贴进页面输入框(见注入脚本的 ⌘V 分支):
-                            // WKWebView 没有宿主 Edit 菜单不会自己派发
-                            // `paste:`,页面又无权读剪贴板——宿主读文本后
-                            // evaluate_script 回灌 `window.__dozerPaste`。
-                            // 带发来的 webview id,由 `dispatch` 找回句柄
-                            // 执行(同 find_page/find_native)。
-                            "paste_request" => {
-                                let _ =
-                                    ipc_proxy.send_event(Message::WebViewPasteRequest(webview_id));
-                            }
-                            // 浏览器面板报回页面 HTML 标题:`title:<id>:<title>`。
-                            // `splitn(2, ':')` 只拆第一个冒号,标题里再带冒号
-                            // 也不被误拆。空标题页面仍发,由 `browser::update`
-                            // 的空标题守卫决定不覆盖 URL 标题。
-                            title_msg if title_msg.starts_with("title:") => {
-                                let rest = &title_msg["title:".len()..];
-                                let mut it = rest.splitn(2, ':');
-                                if let (Some(id_s), Some(title)) = (it.next(), it.next())
-                                    && let Ok(id) = id_s.parse::<usize>()
-                                {
-                                    let _ = ipc_proxy
-                                        .send_event(Message::BrowserTitle(id, title.to_string()));
-                                }
-                            }
-                            _ => {
-                                // T9:Flyfish host 回传的 envelope(JSON,以 `{` 起)。
-                                let looks_like_envelope = body.starts_with('{');
-                                if let Some(binding) = flyfish_binding.as_ref()
-                                    && is_image_annotate_host
-                                    && looks_like_envelope
-                                {
-                                    match crate::preview::parse_image_annotate_event(body) {
-                                        Ok(event) => {
-                                            if let Err(error) = event.validate(binding) {
-                                                dozer_core::log_warn!(LOG, %error, "拒绝无效 image-annotate IPC");
-                                            } else {
-                                                let _ = ipc_proxy.send_event(
-                                                    Message::ImageAnnotateEvent(
-                                                        binding.clone(),
-                                                        event,
-                                                    ),
-                                                );
-                                            }
-                                        }
-                                        Err(error) => {
-                                            dozer_core::log_warn!(LOG, %error, "无法解析 image-annotate IPC");
-                                        }
-                                    }
-                                } else if let Some(binding) = flyfish_binding.as_ref()
-                                    && is_plantuml_host
-                                    && looks_like_envelope
-                                {
-                                    match crate::preview::parse_plantuml_event(body) {
-                                        Ok(event) => {
-                                            if let Err(error) = event.validate(binding) {
-                                                dozer_core::log_warn!(LOG, %error, "拒绝无效 plantuml IPC");
-                                            } else {
-                                                let _ = ipc_proxy.send_event(
-                                                    Message::PlantUmlEvent(
-                                                        binding.clone(),
-                                                        event,
-                                                    ),
-                                                );
-                                            }
-                                        }
-                                        Err(error) => {
-                                            dozer_core::log_warn!(LOG, %error, "无法解析 plantuml IPC");
-                                        }
-                                    }
-                                } else if let Some(binding) = flyfish_binding.as_ref()
-                                    && looks_like_envelope
-                                {
-                                    match crate::preview::parse_flyfish_event(body) {
-                                        Ok(event) => {
-                                            if let Err(error) = event.validate(binding) {
-                                                dozer_core::log_warn!(LOG, %error, "拒绝无效 flyfish IPC");
-                                            } else {
-                                                let _ = ipc_proxy.send_event(
-                                                    Message::FlyfishEvent(binding.clone(), event),
-                                                );
-                                            }
-                                        }
-                                        Err(error) => {
-                                            dozer_core::log_warn!(LOG, %error, "无法解析 flyfish IPC");
-                                        }
-                                    }
-                                } else if webview_id == crate::app::USAGE_CONTENT_ID_OFFSET
-                                    && looks_like_envelope
-                                {
-                                    // usage-content 不是 CodeMirror/JSON/Flyfish
-                                    // 家族,不复用那三者任何一个 binding,直接按固定
-                                    // webview id 判断(单槽面板,没有 tab/document 身份
-                                    // 需要携带)。归属由共享宿主 Surface 显式校验:
-                                    // 带上创建时登记的身份,`App::update` 经路由层
-                                    // 拒绝旧代数/未知来源。
+                            IpcMessage::Host(event) => Message::Host(*event),
+                            // 固定单槽面板(usage/codehealth/todo/group-chat)不是
+                            // CodeMirror/JSON/Flyfish 家族,按固定 webview id 识别,
+                            // 由共享宿主 Surface 显式校验归属。它们不在库的分类范围
+                            // 内,信封落到这里再按 id 分派。
+                            IpcMessage::FocusedEnvelope => {
+                                let body = _req.body().as_str();
+                                if webview_id == crate::app::USAGE_CONTENT_ID_OFFSET {
                                     match crate::extensions::usage::parse_usage_event(body) {
-                                        Ok(event) => {
-                                            let _ = ipc_proxy.send_event(
-                                                Message::UsageContentWebviewEvent(event, surface),
-                                            );
-                                        }
+                                        Ok(event) => Message::UsageContentWebviewEvent(event, surface),
                                         Err(error) => {
                                             dozer_core::log_warn!(LOG, %error, "无法解析 usage-content IPC");
+                                            return;
                                         }
                                     }
-                                } else if webview_id == crate::app::CODEHEALTH_CONTENT_ID_OFFSET
-                                    && looks_like_envelope
-                                {
-                                    // codehealth-content 同 usage-content:固定单槽,按固定
-                                    // webview id 识别,不复用任何 binding。归属由共享宿主
-                                    // Surface 显式校验(带上创建时登记的身份)。
+                                } else if webview_id == crate::app::CODEHEALTH_CONTENT_ID_OFFSET {
                                     match crate::extensions::codehealth::parse_codehealth_event(body) {
-                                        Ok(event) => {
-                                            let _ = ipc_proxy.send_event(
-                                                Message::CodeHealthContentWebviewEvent(event, surface),
-                                            );
-                                        }
+                                        Ok(event) => Message::CodeHealthContentWebviewEvent(event, surface),
                                         Err(error) => {
                                             dozer_core::log_warn!(LOG, %error, "无法解析 codehealth-content IPC");
+                                            return;
                                         }
                                     }
-                                } else if webview_id == crate::app::TODO_CONTENT_ID_OFFSET
-                                    && looks_like_envelope
-                                {
-                                    // todo-content 同 codehealth-content:固定单槽,按固定
-                                    // webview id 识别,不复用任何 binding。
+                                } else if webview_id == crate::app::TODO_CONTENT_ID_OFFSET {
                                     match crate::extensions::todo::parse_todo_event(body) {
-                                        Ok(event) => {
-                                            let _ = ipc_proxy.send_event(
-                                                Message::TodoContentWebviewEvent(event),
-                                            );
-                                        }
+                                        Ok(event) => Message::TodoContentWebviewEvent(event),
                                         Err(error) => {
                                             dozer_core::log_warn!(LOG, %error, "无法解析 todo-content IPC");
+                                            return;
                                         }
                                     }
-                                } else if webview_id == crate::app::GROUP_CHAT_CONTENT_ID_OFFSET
-                                    && looks_like_envelope
-                                {
-                                    // group-chat-content 同 todo-content:固定单槽,按固定
-                                    // webview id 识别,不复用任何 binding。
+                                } else if webview_id == crate::app::GROUP_CHAT_CONTENT_ID_OFFSET {
                                     match crate::extensions::group_chat::parse_group_chat_event(body) {
-                                        Ok(event) => {
-                                            let _ = ipc_proxy.send_event(
-                                                Message::GroupChatContentWebviewEvent(event),
-                                            );
-                                        }
+                                        Ok(event) => Message::GroupChatContentWebviewEvent(event),
                                         Err(error) => {
                                             dozer_core::log_warn!(LOG, %error, "无法解析 group-chat-content IPC");
-                                        }
-                                    }
-                                } else if webview_id == crate::app::CONVERSATION_REVIEW_ID_OFFSET
-                                    && looks_like_envelope
-                                {
-                                    // review-trace 单槽非 tab,没有专属 binding,
-                                    // 按固定 webview id 识别(同 usage-content)。
-                                    match crate::preview::parse_review_trace_event(body) {
-                                        Ok(env) => {
-                                            let _ = ipc_proxy.send_event(
-                                                Message::ReviewTraceWebviewEvent(env.payload),
-                                            );
-                                        }
-                                        Err(error) => {
-                                            dozer_core::log_warn!(LOG, %error, "无法解析 review-trace IPC");
-                                        }
-                                    }
-                                } else if let Some(binding) = editor_binding.as_ref() {
-                                    let expected = crate::preview::HostBinding::new(
-                                        binding.project_id,
-                                        binding.panel,
-                                        binding.tab_id,
-                                        binding.document_id(),
-                                    );
-                                    if is_tabular_host {
-                                        match crate::preview::parse_tabular_event(body) {
-                                            Ok(event) => {
-                                                if let Err(error) = event.validate(&expected) {
-                                                    dozer_core::log_warn!(LOG, %error, "拒绝无效 tabular IPC");
-                                                } else {
-                                                    let _ = ipc_proxy.send_event(
-                                                        Message::TabularHostEvent(
-                                                            binding.clone(),
-                                                            event,
-                                                        ),
-                                                    );
-                                                }
-                                            }
-                                            Err(error) => {
-                                                dozer_core::log_warn!(LOG, %error, "无法解析 tabular IPC");
-                                            }
-                                        }
-                                    } else if is_json_host {
-                                        match crate::preview::parse_json_event(body) {
-                                            Ok(event) => {
-                                                if let Err(error) = event.validate(&expected) {
-                                                    dozer_core::log_warn!(LOG, %error, "拒绝无效 json-editor IPC");
-                                                } else {
-                                                    let _ = ipc_proxy.send_event(
-                                                        Message::JsonEditorEvent(
-                                                            binding.clone(),
-                                                            event,
-                                                        ),
-                                                    );
-                                                }
-                                            }
-                                            Err(error) => {
-                                                dozer_core::log_warn!(LOG, %error, "无法解析 json-editor IPC");
-                                            }
-                                        }
-                                    } else {
-                                        match crate::preview::parse_event(body) {
-                                            Ok(event) => {
-                                                if let Err(error) = event.validate(&expected) {
-                                                    dozer_core::log_warn!(LOG, %error, "拒绝无效 editor IPC");
-                                                } else if binding.panel
-                                                    == crate::preview::ViewerPanel::GitLog
-                                                {
-                                                    let _ = ipc_proxy.send_event(
-                                                        Message::GitLogDiffWebviewEvent(
-                                                            expected, event,
-                                                        ),
-                                                    );
-                                                } else {
-                                                    let _ = ipc_proxy.send_event(
-                                                        Message::EditorWebviewEvent(
-                                                            binding.clone(),
-                                                            event,
-                                                        ),
-                                                    );
-                                                }
-                                            }
-                                            Err(error) => {
-                                                dozer_core::log_warn!(LOG, %error, "无法解析 editor IPC");
-                                            }
+                                            return;
                                         }
                                     }
                                 } else {
-                                    let _ = ipc_proxy.send_event(Message::WebViewFocused);
+                                    Message::WebViewFocused
                                 }
                             }
-                        }
+                            IpcMessage::Rejected(rejection) => {
+                                dozer_core::log_warn!(LOG, %rejection, "丢弃预览 host IPC");
+                                return;
+                            }
+                        };
+                        let _ = ipc_proxy.send_event(message);
                     });
                 // 浏览器面板 webview 额外挂两个导航回报钩子(预览 webview
                 // 不需要):

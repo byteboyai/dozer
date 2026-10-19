@@ -1164,6 +1164,7 @@ impl App {
                     }
                 });
             }
+            Message::Host(host_event) => self.host_event(host_event),
             Message::Preview(kind, msg) => self.preview_ui(kind, msg),
             Message::PreviewResult(project_id, kind, msg) => {
                 self.preview_result(project_id, kind, msg)
@@ -5090,6 +5091,39 @@ impl App {
             app_level = ws.preview_dispatch(kind, msg, io, &locale, avail_px);
         });
         self.handle_preview_app_effects(kind, app_level);
+    }
+
+    /// S5b-2 P3:预览 host 事件的统一入口。分类/校验已在 `runtime` 的 IPC
+    /// 闭包(`host_ipc::classify_ipc`)完成,这里只按家族分派到既有处理器
+    /// ——行为与各事件自己在 `update_inner` 里被直接投递时逐字相同。
+    fn host_event(&mut self, event: dozer_panel_preview::host_ipc::HostEvent) {
+        use dozer_panel_preview::host_ipc::HostEvent;
+        match event {
+            HostEvent::Editor { binding, envelope } => {
+                self.update(Message::EditorWebviewEvent(binding, envelope));
+            }
+            HostEvent::GitLogDiff { binding, envelope } => {
+                self.update(Message::GitLogDiffWebviewEvent(binding, envelope));
+            }
+            HostEvent::Json { binding, envelope } => {
+                self.update(Message::JsonEditorEvent(binding, envelope));
+            }
+            HostEvent::Tabular { binding, envelope } => {
+                self.update(Message::TabularHostEvent(binding, envelope));
+            }
+            HostEvent::Flyfish { binding, envelope } => {
+                self.update(Message::FlyfishEvent(binding, envelope));
+            }
+            HostEvent::ImageAnnotate { binding, envelope } => {
+                self.update(Message::ImageAnnotateEvent(binding, envelope));
+            }
+            HostEvent::PlantUml { binding, envelope } => {
+                self.update(Message::PlantUmlEvent(binding, envelope));
+            }
+            HostEvent::ReviewTrace(event) => {
+                self.update(Message::ReviewTraceWebviewEvent(event));
+            }
+        }
     }
 
     /// 预览面板的后台任务结果:按 `project_id` 路由到发起它的项目。
