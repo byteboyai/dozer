@@ -4225,7 +4225,7 @@ impl App {
             // 菜单同样盖住 webview,按菜单所属面板(`tab_context_menu.kind`)命中。
             let tab_menu_covers_this = self.files.tab_context_menu().is_some_and(|m| {
                 matches!(
-                    (m.kind, kind),
+                    (files::state::panel_kind_of(m.kind), kind),
                     (crate::app::PanelKind::Files, crate::app::PanelKind::Files)
                         | (
                             crate::app::PanelKind::Project,

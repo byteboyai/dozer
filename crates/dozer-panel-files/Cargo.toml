@@ -1,0 +1,29 @@
+[package]
+name = "dozer-panel-files"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# 同源 Files 面板库(S5b-1):Dozer 与 Digger 共用的文件树状态 / 更新 / 视图与文件系统层。
+# 依赖闭包刻意**不含** dozer-app / dozer-client / dozer-core(见 spec §4.1):领域 model/services、
+# 共享宿主件与公共 UI 允许,产品专属语义(原生菜单、预览、Agent 发送)经注入的适配器提供。
+[dependencies]
+trash = "5.2.6"
+dozer-model = { path = "../dozer-model" }
+dozer-services = { path = "../dozer-services" }
+dozer-i18n = { path = "../dozer-i18n" }
+dozer-panel-host = { path = "../dozer-panel-host" }
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.5" }
+bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1", features = ["watch"] }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.11" }
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.11" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+iced_widget = { version = "0.14", features = ["canvas", "svg"] }
+iced_renderer = "0.14"
+
+[dev-dependencies]
+tempfile = "3"
+# 文件树测试用 `TempRepo` 造真实仓库。
+bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1", features = ["testutil"] }

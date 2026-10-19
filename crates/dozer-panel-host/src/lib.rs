@@ -242,6 +242,8 @@ pub enum PanelCommand {
     SearchIn { path: PathBuf, is_dir: bool },
     /// 打开某个文件(绝对路径)的 git 历史。
     ShowFileHistory { path: PathBuf },
+    /// 在 host 的预览区打开某个文件(绝对路径)。文件树双击文件时发出。
+    OpenFile { path: PathBuf },
 }
 
 /// 面板向 host 提的需求——只有 host 才能做的事(系统对话框、跨面板动作)。`M` 是提需求的那个面板

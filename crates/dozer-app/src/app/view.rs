@@ -118,12 +118,7 @@ impl App {
             stack![
                 base,
                 dismiss,
-                files::context_menu_popup(
-                    &self.files,
-                    &ws.files,
-                    &self.external_apps,
-                    self.locale.active_locale(),
-                )
+                files::context_menu_popup(&self.files, self.locale.active_locale())
                 .map(Message::Files)
             ]
             .width(Length::Fill)
@@ -139,12 +134,7 @@ impl App {
             stack![
                 base,
                 dismiss,
-                files::tab_context_menu_popup(
-                    &self.files,
-                    &ws.files,
-                    &self.external_apps,
-                    self.locale.active_locale(),
-                )
+                files::tab_context_menu_popup(&self.files, self.locale.active_locale())
                 .map(Message::Files)
             ]
             .width(Length::Fill)
@@ -578,12 +568,12 @@ pub(crate) fn panel_body<'a>(
                 if ws.project.is_some() {
                     files::view(
                         &ws.files,
+                        app,
                         Length::FillPortion(list_portion),
                         zone_pane_border(zone, lc),
                         app.hover_progress(HoverId::search_submit(PanelKind::Files)),
                         app.hover_progress(HoverId::named(PanelKind::Files, "dotfiles")),
                         app.hover_progress(HoverId::named(PanelKind::Files, "branch_switch")),
-                        app.locale.active_locale(),
                     )
                     .map(Message::Files)
                 } else {

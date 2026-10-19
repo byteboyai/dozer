@@ -68,8 +68,8 @@ const PANEL_OWNERS: &[(&str, &str, &str)] = &[
     ),
     (
         "dozer.files",
-        include_str!("../locales/panels/files/en.json"),
-        include_str!("../locales/panels/files/zh-CN.json"),
+        include_str!("../../dozer-panel-files/locales/en.json"),
+        include_str!("../../dozer-panel-files/locales/zh-CN.json"),
     ),
     (
         "dozer.database",

@@ -164,6 +164,7 @@ impl App {
                 self.update(Message::Search(search::Message::SearchOpen(scope)));
             }
             PanelCommand::ShowFileHistory { path } => self.show_file_history(path),
+            PanelCommand::OpenFile { path } => self.preview_open_path(path),
         }
     }
 
@@ -211,7 +212,12 @@ impl App {
         let mut pending: Vec<toast::Pending> = Vec::new();
         for slot in self.projects.values_mut() {
             if let WorkspaceSlot::Loaded(ws) = slot {
-                pending.extend(ws.files.take_outbox());
+                pending.extend(
+                    ws.files
+                        .take_outbox()
+                        .into_iter()
+                        .map(|n| toast::pending_from_notice(files::LOG, n)),
+                );
                 pending.extend(
                     ws.todo
                         .take_outbox()
@@ -1307,7 +1313,10 @@ impl App {
             }
             Message::Conversations(conversations::Message::Hover(id, h)) => self.set_hover(id, h),
             Message::Conversations(conversations::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: target.id,
+                    secure: target.secure,
+                }));
             }
             Message::Conversations(conversations::Message::AgentPickerOpen) => {
                 #[cfg(target_os = "macos")]
@@ -1605,7 +1614,10 @@ impl App {
                 self.set_hover(id, hovered);
             }
             Message::Database(database::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: target.id,
+                    secure: target.secure,
+                }));
             }
             Message::Database(database::Message::ToggleListCollapse) => {
                 self.toggle_panel_list_collapse(PanelKind::Database);
@@ -1707,7 +1719,10 @@ impl App {
                 self.search_results(project_id, result)
             }
             Message::Search(search::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: target.id,
+                    secure: target.secure,
+                }));
             }
             Message::Search(msg) => {
                 let handle = self.handle.clone();
@@ -2050,7 +2065,10 @@ impl App {
                 self.update(Message::ColumnDragStart(Divider::BrowserBookmarksSplit));
             }
             Message::Browser(browser::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: target.id,
+                    secure: target.secure,
+                }));
             }
             Message::Browser(msg) => self.browser_message(msg),
             Message::ProjectSelect(id) => self.project_select(id),
@@ -2203,7 +2221,10 @@ impl App {
                 });
             }
             Message::GitLog(git_log::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: target.id,
+                    secure: target.secure,
+                }));
             }
             Message::GitLog(msg) => {
                 if let git_log::Message::Hover(id, h) = msg {
@@ -2416,7 +2437,10 @@ impl App {
                 self.set_hover(id, hovered);
             }
             Message::Files(files::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: target.id,
+                    secure: target.secure,
+                }));
             }
             // 树内行被按下:只武装拖拽(供 main.rs 全局松开左键时收尾),
             // **不**立即执行任何点击语义(既不展开/折叠目录,也不打开文件)。
@@ -2531,7 +2555,6 @@ impl App {
                     let _ = proxy.send_event(Message::Files(m));
                 };
                 let external_apps = self.external_apps.clone();
-                let agent_terminal_visible = self.terminal_visible();
                 let locale = self.locale.active_locale().to_string();
                 let app_files = &mut self.files;
                 let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
@@ -2545,9 +2568,11 @@ impl App {
                     &handle,
                     emit,
                     &external_apps,
-                    agent_terminal_visible,
+                    &dozer_panel_files::adapter::FilesCapabilities::all(),
                     &locale,
                 );
+                let requests = ws.files.take_requests();
+                self.run_files_requests(requests);
             }
             Message::Project(
                 msg @ (project::Message::GitRefreshed(project_id, ..)
@@ -2983,7 +3008,10 @@ impl App {
                 self.ssh_terminal_connect_failed(project_id, host_id, tab_id, err)
             }
             Message::Ssh(ssh::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: target.id,
+                    secure: target.secure,
+                }));
             }
             Message::Ssh(msg) => {
                 if let ssh::Message::Hover(id, h) = msg {
@@ -5552,7 +5580,6 @@ impl App {
     pub(crate) fn files_project_message(&mut self, project_id: i64, msg: files::Message) {
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
-        let agent_terminal_visible = self.terminal_visible();
         let locale = self.locale.active_locale().to_string();
         let emit = move |m| {
             let _ = proxy.send_event(Message::Files(m));
@@ -5570,9 +5597,60 @@ impl App {
             &handle,
             emit,
             &external_apps,
-            agent_terminal_visible,
+            &dozer_panel_files::adapter::FilesCapabilities::all(),
             &locale,
         );
+        let requests = ws.files.take_requests();
+        self.run_files_requests(requests);
+    }
+
+    /// 排空文件面板排给产品的请求:目前只有"弹菜单"。macOS 走原生 NSMenu
+    /// (阻塞等用户选择,选中后把消息发回顶层);其余平台落成 iced 浮层状态,
+    /// 由 `view` 渲染。
+    fn run_files_requests(&mut self, requests: Vec<dozer_panel_files::adapter::FilesRequest>) {
+        use dozer_panel_files::adapter::FilesRequest;
+        for request in requests {
+            let (items, at) = match request {
+                FilesRequest::ShowContextMenu { items, at }
+                | FilesRequest::ShowNativeMenu { items, at } => (items, at),
+                FilesRequest::ShowBranchPicker { .. } => continue,
+            };
+            #[cfg(target_os = "macos")]
+            {
+                let native = items
+                    .into_iter()
+                    .map(|item| match item {
+                        dozer_panel_files::menu::MenuItem::Entry {
+                            icon,
+                            label,
+                            enabled,
+                            msg,
+                        } => {
+                            let body = byteui::theme::color::current().body;
+                            crate::chrome::native_menu::Item::Entry {
+                                icon,
+                                icon_color: None,
+                                label,
+                                color: body,
+                                enabled,
+                                msg,
+                            }
+                        }
+                        dozer_panel_files::menu::MenuItem::Separator => {
+                            crate::chrome::native_menu::Item::Separator
+                        }
+                    })
+                    .collect();
+                if let Some(msg) = crate::chrome::native_menu::show_align_no_icon_left(native, at) {
+                    let _ = self.proxy.send_event(Message::Files(msg));
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                // iced 浮层从状态重建菜单,这里只落坐标与目标。
+                let _ = (items, at);
+            }
+        }
     }
 
     /// Project 面板链接行右键菜单浮层:当前只含"删除"。定位坐标复用
