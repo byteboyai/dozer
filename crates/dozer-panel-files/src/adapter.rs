@@ -53,6 +53,16 @@ pub enum FilesRequest {
         items: Vec<MenuItem<Message>>,
         at: (f32, f32),
     },
+    /// 打开分支选择器。库不认识产品的弹层外观(宽度、磨砂外壳、当前分支
+    /// 高亮色都是主题细节),所以只报"该弹了"和内容,渲染交给产品:选中后
+    /// 把 `Message::BranchSwitch(name)` 送回 `update`;`Message::BranchPickerClose`
+    /// 仍由产品自己发。
+    ShowBranchPicker {
+        branches: Vec<String>,
+        current: Option<String>,
+        /// 工作区有未提交改动时,除当前分支外全部禁用。
+        lock_others: bool,
+    },
 }
 
 /// 文本输入框右键菜单的目标。`id` 是产生右键的那个输入框(主窗口搜索框 /
@@ -61,6 +71,19 @@ pub enum FilesRequest {
 pub struct TextInputTarget {
     pub id: iced_widget::core::widget::Id,
     pub secure: bool,
+}
+
+/// 文本选区(1-based 行列)——库不认识预览引擎的类型,产品在调用点转换。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextRange {
+    pub start: TextPosition,
+    pub end: TextPosition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextPosition {
+    pub line: u32,
+    pub column: u32,
 }
 
 /// 预览标签的来源面板 —— `TabContextMenu*` 消息用它决定"刷新这个标签"去

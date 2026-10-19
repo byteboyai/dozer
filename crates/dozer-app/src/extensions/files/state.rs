@@ -8,8 +8,8 @@
 pub(crate) use dozer_panel_files::state::*;
 pub use dozer_panel_files::state::DRAG_HOVER_EXPAND_DELAY;
 pub use dozer_panel_files::state::{
-    CaptureSearchFocus, CaptureTreeEditFocus, move_dir_field_id, move_name_field_id, search_field_id,
-    take_search_focused, take_tree_edit_focused, tree_edit_field_id,
+    CaptureSearchFocus, CaptureTreeEditFocus, move_name_field_id, take_search_focused,
+    take_tree_edit_focused, tree_edit_field_id,
 };
 
 /// 库的中性预览来源 ↔ Dozer 的 `PanelKind`(S5b-1:库不认识 `PanelKind`)。

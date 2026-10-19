@@ -13,6 +13,7 @@ pub mod menu;
 pub mod state;
 pub mod tree;
 pub mod update;
+pub mod view;
 
 pub use state::{FilesToolbarTarget, GitInfo, Message};
 

@@ -1,7 +1,6 @@
 //! 面板自带的确认对话框内容。只产出 `byteui` 的 `ConfirmDialog` 数据,
 //! 由产品放进取景树。
 
-use byteui::interaction::icons;
 use crate::i18n::{t, t_args};
 use crate::state::WorkspaceState;
 use crate::Message;

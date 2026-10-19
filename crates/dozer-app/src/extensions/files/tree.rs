@@ -2,9 +2,7 @@
 //! 并给 `tree_drop_target` 补一个使用产品主题几何量的包装,让既有调用点与
 //! 测试不必各自传行高/间距。
 
-pub(crate) use dozer_panel_files::tree::{
-    DropHit, TreeDrag, TreeDragPhase, is_valid_move_target, tree_state_color,
-};
+pub(crate) use dozer_panel_files::tree::DropHit;
 use dozer_panel_files::fs::TreeRow;
 use iced_widget::core::Element;
 

@@ -496,6 +496,11 @@ pub struct AppState {
     pub context_menu: Option<ContextMenu>,
     pub tab_context_menu: Option<TabContextMenu>,
     pub last_right_click: (f32, f32),
+    /// 最近一次推给产品的文件树右键菜单条目。产品若要自己画 iced 浮层
+    /// (而不是原生菜单),从这里取内容,不必再组装一遍。
+    pub context_menu_entries: Vec<crate::menu::MenuItem<Message>>,
+    /// 同上,预览标签页右键菜单。
+    pub tab_context_menu_entries: Vec<crate::menu::MenuItem<Message>>,
 }
 
 /// 搜索框稳定的 iced widget id:`view()` 里 `.id()` 挂给真正的

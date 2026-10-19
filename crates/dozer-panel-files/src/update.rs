@@ -106,6 +106,7 @@ pub fn update(
             // 把选中的 `Message` 送回 `update`;其余产品退回自己的 iced 浮层。
             // 两条路都不在这里递推 `update`——菜单项里的 `OpenSearch`/
             // `CopyPath` 是内核拦截的,必须经 `emit` 走回顶层。
+            app_state.context_menu_entries = items.clone();
             ws_state.requests.push(FilesRequest::ShowNativeMenu {
                 items,
                 at: (x, y),
@@ -114,6 +115,8 @@ pub fn update(
         Message::ContextMenuClose => {
             app_state.context_menu = None;
             app_state.tab_context_menu = None;
+            app_state.context_menu_entries.clear();
+            app_state.tab_context_menu_entries.clear();
         }
         Message::SendToAgentContext(target, is_dir) => {
             // 真正的 PTY 写入需要 `main.rs` 的终端句柄,`files::update` 拿不到,
@@ -146,6 +149,7 @@ pub fn update(
                 caps,
                 locale,
             );
+            app_state.tab_context_menu_entries = items.clone();
             ws_state.requests.push(FilesRequest::ShowNativeMenu {
                 items,
                 at: (x, y),
@@ -154,6 +158,8 @@ pub fn update(
         Message::TabContextMenuClose => {
             app_state.context_menu = None;
             app_state.tab_context_menu = None;
+            app_state.context_menu_entries.clear();
+            app_state.tab_context_menu_entries.clear();
         }
         Message::OpenWithDefault(path, app_name) => {
             app_state.close_context_menu();
@@ -380,14 +386,18 @@ pub fn update(
             ws_state.git_branches = info.branches;
         }
         Message::BranchPickerOpen => {
-            // macOS 由内核 `App::update` 拦截(`files::update` 的 app_state
-            // 够不到内核 `last_cursor`)直接弹原生 NSMenu;这里只剩非 macOS
-            // 平台的 iced 弹层兜底(`branch_picker_popup`)。
-            #[cfg(not(target_os = "macos"))]
-            {
-                ws_state.branch_picker_open = true;
-            }
+            // 弹层外观归产品,库只把内容排进请求队列;`branch_picker_open`
+            // 仍记下来(底栏据此显示"已开"状态、Esc/点空白据此判断要不要关)。
+            ws_state.branch_picker_open = true;
             ws_state.git_error = None;
+            let branches = ws_state.git_branches.clone();
+            let current = ws_state.current_branch.clone();
+            let lock_others = ws_state.git_dirty();
+            ws_state.requests.push(FilesRequest::ShowBranchPicker {
+                branches,
+                current,
+                lock_others,
+            });
         }
         Message::BranchPickerClose => {
             ws_state.branch_picker_open = false;

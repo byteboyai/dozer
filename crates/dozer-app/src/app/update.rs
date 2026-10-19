@@ -5610,8 +5610,11 @@ impl App {
     fn run_files_requests(&mut self, requests: Vec<dozer_panel_files::adapter::FilesRequest>) {
         use dozer_panel_files::adapter::FilesRequest;
         for request in requests {
-            let (FilesRequest::ShowContextMenu { items, at }
-            | FilesRequest::ShowNativeMenu { items, at }) = request;
+            let (items, at) = match request {
+                FilesRequest::ShowContextMenu { items, at }
+                | FilesRequest::ShowNativeMenu { items, at } => (items, at),
+                FilesRequest::ShowBranchPicker { .. } => continue,
+            };
             #[cfg(target_os = "macos")]
             {
                 let native = items
