@@ -1,0 +1,1196 @@
+### blank_only / Files / en
+webviews: []
+editors: []
+json: []
+tabular: []
+### blank_only / Files / zh-CN
+webviews: []
+editors: []
+json: []
+tabular: []
+### blank_only / Project / en
+webviews: []
+editors: []
+json: []
+tabular: []
+### blank_only / Project / zh-CN
+webviews: []
+editors: []
+json: []
+tabular: []
+### one_code_tab / Files / en
+webviews: []
+editors: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/a.rs&theme=dark&locale=en&ro=0&doc=p7-t1&proj=7&panel=files&tab=1&lang=rust&fs=14&lh=1.6",
+        visible: true,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 1,
+                path: "/tmp/p2golden/a.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: []
+tabular: []
+### one_code_tab / Files / zh-CN
+webviews: []
+editors: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/a.rs&theme=dark&locale=zh-CN&ro=0&doc=p7-t1&proj=7&panel=files&tab=1&lang=rust&fs=14&lh=1.6",
+        visible: true,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 1,
+                path: "/tmp/p2golden/a.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: []
+tabular: []
+### one_code_tab / Project / en
+webviews: []
+editors: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/a.rs&theme=dark&locale=en&ro=0&doc=p7-t1&proj=7&panel=project&tab=1&lang=rust&fs=14&lh=1.6",
+        visible: true,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 1,
+                path: "/tmp/p2golden/a.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: []
+tabular: []
+### one_code_tab / Project / zh-CN
+webviews: []
+editors: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/a.rs&theme=dark&locale=zh-CN&ro=0&doc=p7-t1&proj=7&panel=project&tab=1&lang=rust&fs=14&lh=1.6",
+        visible: true,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 1,
+                path: "/tmp/p2golden/a.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: []
+tabular: []
+### rendered_tabs / Files / en
+webviews: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Freadme.md&theme=dark&locale=en&ln=1&fs=14",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://html/host.html?p=%2Ftmp%2Fp2golden%2Fpage.html&theme=dark&locale=en",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 3,
+        url: "dozer://image-annotate/host.html?p=%2Ftmp%2Fp2golden%2Fpic.png&theme=dark&locale=en",
+        visible: true,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+editors: []
+json: []
+tabular: []
+### rendered_tabs / Files / zh-CN
+webviews: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Freadme.md&theme=dark&locale=zh-CN&ln=1&fs=14",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://html/host.html?p=%2Ftmp%2Fp2golden%2Fpage.html&theme=dark&locale=zh-CN",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 3,
+        url: "dozer://image-annotate/host.html?p=%2Ftmp%2Fp2golden%2Fpic.png&theme=dark&locale=zh-CN",
+        visible: true,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+editors: []
+json: []
+tabular: []
+### rendered_tabs / Project / en
+webviews: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Freadme.md&theme=dark&locale=en&ln=1&fs=14",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://html/host.html?p=%2Ftmp%2Fp2golden%2Fpage.html&theme=dark&locale=en",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 3,
+        url: "dozer://image-annotate/host.html?p=%2Ftmp%2Fp2golden%2Fpic.png&theme=dark&locale=en",
+        visible: true,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+editors: []
+json: []
+tabular: []
+### rendered_tabs / Project / zh-CN
+webviews: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Freadme.md&theme=dark&locale=zh-CN&ln=1&fs=14",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://html/host.html?p=%2Ftmp%2Fp2golden%2Fpage.html&theme=dark&locale=zh-CN",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 3,
+        url: "dozer://image-annotate/host.html?p=%2Ftmp%2Fp2golden%2Fpic.png&theme=dark&locale=zh-CN",
+        visible: true,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+editors: []
+json: []
+tabular: []
+### rendered_with_reload_nonce / Files / en
+webviews: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Freadme.md&theme=dark&locale=en&ln=1&fs=14&_r=2",
+        visible: true,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+editors: []
+json: []
+tabular: []
+### rendered_with_reload_nonce / Files / zh-CN
+webviews: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Freadme.md&theme=dark&locale=zh-CN&ln=1&fs=14&_r=2",
+        visible: true,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+editors: []
+json: []
+tabular: []
+### rendered_with_reload_nonce / Project / en
+webviews: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Freadme.md&theme=dark&locale=en&ln=1&fs=14&_r=2",
+        visible: true,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+editors: []
+json: []
+tabular: []
+### rendered_with_reload_nonce / Project / zh-CN
+webviews: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Freadme.md&theme=dark&locale=zh-CN&ln=1&fs=14&_r=2",
+        visible: true,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+editors: []
+json: []
+tabular: []
+### json_and_streamed / Files / en
+webviews: []
+editors: [
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/log.jsonl&theme=dark&locale=en&ro=1&doc=p7-t2&proj=7&panel=files&tab=2&lang=json&fs=14&lh=1.6",
+        visible: true,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 2,
+                path: "/tmp/p2golden/log.jsonl",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://json-editor/index.html?p=/tmp/p2golden/data.json&theme=dark&locale=en&ro=1&doc=p7-t1&proj=7&panel=files&tab=1",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 1,
+                path: "/tmp/p2golden/data.json",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+tabular: []
+### json_and_streamed / Files / zh-CN
+webviews: []
+editors: [
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/log.jsonl&theme=dark&locale=zh-CN&ro=1&doc=p7-t2&proj=7&panel=files&tab=2&lang=json&fs=14&lh=1.6",
+        visible: true,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 2,
+                path: "/tmp/p2golden/log.jsonl",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://json-editor/index.html?p=/tmp/p2golden/data.json&theme=dark&locale=zh-CN&ro=1&doc=p7-t1&proj=7&panel=files&tab=1",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 1,
+                path: "/tmp/p2golden/data.json",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+tabular: []
+### json_and_streamed / Project / en
+webviews: []
+editors: [
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/log.jsonl&theme=dark&locale=en&ro=1&doc=p7-t2&proj=7&panel=project&tab=2&lang=json&fs=14&lh=1.6",
+        visible: true,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 2,
+                path: "/tmp/p2golden/log.jsonl",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://json-editor/index.html?p=/tmp/p2golden/data.json&theme=dark&locale=en&ro=1&doc=p7-t1&proj=7&panel=project&tab=1",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 1,
+                path: "/tmp/p2golden/data.json",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+tabular: []
+### json_and_streamed / Project / zh-CN
+webviews: []
+editors: [
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/log.jsonl&theme=dark&locale=zh-CN&ro=1&doc=p7-t2&proj=7&panel=project&tab=2&lang=json&fs=14&lh=1.6",
+        visible: true,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 2,
+                path: "/tmp/p2golden/log.jsonl",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://json-editor/index.html?p=/tmp/p2golden/data.json&theme=dark&locale=zh-CN&ro=1&doc=p7-t1&proj=7&panel=project&tab=1",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 1,
+                path: "/tmp/p2golden/data.json",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+tabular: []
+### tabular_tabs / Files / en
+webviews: []
+editors: []
+json: []
+tabular: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://tabular/index.html?p=/tmp/p2golden/sheet.csv&theme=dark&locale=en&doc=p7-t1&proj=7&panel=files&tab=1",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 1,
+                path: "/tmp/p2golden/sheet.csv",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            0,
+        ),
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://tabular/index.html?p=/tmp/p2golden/book.xlsx&theme=dark&locale=en&doc=p7-t2&proj=7&panel=files&tab=2",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 2,
+                path: "/tmp/p2golden/book.xlsx",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            0,
+        ),
+        park_offscreen: false,
+    },
+]
+### tabular_tabs / Files / zh-CN
+webviews: []
+editors: []
+json: []
+tabular: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://tabular/index.html?p=/tmp/p2golden/sheet.csv&theme=dark&locale=zh-CN&doc=p7-t1&proj=7&panel=files&tab=1",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 1,
+                path: "/tmp/p2golden/sheet.csv",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            0,
+        ),
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://tabular/index.html?p=/tmp/p2golden/book.xlsx&theme=dark&locale=zh-CN&doc=p7-t2&proj=7&panel=files&tab=2",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 2,
+                path: "/tmp/p2golden/book.xlsx",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            0,
+        ),
+        park_offscreen: false,
+    },
+]
+### tabular_tabs / Project / en
+webviews: []
+editors: []
+json: []
+tabular: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://tabular/index.html?p=/tmp/p2golden/sheet.csv&theme=dark&locale=en&doc=p7-t1&proj=7&panel=project&tab=1",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 1,
+                path: "/tmp/p2golden/sheet.csv",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            0,
+        ),
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://tabular/index.html?p=/tmp/p2golden/book.xlsx&theme=dark&locale=en&doc=p7-t2&proj=7&panel=project&tab=2",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 2,
+                path: "/tmp/p2golden/book.xlsx",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            0,
+        ),
+        park_offscreen: false,
+    },
+]
+### tabular_tabs / Project / zh-CN
+webviews: []
+editors: []
+json: []
+tabular: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://tabular/index.html?p=/tmp/p2golden/sheet.csv&theme=dark&locale=zh-CN&doc=p7-t1&proj=7&panel=project&tab=1",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 1,
+                path: "/tmp/p2golden/sheet.csv",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            0,
+        ),
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://tabular/index.html?p=/tmp/p2golden/book.xlsx&theme=dark&locale=zh-CN&doc=p7-t2&proj=7&panel=project&tab=2",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 2,
+                path: "/tmp/p2golden/book.xlsx",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            0,
+        ),
+        park_offscreen: false,
+    },
+]
+### mixed_loading_and_suspended / Files / en
+webviews: [
+    PreviewWebviewSpec {
+        id: 3,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Fc.md&theme=dark&locale=en&ln=1&fs=14",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: true,
+    },
+]
+editors: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/a.rs&theme=dark&locale=en&ro=0&doc=p7-t1&proj=7&panel=files&tab=1&lang=rust&fs=14&lh=1.6",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 1,
+                path: "/tmp/p2golden/a.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            1,
+        ),
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 4,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/blob.bin&theme=dark&locale=en&ro=0&doc=p7-t4&proj=7&panel=files&tab=4&lang=txt&fs=14&lh=1.6",
+        visible: true,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 4,
+                path: "/tmp/p2golden/blob.bin",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: []
+tabular: []
+### mixed_loading_and_suspended / Files / zh-CN
+webviews: [
+    PreviewWebviewSpec {
+        id: 3,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Fc.md&theme=dark&locale=zh-CN&ln=1&fs=14",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: true,
+    },
+]
+editors: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/a.rs&theme=dark&locale=zh-CN&ro=0&doc=p7-t1&proj=7&panel=files&tab=1&lang=rust&fs=14&lh=1.6",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 1,
+                path: "/tmp/p2golden/a.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            1,
+        ),
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 4,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/blob.bin&theme=dark&locale=zh-CN&ro=0&doc=p7-t4&proj=7&panel=files&tab=4&lang=txt&fs=14&lh=1.6",
+        visible: true,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 4,
+                path: "/tmp/p2golden/blob.bin",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: []
+tabular: []
+### mixed_loading_and_suspended / Project / en
+webviews: [
+    PreviewWebviewSpec {
+        id: 3,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Fc.md&theme=dark&locale=en&ln=1&fs=14",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: true,
+    },
+]
+editors: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/a.rs&theme=dark&locale=en&ro=0&doc=p7-t1&proj=7&panel=project&tab=1&lang=rust&fs=14&lh=1.6",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 1,
+                path: "/tmp/p2golden/a.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            1,
+        ),
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 4,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/blob.bin&theme=dark&locale=en&ro=0&doc=p7-t4&proj=7&panel=project&tab=4&lang=txt&fs=14&lh=1.6",
+        visible: true,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 4,
+                path: "/tmp/p2golden/blob.bin",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: []
+tabular: []
+### mixed_loading_and_suspended / Project / zh-CN
+webviews: [
+    PreviewWebviewSpec {
+        id: 3,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Fc.md&theme=dark&locale=zh-CN&ln=1&fs=14",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: true,
+    },
+]
+editors: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/a.rs&theme=dark&locale=zh-CN&ro=0&doc=p7-t1&proj=7&panel=project&tab=1&lang=rust&fs=14&lh=1.6",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 1,
+                path: "/tmp/p2golden/a.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            1,
+        ),
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 4,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/blob.bin&theme=dark&locale=zh-CN&ro=0&doc=p7-t4&proj=7&panel=project&tab=4&lang=txt&fs=14&lh=1.6",
+        visible: true,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 4,
+                path: "/tmp/p2golden/blob.bin",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: []
+tabular: []
+### six_tabs_middle_active / Files / en
+webviews: [
+    PreviewWebviewSpec {
+        id: 3,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Fx3.md&theme=dark&locale=en&ln=1&fs=14",
+        visible: true,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 6,
+        url: "dozer://image-annotate/host.html?p=%2Ftmp%2Fp2golden%2Fx6.png&theme=dark&locale=en",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+editors: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/x1.rs&theme=dark&locale=en&ro=0&doc=p7-t1&proj=7&panel=files&tab=1&lang=rust&fs=14&lh=1.6",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 1,
+                path: "/tmp/p2golden/x1.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/x2.rs&theme=dark&locale=en&ro=0&doc=p7-t2&proj=7&panel=files&tab=2&lang=rust&fs=14&lh=1.6",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 2,
+                path: "/tmp/p2golden/x2.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: [
+    PreviewWebviewSpec {
+        id: 4,
+        url: "dozer://json-editor/index.html?p=/tmp/p2golden/x4.json&theme=dark&locale=en&ro=1&doc=p7-t4&proj=7&panel=files&tab=4",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 4,
+                path: "/tmp/p2golden/x4.json",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+tabular: [
+    PreviewWebviewSpec {
+        id: 5,
+        url: "dozer://tabular/index.html?p=/tmp/p2golden/x5.csv&theme=dark&locale=en&doc=p7-t5&proj=7&panel=files&tab=5",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 5,
+                path: "/tmp/p2golden/x5.csv",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            0,
+        ),
+        park_offscreen: false,
+    },
+]
+### six_tabs_middle_active / Files / zh-CN
+webviews: [
+    PreviewWebviewSpec {
+        id: 3,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Fx3.md&theme=dark&locale=zh-CN&ln=1&fs=14",
+        visible: true,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 6,
+        url: "dozer://image-annotate/host.html?p=%2Ftmp%2Fp2golden%2Fx6.png&theme=dark&locale=zh-CN",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+editors: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/x1.rs&theme=dark&locale=zh-CN&ro=0&doc=p7-t1&proj=7&panel=files&tab=1&lang=rust&fs=14&lh=1.6",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 1,
+                path: "/tmp/p2golden/x1.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/x2.rs&theme=dark&locale=zh-CN&ro=0&doc=p7-t2&proj=7&panel=files&tab=2&lang=rust&fs=14&lh=1.6",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 2,
+                path: "/tmp/p2golden/x2.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: [
+    PreviewWebviewSpec {
+        id: 4,
+        url: "dozer://json-editor/index.html?p=/tmp/p2golden/x4.json&theme=dark&locale=zh-CN&ro=1&doc=p7-t4&proj=7&panel=files&tab=4",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 4,
+                path: "/tmp/p2golden/x4.json",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+tabular: [
+    PreviewWebviewSpec {
+        id: 5,
+        url: "dozer://tabular/index.html?p=/tmp/p2golden/x5.csv&theme=dark&locale=zh-CN&doc=p7-t5&proj=7&panel=files&tab=5",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Files,
+                tab_id: 5,
+                path: "/tmp/p2golden/x5.csv",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            0,
+        ),
+        park_offscreen: false,
+    },
+]
+### six_tabs_middle_active / Project / en
+webviews: [
+    PreviewWebviewSpec {
+        id: 3,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Fx3.md&theme=dark&locale=en&ln=1&fs=14",
+        visible: true,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 6,
+        url: "dozer://image-annotate/host.html?p=%2Ftmp%2Fp2golden%2Fx6.png&theme=dark&locale=en",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+editors: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/x1.rs&theme=dark&locale=en&ro=0&doc=p7-t1&proj=7&panel=project&tab=1&lang=rust&fs=14&lh=1.6",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 1,
+                path: "/tmp/p2golden/x1.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/x2.rs&theme=dark&locale=en&ro=0&doc=p7-t2&proj=7&panel=project&tab=2&lang=rust&fs=14&lh=1.6",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 2,
+                path: "/tmp/p2golden/x2.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: [
+    PreviewWebviewSpec {
+        id: 4,
+        url: "dozer://json-editor/index.html?p=/tmp/p2golden/x4.json&theme=dark&locale=en&ro=1&doc=p7-t4&proj=7&panel=project&tab=4",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 4,
+                path: "/tmp/p2golden/x4.json",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+tabular: [
+    PreviewWebviewSpec {
+        id: 5,
+        url: "dozer://tabular/index.html?p=/tmp/p2golden/x5.csv&theme=dark&locale=en&doc=p7-t5&proj=7&panel=project&tab=5",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 5,
+                path: "/tmp/p2golden/x5.csv",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            0,
+        ),
+        park_offscreen: false,
+    },
+]
+### six_tabs_middle_active / Project / zh-CN
+webviews: [
+    PreviewWebviewSpec {
+        id: 3,
+        url: "dozer://flyfish/host.html?p=%2Ftmp%2Fp2golden%2Fx3.md&theme=dark&locale=zh-CN&ln=1&fs=14",
+        visible: true,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 6,
+        url: "dozer://image-annotate/host.html?p=%2Ftmp%2Fp2golden%2Fx6.png&theme=dark&locale=zh-CN",
+        visible: false,
+        editor_binding: None,
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+editors: [
+    PreviewWebviewSpec {
+        id: 1,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/x1.rs&theme=dark&locale=zh-CN&ro=0&doc=p7-t1&proj=7&panel=project&tab=1&lang=rust&fs=14&lh=1.6",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 1,
+                path: "/tmp/p2golden/x1.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+    PreviewWebviewSpec {
+        id: 2,
+        url: "dozer://editor/index.html?p=/tmp/p2golden/x2.rs&theme=dark&locale=zh-CN&ro=0&doc=p7-t2&proj=7&panel=project&tab=2&lang=rust&fs=14&lh=1.6",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 2,
+                path: "/tmp/p2golden/x2.rs",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+json: [
+    PreviewWebviewSpec {
+        id: 4,
+        url: "dozer://json-editor/index.html?p=/tmp/p2golden/x4.json&theme=dark&locale=zh-CN&ro=1&doc=p7-t4&proj=7&panel=project&tab=4",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 4,
+                path: "/tmp/p2golden/x4.json",
+            },
+        ),
+        reserve: None,
+        loading_generation: None,
+        park_offscreen: false,
+    },
+]
+tabular: [
+    PreviewWebviewSpec {
+        id: 5,
+        url: "dozer://tabular/index.html?p=/tmp/p2golden/x5.csv&theme=dark&locale=zh-CN&doc=p7-t5&proj=7&panel=project&tab=5",
+        visible: false,
+        editor_binding: Some(
+            EditorHostBinding {
+                project_id: 7,
+                panel: Project,
+                tab_id: 5,
+                path: "/tmp/p2golden/x5.csv",
+            },
+        ),
+        reserve: None,
+        loading_generation: Some(
+            0,
+        ),
+        park_offscreen: false,
+    },
+]

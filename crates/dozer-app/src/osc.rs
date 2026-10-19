@@ -93,7 +93,7 @@ impl OscScanner {
             // host 段到第一个 '/' 为止；余下是路径
             if let Some(url) = rest.strip_prefix("file://")
                 && let Some(slash) = url.find('/')
-                && let Some(path) = crate::assets::percent_decode(&url[slash..])
+                && let Some(path) = dozer_panel_preview::assets::percent_decode(&url[slash..])
             {
                 out.push(OscEvent::Cwd(PathBuf::from(path)));
             }

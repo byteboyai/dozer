@@ -7,10 +7,13 @@
 //! 模块布局沿用迁移前 `dozer-app::preview`:搬来的文件用 `use super::*` 取同级符号,
 //! 所以这里把核心的公开面和本库各模块一并重导出到 crate 根。
 
+pub mod assets;
 pub mod capabilities;
 pub mod code_host;
 pub mod display;
 pub mod effects;
+pub mod host_ipc;
+pub mod host_script;
 pub mod i18n;
 pub mod message;
 pub mod pane;
@@ -30,6 +33,8 @@ pub mod view_model;
 mod view_tests;
 pub mod webview;
 pub mod webview_protocol;
+#[cfg(test)]
+mod webview_specs_golden;
 
 /// 本库自有文案的 i18n owner(与核心的 `dozer.preview` 区分)。
 pub const PANEL_OWNER: &str = "dozer.preview_panel";

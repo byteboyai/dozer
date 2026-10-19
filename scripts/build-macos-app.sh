@@ -106,14 +106,14 @@ cp "$PACKAGING_DIR/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 # flyfish 文件预览静态资源(text/image/pdf 渲染管线 + vendor/pdf)。
 # dozer 的 `assets::assets_root()` 在打包态从 `Contents/Resources/flyfish`
 # 读(dev 态才回退源码树),漏拷会导致分发后的文件预览 404。
-cp -R "$ROOT_DIR/crates/dozer-app/assets/flyfish" "$APP_DIR/Contents/Resources/flyfish"
+cp -R "$ROOT_DIR/crates/dozer-panel-preview/assets/flyfish" "$APP_DIR/Contents/Resources/flyfish"
 # CodeMirror editor host 静态资源(Phase B)。`assets::handle_protocol` 的
 # `dozer://editor/` 命名空间从 flyfish 根的**兄弟目录** `Contents/Resources/
 # editor` 读(dev 态同构:assets/editor),必须一并打包,否则 editor 预览 404。
-cp -R "$ROOT_DIR/crates/dozer-app/assets/editor" "$APP_DIR/Contents/Resources/editor"
+cp -R "$ROOT_DIR/crates/dozer-panel-preview/assets/editor" "$APP_DIR/Contents/Resources/editor"
 # JSON tree/text host(vanilla-jsoneditor)。`dozer://json-editor/` 从 flyfish 根的
 # 兄弟目录 `Contents/Resources/json-editor` 读。
-cp -R "$ROOT_DIR/crates/dozer-app/assets/json-editor" "$APP_DIR/Contents/Resources/json-editor"
+cp -R "$ROOT_DIR/crates/dozer-panel-preview/assets/json-editor" "$APP_DIR/Contents/Resources/json-editor"
 # 会话审阅 trace host(Preact,2026-09-25 起)。`dozer://review-trace/` 从
 # flyfish 根的兄弟目录 `Contents/Resources/review-trace` 读,漏拷会导致
 # 分发后核心 Agent 面板/对话面板的会话审阅整个 404(dev 态 `cargo run`
@@ -129,7 +129,7 @@ cp -R "$ROOT_DIR/crates/dozer-panel-usage/assets/usage-content" "$APP_DIR/Conten
 # flyfish 根的兄弟目录 `Contents/Resources/image-annotate` 读(vendor JS + 导航
 # 图标),漏拷会导致分发后 png/jpg/jpeg/webp/bmp/ico 预览整个 404(同
 # usage-content 2026-09-26 的漏拷教训,dev 态 `cargo run` 走源码树回退测不出来)。
-cp -R "$ROOT_DIR/crates/dozer-app/assets/image-annotate" "$APP_DIR/Contents/Resources/image-annotate"
+cp -R "$ROOT_DIR/crates/dozer-panel-preview/assets/image-annotate" "$APP_DIR/Contents/Resources/image-annotate"
 # 代码健康度 / Todo 面板内容侧 host。`dozer://codehealth-content/` 与
 # `dozer://todo-content/` 从 flyfish 根的兄弟目录读,漏拷会导致分发后这两个
 # 面板整个 404(dev 态 `cargo run` 走源码树回退测不出来)。todo-content 的产物唯一来源是
@@ -141,11 +141,11 @@ cp -R "$ROOT_DIR/crates/dozer-panel-todo/assets/todo-content" "$APP_DIR/Contents
 # 群聊面板整个 404。
 cp -R "$ROOT_DIR/crates/dozer-app/assets/group-chat-content" "$APP_DIR/Contents/Resources/group-chat-content"
 # 表格预览 host(`dozer://tabular-host/`)。
-cp -R "$ROOT_DIR/crates/dozer-app/assets/tabular-host" "$APP_DIR/Contents/Resources/tabular-host"
+cp -R "$ROOT_DIR/crates/dozer-panel-preview/assets/tabular-host" "$APP_DIR/Contents/Resources/tabular-host"
 # PlantUML viewer host(`dozer://plantuml-viewer/`,含 vendored 官方引擎与 C4
 # stdlib)。漏拷会导致分发后 .puml/.plantuml 预览整个 404(dev 态 `cargo run`
 # 走源码树回退测不出来)。
-cp -R "$ROOT_DIR/crates/dozer-app/assets/plantuml-viewer" "$APP_DIR/Contents/Resources/plantuml-viewer"
+cp -R "$ROOT_DIR/crates/dozer-panel-preview/assets/plantuml-viewer" "$APP_DIR/Contents/Resources/plantuml-viewer"
 
 # cargo 链接期只对裸二进制做了 ad-hoc 签名(`codesign -dv` 显示
 # `Info.plist=not bound`),装进 bundle 后这个签名并不覆盖 Info.plist/资源,
