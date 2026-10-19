@@ -1,0 +1,13 @@
+dozer://flyfish/host.html => 200|text/html|13|310257584f767c27
+dozer://flyfish/app.js => 200|text/javascript|14|a7c5636e921e0630
+dozer://editor/index.html => 200|text/html|12|7d2dfff74038d531
+dozer://json-editor/index.html => 404|text/plain|9|08565cf8a3e3ee3a
+dozer://tabular/index.html => 404|text/plain|9|08565cf8a3e3ee3a
+dozer://html/host.html => 200|text/html|5476|f467bd95d7e6e1e4
+dozer://image-annotate/host.html => 200|text/html|6541|22ebe9743aa23413
+dozer://plantuml-viewer/index.html => 200|text/html|14|684bef086df95489
+dozer://unknown-namespace/x => 0|-|0|0000000000000000
+https://example.com/ => 0|-|0|0000000000000000
+dozer://flyfish/__file__<base>/opened%20file.txt => 200|text/plain|5|a430d84680aabd0b
+dozer://flyfish/__file__<base>/secret.txt => 404|text/plain|9|08565cf8a3e3ee3a
+dozer://flyfish/__file__/../etc/passwd => 404|text/plain|9|08565cf8a3e3ee3a

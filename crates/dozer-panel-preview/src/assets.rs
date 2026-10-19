@@ -358,6 +358,113 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
+    /// S5b-2 P3 Task 1:协议应答黄金。固定夹具 + 固定 URI 表 → 每行
+    /// `status|mime|len|fnv1a`。搬迁前后逐行比较,任何"顺手改进"都会让它变红。
+    /// 用 FNV-1a 而不是 `DefaultHasher`(后者跨 Rust 版本不保证稳定)。
+    #[test]
+    fn handle_protocol_matches_the_golden() {
+        const GOLDEN: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/preview_protocol_golden.txt"
+        );
+
+        fn fnv1a(bytes: &[u8]) -> u64 {
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for b in bytes {
+                h ^= u64::from(*b);
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            h
+        }
+
+        let base = std::env::temp_dir().join("dozer-preview-protocol-golden");
+        let flyfish = base.join("flyfish");
+        let editor = base.join("editor");
+        let html = base.join("html");
+        let image = base.join("image-annotate");
+        let plantuml = base.join("plantuml-viewer");
+        for dir in [&flyfish, &editor, &html, &image, &plantuml] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        fs::write(flyfish.join("host.html"), b"<html>flyfish").unwrap();
+        fs::write(flyfish.join("app.js"), b"console.log(1)").unwrap();
+        fs::write(editor.join("index.html"), b"<html>editor").unwrap();
+        fs::write(html.join("host.html"), b"<html>html-host").unwrap();
+        fs::write(image.join("host.html"), b"<html>image").unwrap();
+        fs::write(plantuml.join("index.html"), b"<html>plantuml").unwrap();
+
+        let allowed_file = base.join("opened file.txt");
+        fs::write(&allowed_file, b"hello").unwrap();
+        let escaped = base.join("secret.txt");
+        fs::write(&escaped, b"nope").unwrap();
+
+        let mut allowed = HashSet::new();
+        allowed.insert(allowed_file.clone());
+        let enc = |p: &std::path::Path| {
+            p.to_string_lossy()
+                .replace('%', "%25")
+                .replace(' ', "%20")
+                .replace('#', "%23")
+                .replace('?', "%3F")
+                .replace('&', "%26")
+        };
+
+        // 黄金里的 URI 必须与机器无关:夹具根用 `<base>` 占位,记录前替换回去。
+        let base_s = base.to_string_lossy().to_string();
+        let redact = |uri: String| uri.replace(&base_s, "<base>");
+        let cases = vec![
+            (
+                redact(format!("dozer://flyfish/__file__{}", enc(&allowed_file))),
+                true,
+            ),
+            (
+                redact(format!("dozer://flyfish/__file__{}", enc(&escaped))),
+                false,
+            ),
+            (
+                String::from("dozer://flyfish/__file__/../etc/passwd"),
+                false,
+            ),
+        ];
+        let plain = [
+            "dozer://flyfish/host.html",
+            "dozer://flyfish/app.js",
+            "dozer://editor/index.html",
+            "dozer://json-editor/index.html",
+            "dozer://tabular/index.html",
+            "dozer://html/host.html",
+            "dozer://image-annotate/host.html",
+            "dozer://plantuml-viewer/index.html",
+            "dozer://unknown-namespace/x",
+            "https://example.com/",
+        ];
+
+        let mut out = String::new();
+        for uri in plain {
+            let (status, mime, len, hash) = match handle_protocol(&flyfish, &allowed, uri) {
+                Some(r) => (r.status, r.mime.to_string(), r.body.len(), fnv1a(&r.body)),
+                None => (0, String::from("-"), 0, 0),
+            };
+            out.push_str(&format!("{uri} => {status}|{mime}|{len}|{hash:016x}\n"));
+        }
+        for (display, _) in &cases {
+            // 实际查询要把占位还原成真实路径,记录时再抹掉。
+            let real = display.replace("<base>", &base_s);
+            let (status, mime, len, hash) = match handle_protocol(&flyfish, &allowed, &real) {
+                Some(r) => (r.status, r.mime.to_string(), r.body.len(), fnv1a(&r.body)),
+                None => (0, String::from("-"), 0, 0),
+            };
+            out.push_str(&format!("{display} => {status}|{mime}|{len}|{hash:016x}\n"));
+        }
+
+        if std::env::var_os("UPDATE_GOLDEN").is_some() {
+            fs::write(GOLDEN, &out).unwrap();
+            return;
+        }
+        let want = fs::read_to_string(GOLDEN).unwrap_or_default();
+        assert_eq!(out, want, "协议应答与黄金不一致(检查 URI 表或响应体)");
+    }
+
     fn scratch() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("dozer-assets-test-{}", std::process::id()));
         let _ = fs::create_dir_all(dir.join("sub"));
