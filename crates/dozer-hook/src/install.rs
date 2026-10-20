@@ -53,20 +53,27 @@ pub fn settings_path_for(agent: &str) -> PathBuf {
     }
 }
 
-fn entry_is_dozer(entry: &Value) -> bool {
-    // 测试/开发环境下二进制名可能是 dozer_hook-<hash>（cargo test 的
-    // deps 命名），发行名是 dozer-hook——两种拼写都认。
+/// 命令字符串里是否引用了 `product` 的 hook 二进制(连字符或下划线
+/// 形式都认——测试/开发环境下二进制名可能是 dozer_hook-<hash>(cargo
+/// test 的 deps 命名),发行名是 dozer-hook)。每个产品只认自己的名字,
+/// 绝不把别家条目当自己的动。沿用既有的子串匹配语义(含已知的过宽
+/// 问题,行为特征化测试钉住,待用户裁决)。
+pub fn entry_is_product(entry: &Value, product: &dozer_core::paths::ProductId) -> bool {
+    // hook_bin 本身就是连字符形式(如 "dozer-hook"/"digger-hook"),
+    // 下划线形式由它把 '-' 换成 '_' 得到。
+    let underscore = product.hook_bin.replace('-', "_");
     entry["hooks"]
         .as_array()
         .map(|hs| {
             hs.iter().any(|h| {
                 h["command"]
                     .as_str()
-                    .is_some_and(|c| c.contains("dozer-hook") || c.contains("dozer_hook"))
+                    .is_some_and(|c| c.contains(product.hook_bin) || c.contains(&underscore))
             })
         })
         .unwrap_or(false)
 }
+
 
 /// CLI 场景（`dozer-hook install <agent>`）用：调用方就是 `dozer-hook`
 /// 自身，`current_exe()` 天然指向正确的二进制。GUI 场景（`dozer-app` 在
@@ -96,6 +103,18 @@ fn shell_single_quote(s: &str) -> String {
 /// 追加的 hook 命令（2026-08 线上事故：`~/.claude/settings.json` 里同一个
 /// 事件堆出 3-4 条重复且指向 `dozer` GUI 二进制的坏 hook）。
 pub fn run_at_with_exe(path: &Path, agent: &str, install: bool, exe: &str) -> i32 {
+    run_at_with_exe_for(path, agent, install, exe, dozer_core::paths::product())
+}
+
+/// `run_at_with_exe` 的产品参数化内核:识别/写入都按传入的 `product`
+/// 进行(测试用它构造另一个产品的并存场景,不依赖进程级 install)。
+pub fn run_at_with_exe_for(
+    path: &Path,
+    agent: &str,
+    install: bool,
+    exe: &str,
+    product: &dozer_core::paths::ProductId,
+) -> i32 {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
@@ -128,7 +147,7 @@ pub fn run_at_with_exe(path: &Path, agent: &str, install: bool, exe: &str) -> i3
         let Some(arr) = arr.as_array_mut() else {
             continue;
         };
-        arr.retain(|e| !entry_is_dozer(e));
+        arr.retain(|e| !entry_is_product(e, product));
         if install {
             arr.push(json!({
                 "hooks": [{ "type": "command", "command": format!("{exe} {agent} {ev}") }]
@@ -170,6 +189,137 @@ mod tests {
 
     fn read(path: &std::path::Path) -> serde_json::Value {
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+
+    /// Digger 身份的 Fixed 目录实例,专供并存测试构造另一个产品。
+    fn digger_product(root: &std::path::Path) -> dozer_core::paths::ProductId {
+        use dozer_core::paths::{ProductDirs, ProductId};
+        ProductId::custom(
+            "digger",
+            "DIGGER_SESSION_ID",
+            "digger-hook",
+            "diggerd.sock",
+            "digger.db",
+            ProductDirs::Fixed {
+                config: root.join("config"),
+                state: root.join("state"),
+            },
+        )
+    }
+
+    /// 在指定产品身份下执行一次安装。install 是进程级的,直接
+    /// dozer_core::paths::install(digger) 会把本测试进程永久变成
+    /// digger——所以这组测试走参数化的 run_at_with_exe_for,
+    /// 不依赖进程态。
+    fn install_as(
+        path: &std::path::Path,
+        agent: &str,
+        exe: &str,
+        product: &dozer_core::paths::ProductId,
+    ) -> i32 {
+        run_at_with_exe_for(path, agent, true, exe, product)
+    }
+
+    #[test]
+    fn digger_and_dozer_entries_coexist_in_one_settings_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let digger = digger_product(dir.path());
+        let dozer = dozer_core::paths::ProductId::dozer();
+        assert_eq!(install_as(&path, "claude", "/opt/dozer-hook", &dozer), 0);
+        assert_eq!(install_as(&path, "claude", "/opt/digger-hook", &digger), 0);
+        let root = read(&path);
+        let stop = root["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2, "两个产品的条目必须并存: {stop:?}");
+        assert!(stop.iter().any(|e| e["hooks"][0]["command"]
+            .as_str().unwrap().contains("/opt/dozer-hook")));
+        assert!(stop.iter().any(|e| e["hooks"][0]["command"]
+            .as_str().unwrap().contains("/opt/digger-hook")));
+    }
+
+    #[test]
+    fn reinstalling_one_product_does_not_duplicate_or_touch_the_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let digger = digger_product(dir.path());
+        let dozer = dozer_core::paths::ProductId::dozer();
+        assert_eq!(install_as(&path, "claude", "/opt/dozer-hook", &dozer), 0);
+        assert_eq!(install_as(&path, "claude", "/opt/digger-hook", &digger), 0);
+        assert_eq!(install_as(&path, "claude", "/opt/dozer-hook", &dozer), 0);
+        assert_eq!(install_as(&path, "claude", "/opt/digger-hook", &digger), 0);
+        let root = read(&path);
+        let stop = root["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2, "重复安装不得产生重复条目");
+        let digger_cmds: Vec<&str> = stop
+            .iter()
+            .map(|e| e["hooks"][0]["command"].as_str().unwrap())
+            .filter(|c| c.contains("digger-hook"))
+            .collect();
+        assert_eq!(digger_cmds, ["'/opt/digger-hook' claude Stop"]);
+    }
+
+    #[test]
+    fn uninstalling_one_product_leaves_the_other_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let digger = digger_product(dir.path());
+        let dozer = dozer_core::paths::ProductId::dozer();
+        assert_eq!(install_as(&path, "claude", "/opt/dozer-hook", &dozer), 0);
+        assert_eq!(install_as(&path, "claude", "/opt/digger-hook", &digger), 0);
+        assert_eq!(
+            run_at_with_exe_for(&path, "claude", false, "/opt/dozer-hook", &dozer),
+            0
+        );
+        let root = read(&path);
+        let stop = root["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 1, "只卸了自己的,别人的原样: {stop:?}");
+        assert!(stop[0]["hooks"][0]["command"].as_str().unwrap().contains("digger-hook"));
+    }
+
+    #[test]
+    fn a_foreign_entry_with_a_similar_name_keeps_current_substring_behaviour() {
+        // 现状行为特征化:现有识别是子串匹配,my-dozer-hook-wrapper
+        // 会被认成 dozer 条目(识别过宽)。按计划要求:保持现状、
+        // 写成测试钉住、记入报告交用户裁决,不顺手改。
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/opt/my-dozer-hook-wrapper claude Stop"}]}]}}"#,
+        )
+        .unwrap();
+        let dozer = dozer_core::paths::ProductId::dozer();
+        assert_eq!(install_as(&path, "claude", "/opt/dozer-hook", &dozer), 0);
+        let root = read(&path);
+        let stop = root["hooks"]["Stop"].as_array().unwrap();
+        // 现状:过宽识别把 wrapper 条目顶掉了(len==1)。若哪天收紧成
+        // 词边界识别,len 会变 2——那时该测试要连同识别逻辑一起改。
+        assert_eq!(stop.len(), 1, "现状:子串识别会顶掉近名条目(过宽,已记录待裁决)");
+        assert!(stop[0]["hooks"][0]["command"].as_str().unwrap().contains("/opt/dozer-hook"));
+    }
+
+    #[test]
+    fn paths_with_spaces_are_quoted_for_either_product() {
+        // 沿用 Dozer 的回归用例,Digger 加一个 Digger.app 版本
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let digger = digger_product(dir.path());
+        assert_eq!(
+            install_as(
+                &path,
+                "claude",
+                "/Applications/Digger.app/Contents/MacOS/digger-hook",
+                &digger
+            ),
+            0
+        );
+        let root = read(&path);
+        let cmd = root["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap();
+        assert_eq!(
+            cmd,
+            "'/Applications/Digger.app/Contents/MacOS/digger-hook' claude Stop"
+        );
     }
 
     #[test]

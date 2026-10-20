@@ -73,7 +73,7 @@ impl ProductId {
                 qualifier,
                 organization,
                 application,
-            } => dirs_from(*qualifier, *organization, *application)
+            } => dirs_from(qualifier, organization, application)
                 .config_dir()
                 .to_path_buf(),
             ProductDirs::Fixed { config, .. } => config.clone(),
@@ -88,7 +88,7 @@ impl ProductId {
                 organization,
                 application,
             } => {
-                let dirs = dirs_from(*qualifier, *organization, *application);
+                let dirs = dirs_from(qualifier, organization, application);
                 dirs.state_dir()
                     .map(|p| p.to_path_buf())
                     .unwrap_or_else(|| dirs.data_local_dir().to_path_buf())
@@ -128,7 +128,7 @@ static PRODUCT: OnceLock<ProductId> = OnceLock::new();
 /// 安装进程级产品身份。只能成功一次:重复安装**同值**返回 Ok
 /// (幂等),安装**不同值**返回 Err 并带回已装的那个——同一进程
 /// 绝不能同时是两个产品。
-pub fn install(product: ProductId) -> Result<(), InstallProductError> {
+pub fn install(product: ProductId) -> Result<(), Box<InstallProductError>> {
     if PRODUCT.set(product.clone()).is_ok() {
         return Ok(());
     }
@@ -136,10 +136,10 @@ pub fn install(product: ProductId) -> Result<(), InstallProductError> {
     if installed == &product {
         Ok(())
     } else {
-        Err(InstallProductError {
+        Err(Box::new(InstallProductError {
             installed: installed.clone(),
             attempted: product,
-        })
+        }))
     }
 }
 

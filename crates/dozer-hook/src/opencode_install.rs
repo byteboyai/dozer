@@ -68,13 +68,18 @@ pub fn run_at(dir: &Path, install: bool) -> i32 {
 /// 进程内直接调用这层——沿用 `current_exe()` 会把 `dozer.ts` 里 spawn 的
 /// 二进制写成 `dozer-app` 自己的可执行文件路径，而不是 `dozer-hook` 的
 /// （跟 `install::run_at_with_exe` 同一个根因，同一次线上事故）。
+/// 插件文件名(`dozer.ts`/`<name>.ts`)与 `dozer-lib` 子目录名都按
+/// 当前产品身份推导,两个产品同装时文件互不覆盖。
 pub fn run_at_with_exe(dir: &Path, install: bool, exe: &str) -> i32 {
+    let product = dozer_core::paths::product();
+    let plugin_ts = format!("{}.ts", product.name);
+    let lib_dir_name = format!("{}-lib", product.name);
     if install {
         if let Err(e) = std::fs::create_dir_all(dir) {
             eprintln!("建目录失败: {e}");
             return 1;
         }
-        let lib_dir = dir.join("dozer-lib");
+        let lib_dir = dir.join(&lib_dir_name);
         if let Err(e) = std::fs::create_dir_all(&lib_dir) {
             eprintln!("建目录失败: {e}");
             return 1;
@@ -83,8 +88,8 @@ pub fn run_at_with_exe(dir: &Path, install: bool, exe: &str) -> i32 {
         let dozer_ts = DOZER_TS_TEMPLATE
             .replace(HOOK_BIN_PLACEHOLDER, &escaped_exe)
             .replace(TRANSLATE_IMPORT_SRC, TRANSLATE_IMPORT_INSTALLED);
-        if let Err(e) = std::fs::write(dir.join("dozer.ts"), dozer_ts) {
-            eprintln!("写 dozer.ts 失败: {e}");
+        if let Err(e) = std::fs::write(dir.join(&plugin_ts), dozer_ts) {
+            eprintln!("写 {plugin_ts} 失败: {e}");
             return 1;
         }
         if let Err(e) = std::fs::write(lib_dir.join("dozer-translate.ts"), TRANSLATE_TS) {
@@ -93,7 +98,7 @@ pub fn run_at_with_exe(dir: &Path, install: bool, exe: &str) -> i32 {
         }
         println!("已安装: {}", dir.display());
     } else {
-        let translate_ts = dir.join("dozer-lib").join("dozer-translate.ts");
+        let translate_ts = dir.join(&lib_dir_name).join("dozer-translate.ts");
         if translate_ts.exists()
             && let Err(e) = std::fs::remove_file(&translate_ts)
         {
@@ -102,8 +107,8 @@ pub fn run_at_with_exe(dir: &Path, install: bool, exe: &str) -> i32 {
         }
         // 尽力而为：子目录若已空就顺手删掉，删不掉（不存在/非空/权限）
         // 不算卸载失败。
-        let _ = std::fs::remove_dir(dir.join("dozer-lib"));
-        let dozer_ts = dir.join("dozer.ts");
+        let _ = std::fs::remove_dir(dir.join(&lib_dir_name));
+        let dozer_ts = dir.join(&plugin_ts);
         if dozer_ts.exists()
             && let Err(e) = std::fs::remove_file(&dozer_ts)
         {

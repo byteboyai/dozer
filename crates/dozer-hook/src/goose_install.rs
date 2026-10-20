@@ -35,9 +35,11 @@ pub fn plugins_dir() -> PathBuf {
     PathBuf::from(home).join(".agents").join("plugins")
 }
 
-/// Dozer 独占的插件子目录（`plugin.json`/`hooks/hooks.json` 所在处）。
+/// 本产品独占的插件子目录（`plugin.json`/`hooks/hooks.json` 所在处）。
+/// 目录名取自产品身份——Dozer 是 `dozer`,Digger 是 `digger`,
+/// 两个产品同装一个 Goose 也互不覆盖。
 fn dozer_plugin_dir(base: &Path) -> PathBuf {
-    base.join("dozer")
+    base.join(dozer_core::paths::product().name)
 }
 
 /// 把一段（可能是绝对路径、可能带空格）安全地包进 `sh -c` 的单引号里。
@@ -46,10 +48,11 @@ fn sh_single_quote(s: &str) -> String {
 }
 
 fn build_plugin_json() -> String {
+    let product = dozer_core::paths::product();
     serde_json::json!({
-        "name": "dozer",
+        "name": product.name,
         "version": "0.1.0",
-        "description": "Dozer governance & acceptance hooks"
+        "description": format!("{} governance & acceptance hooks", product.name)
     })
     .to_string()
 }
