@@ -72,6 +72,7 @@ async fn start_test_daemon() -> PathBuf {
                 ),
             },
             dozerd::task_poller::new_in_flight(),
+            true,
         )
         .await
         {

@@ -863,7 +863,10 @@ mod tests {
             .get_envs()
             .filter_map(|(k, v)| Some((k.to_str()?.to_string(), v?.to_str()?.to_string())))
             .collect();
-        assert_eq!(envs.get(dozer_core::paths::session_env()), Some(&"sess-1".to_string()));
+        assert_eq!(
+            envs.get(dozer_core::paths::session_env()),
+            Some(&"sess-1".to_string())
+        );
     }
 
     #[test]
@@ -888,7 +891,10 @@ mod tests {
             .get_envs()
             .filter_map(|(k, v)| Some((k.to_str()?.to_string(), v?.to_str()?.to_string())))
             .collect();
-        assert_eq!(envs.get(dozer_core::paths::session_env()), Some(&"sess-1".to_string()));
+        assert_eq!(
+            envs.get(dozer_core::paths::session_env()),
+            Some(&"sess-1".to_string())
+        );
     }
 
     #[tokio::test]

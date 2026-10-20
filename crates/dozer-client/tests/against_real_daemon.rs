@@ -59,6 +59,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
                 ),
             },
             dozerd::task_poller::new_in_flight(),
+            true,
         )
         .await
     });

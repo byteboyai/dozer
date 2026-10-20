@@ -114,7 +114,10 @@ impl Client {
                 kind: ClientErrorKind::Unreachable(e.to_string()),
             })?;
         match reply {
-            Reply::Hello { protocol, product: _ } => {
+            Reply::Hello {
+                protocol,
+                product: _,
+            } => {
                 if protocol == dozer_core::protocol::PROTOCOL_VERSION {
                     Ok(())
                 } else {

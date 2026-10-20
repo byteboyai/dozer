@@ -2,6 +2,7 @@ pub mod agent_context;
 pub mod backfill;
 pub mod bookmarks;
 pub mod code_health;
+pub mod daemon;
 pub mod default_agent_config;
 pub mod file_edit_history;
 pub mod file_mutation;

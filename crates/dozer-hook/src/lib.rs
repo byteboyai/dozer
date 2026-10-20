@@ -12,11 +12,11 @@ pub mod aider_launcher;
 pub mod cli;
 mod codebuddy;
 mod codex;
-mod goose;
-mod opencode;
 pub mod forward;
+mod goose;
 pub mod goose_install;
 pub mod install;
+mod opencode;
 pub mod opencode_install;
 
 pub use cli::run_main;

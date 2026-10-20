@@ -1,5 +1,5 @@
-use crate::codebuddy;
 use crate::LOG;
+use crate::codebuddy;
 use crate::codex;
 use crate::goose;
 use crate::opencode;

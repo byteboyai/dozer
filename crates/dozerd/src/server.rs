@@ -132,6 +132,7 @@ pub async fn serve(
     ide_lock_dir: PathBuf,
     stores: Stores,
     in_flight: crate::task_poller::InFlight,
+    ide_bridge_enabled: bool,
 ) -> Result<()> {
     let Stores {
         registry,
@@ -155,11 +156,16 @@ pub async fn serve(
     // 清扫是同步阻塞 IO(遍历目录+读文件),挪到阻塞线程池执行,不卡住
     // 当前 executor 线程——`serve()` 起监听前先等它跑完,保证不会跟紧接着
     // 写的新锁文件产生"锁文件刚写就被当陈旧清掉"的竞态。
-    {
-        let sweep_dir = ide_lock_dir.clone();
-        let _ =
-            tokio::task::spawn_blocking(move || crate::ide_bridge::sweep_stale_locks(&sweep_dir))
-                .await;
+    if ide_bridge_enabled {
+        {
+            let sweep_dir = ide_lock_dir.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::ide_bridge::sweep_stale_locks(&sweep_dir)
+            })
+            .await;
+        }
+    } else {
+        dozer_core::log_info!(LOG, "IDE 桥接已按产品配置关闭");
     }
     let ide_bridge = IdeBridgeRegistry::new(ide_lock_dir, preview_contexts.clone());
     ensure_single_instance(socket).await?;
@@ -1841,6 +1847,7 @@ mod tests {
                     ),
                 },
                 crate::task_poller::new_in_flight(),
+                true,
             );
             std::mem::drop(fut);
         }

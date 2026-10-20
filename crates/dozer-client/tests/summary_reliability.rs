@@ -120,7 +120,14 @@ async fn generated_summary_is_visible_through_panel_query_and_shared_batches_fin
         let sock = sock.clone();
         let locks = dir.path().join("locks");
         async move {
-            dozerd::server::serve(&sock, locks, stores, dozerd::task_poller::new_in_flight()).await
+            dozerd::server::serve(
+                &sock,
+                locks,
+                stores,
+                dozerd::task_poller::new_in_flight(),
+                true,
+            )
+            .await
         }
     });
     for _ in 0..100 {

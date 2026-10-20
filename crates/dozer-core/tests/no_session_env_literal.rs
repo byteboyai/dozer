@@ -38,7 +38,13 @@ fn no_literal_session_env_name_outside_the_product_definition() {
     let mut offenders: Vec<String> = Vec::new();
     let mut visited = 0;
 
-    fn scan(root: &Path, dir: &Path, is_integration_test: bool, offenders: &mut Vec<String>, visited: &mut usize) {
+    fn scan(
+        root: &Path,
+        dir: &Path,
+        is_integration_test: bool,
+        offenders: &mut Vec<String>,
+        visited: &mut usize,
+    ) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
@@ -74,9 +80,21 @@ fn no_literal_session_env_name_outside_the_product_definition() {
         .flatten()
     {
         for sub in ["src", "examples", "benches"] {
-            scan(&root, &crate_dir.path().join(sub), false, &mut offenders, &mut visited);
+            scan(
+                &root,
+                &crate_dir.path().join(sub),
+                false,
+                &mut offenders,
+                &mut visited,
+            );
         }
-        scan(&root, &crate_dir.path().join("tests"), true, &mut offenders, &mut visited);
+        scan(
+            &root,
+            &crate_dir.path().join("tests"),
+            true,
+            &mut offenders,
+            &mut visited,
+        );
     }
 
     assert!(

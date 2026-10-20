@@ -66,6 +66,7 @@ async fn hook_event_reaches_attached_client_and_list() {
                     ),
                 },
                 dozerd::task_poller::new_in_flight(),
+                true,
             )
             .await
         }
@@ -312,6 +313,7 @@ async fn project_open_and_list_roundtrip() {
                     ),
                 },
                 dozerd::task_poller::new_in_flight(),
+                true,
             )
             .await
         }
@@ -385,6 +387,7 @@ async fn record_and_get_session_summary_roundtrip() {
                     ),
                 },
                 dozerd::task_poller::new_in_flight(),
+                true,
             )
             .await
         }
@@ -497,6 +500,7 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
                     ),
                 },
                 dozerd::task_poller::new_in_flight(),
+                true,
             )
             .await
         }
@@ -617,6 +621,7 @@ async fn list_conversations_with_summaries_joins_correctly() {
                     ),
                 },
                 dozerd::task_poller::new_in_flight(),
+                true,
             )
             .await
         }
@@ -737,6 +742,7 @@ async fn aider_hook_sequence_drives_state_machine() {
                     ),
                 },
                 dozerd::task_poller::new_in_flight(),
+                true,
             )
             .await
         }

@@ -800,10 +800,7 @@ mod tests {
     fn existing_variants_keep_their_exact_wire_encoding() {
         // 旧编码样例(2026-10-20 记录):
         let cases: [(&Request, &str); 4] = [
-            (
-                &Request::ListSessions,
-                "{\"type\":\"list_sessions\"}\n",
-            ),
+            (&Request::ListSessions, "{\"type\":\"list_sessions\"}\n"),
             (
                 &Request::Kill {
                     session_id: "s1".into(),

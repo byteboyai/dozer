@@ -1,7 +1,7 @@
 //! S6a Task 4:hook 转发在协议版本不一致时必须静默放弃——不写 stderr、
 //! 退出码 0、只写日志。用 socketpair 假扮守护进程钉住这条行为。
 
-use dozer_core::protocol::{Reply, Request, PROTOCOL_VERSION, decode_line, encode_line};
+use dozer_core::protocol::{PROTOCOL_VERSION, Reply, Request, decode_line, encode_line};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 

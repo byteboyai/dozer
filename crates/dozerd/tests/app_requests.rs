@@ -65,6 +65,7 @@ async fn start_daemon(apps: Arc<AppService>) -> TestDaemon {
             ide_lock_dir.path().to_path_buf(),
             stores,
             dozerd::task_poller::new_in_flight(),
+            true,
         )
         .await
     });

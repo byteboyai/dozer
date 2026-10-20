@@ -74,7 +74,6 @@ pub fn entry_is_product(entry: &Value, product: &dozer_core::paths::ProductId) -
         .unwrap_or(false)
 }
 
-
 /// CLI 场景（`dozer-hook install <agent>`）用：调用方就是 `dozer-hook`
 /// 自身，`current_exe()` 天然指向正确的二进制。GUI 场景（`dozer-app` 在
 /// agent 启动时静默自动注册）不能走这条路——见 `run_at_with_exe`。
@@ -191,7 +190,6 @@ mod tests {
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
-
     /// Digger 身份的 Fixed 目录实例,专供并存测试构造另一个产品。
     fn digger_product(root: &std::path::Path) -> dozer_core::paths::ProductId {
         use dozer_core::paths::{ProductDirs, ProductId};
@@ -232,10 +230,18 @@ mod tests {
         let root = read(&path);
         let stop = root["hooks"]["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 2, "两个产品的条目必须并存: {stop:?}");
-        assert!(stop.iter().any(|e| e["hooks"][0]["command"]
-            .as_str().unwrap().contains("/opt/dozer-hook")));
-        assert!(stop.iter().any(|e| e["hooks"][0]["command"]
-            .as_str().unwrap().contains("/opt/digger-hook")));
+        assert!(stop.iter().any(|e| {
+            e["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("/opt/dozer-hook")
+        }));
+        assert!(stop.iter().any(|e| {
+            e["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("/opt/digger-hook")
+        }));
     }
 
     #[test]
@@ -274,7 +280,12 @@ mod tests {
         let root = read(&path);
         let stop = root["hooks"]["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 1, "只卸了自己的,别人的原样: {stop:?}");
-        assert!(stop[0]["hooks"][0]["command"].as_str().unwrap().contains("digger-hook"));
+        assert!(
+            stop[0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("digger-hook")
+        );
     }
 
     #[test]
@@ -295,8 +306,17 @@ mod tests {
         let stop = root["hooks"]["Stop"].as_array().unwrap();
         // 现状:过宽识别把 wrapper 条目顶掉了(len==1)。若哪天收紧成
         // 词边界识别,len 会变 2——那时该测试要连同识别逻辑一起改。
-        assert_eq!(stop.len(), 1, "现状:子串识别会顶掉近名条目(过宽,已记录待裁决)");
-        assert!(stop[0]["hooks"][0]["command"].as_str().unwrap().contains("/opt/dozer-hook"));
+        assert_eq!(
+            stop.len(),
+            1,
+            "现状:子串识别会顶掉近名条目(过宽,已记录待裁决)"
+        );
+        assert!(
+            stop[0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("/opt/dozer-hook")
+        );
     }
 
     #[test]
@@ -315,7 +335,9 @@ mod tests {
             0
         );
         let root = read(&path);
-        let cmd = root["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap();
+        let cmd = root["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
         assert_eq!(
             cmd,
             "'/Applications/Digger.app/Contents/MacOS/digger-hook' claude Stop"

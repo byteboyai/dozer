@@ -86,6 +86,7 @@ async fn session_survives_client_disconnect() {
                     ),
                 },
                 dozerd::task_poller::new_in_flight(),
+                true,
             )
             .await
         }
@@ -243,6 +244,7 @@ async fn unknown_session_returns_error_reply() {
                     ),
                 },
                 dozerd::task_poller::new_in_flight(),
+                true,
             )
             .await
         }
@@ -304,6 +306,7 @@ async fn attach_delivers_marker_exactly_once() {
                     ),
                 },
                 dozerd::task_poller::new_in_flight(),
+                true,
             )
             .await
         }
@@ -402,6 +405,7 @@ async fn attach_from_offset_resumes_within_window() {
                     ),
                 },
                 dozerd::task_poller::new_in_flight(),
+                true,
             )
             .await
         }
@@ -529,6 +533,7 @@ async fn attach_stream_offset_invariant_under_load() {
                     ),
                 },
                 dozerd::task_poller::new_in_flight(),
+                true,
             )
             .await
         }
@@ -643,6 +648,7 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
                     ),
                 },
                 dozerd::task_poller::new_in_flight(),
+                true,
             )
             .await
         }

@@ -2,7 +2,7 @@
 //! UDS 发给 dozerd。供 `main.rs` 的 `forward()` 与 `aider_launcher` 复用,
 //! 避免 launcher 与普通 forward 各写一套 UDS 代码(见 spec 2026-09-22)。
 
-use dozer_core::protocol::{AgentKind, Reply, Request, PROTOCOL_VERSION, decode_line, encode_line};
+use dozer_core::protocol::{AgentKind, PROTOCOL_VERSION, Reply, Request, decode_line, encode_line};
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::time::Duration;
