@@ -220,13 +220,17 @@ pub fn loading_view<'a, M: 'a>(
 
 /// External / Unsupported(及 Failed)统一的降级页:文件类型 / 路径 / route reason / 失败原因 / 安全提示,
 /// 按 `fallback_actions` 给出可用动作(重试 / 纯文本只读 / 系统应用打开)。`None` 表示该 tab 不该走这页。
-pub fn fallback_page<'a, M: Clone + 'static>(
+pub fn fallback_page<'p: 'a, 'b: 'a, 'a, M: Clone + 'static>(
     host: &'a impl PanelDisplay<M>,
     panel: ViewerPanel,
     tab: &'a PreviewTab,
 ) -> Option<Element<'a, M>> {
-    let locale = host.locale();
-    let model = fallback_model(tab, locale, host.product_name())?;
+    let locale: &'a str = host.locale();
+    let product: &'a str = host.product_name();
+    let model = fallback_model(tab, locale, product)?;
+    // `model` 里的字符串在 `widget::text` 里被重新分配,只有各 `&str` 字段
+    // 会进 `Element<'a>`;因此要求 locale/product 活到 `'a` 即可,不再另求 `'b`。
+    let _: &'a str = locale;
     let tab_id = model.tab_id;
     let actions = model.actions;
 
@@ -333,7 +337,7 @@ pub fn conflict_bar<'a, M: Clone + 'static>(
 
 /// 文件内 Find 条的共有渲染:原生档与 webview(flyfish)档复用同一套查询框 / 「Aa」大小写开关 / n-m 计数 /
 /// 上下命中按钮。`show_replace` 控制是否渲染替换行与其展开圆盘箭头(webview 档 flyfish 没有替换概念)。
-pub fn find_bar<'a, M: Clone + 'static>(
+pub fn find_bar<'p: 'a, 'b: 'a, 'a, M: Clone + 'static>(
     host: &'a impl PanelDisplay<M>,
     panel: ViewerPanel,
     pane: &'a PreviewPane,
@@ -576,7 +580,7 @@ pub fn find_bar<'a, M: Clone + 'static>(
 
 /// 窗口化大文件整文件搜索条:查询框 + n/m 计数 + 上一条/下一条 + 关闭。整文件流式扫描只做「找到并
 /// 跳转」,没有大小写开关 / 替换行。`tab_id` 是 session 锁定的窗口化 CodeMirror tab。
-pub fn large_file_search_bar<'a, M: Clone + 'static>(
+pub fn large_file_search_bar<'p: 'a, 'b: 'a, 'a, M: Clone + 'static>(
     host: &'a impl PanelDisplay<M>,
     panel: ViewerPanel,
     pane: &'a PreviewPane,
@@ -689,7 +693,7 @@ pub fn large_file_search_bar<'a, M: Clone + 'static>(
 
 /// 页签条「溢出下拉」浮层。**必须**由产品在 `App::view` 顶层 `stack!` 里拼(锚点 / 窗口尺寸是全窗口
 /// 坐标系)。下拉列出该面板**全部** tab(不管当前是否横向可见),便于随时跳转。
-pub fn overflow_menu<'a, M: Clone + 'static>(
+pub fn overflow_menu<'b: 'a, 'a, M: Clone + 'static>(
     host: &'a impl PanelDisplay<M>,
     panel: ViewerPanel,
     pane: &'a PreviewPane,
@@ -729,8 +733,8 @@ pub fn overflow_menu<'a, M: Clone + 'static>(
 /// **空白页 tab(`TabKind::Blank`)的标题显示项目根目录 basename**(见 `preview_tab_label`);
 /// 宽度估计和实际渲染共用同一份 helper,避免选错宽度导致标题裁切。
 #[allow(clippy::too_many_arguments)]
-pub fn pane<'a, M: Clone + 'static>(
-    preview: &'a PreviewPane,
+pub fn pane<'b: 'a, 'p: 'a, 'a, M: Clone + 'static>(
+    preview: &'p PreviewPane,
     tab_first: usize,
     error: Option<&'a LocalizedText>,
     panel: ViewerPanel,
