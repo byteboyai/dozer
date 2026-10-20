@@ -119,7 +119,7 @@ impl App {
                 base,
                 dismiss,
                 files::context_menu_popup(&self.files, self.locale.active_locale())
-                    .map(Message::Files)
+                .map(Message::Files)
             ]
             .width(Length::Fill)
             .height(Length::Fill)
@@ -135,7 +135,7 @@ impl App {
                 base,
                 dismiss,
                 files::tab_context_menu_popup(&self.files, self.locale.active_locale())
-                    .map(Message::Files)
+                .map(Message::Files)
             ]
             .width(Length::Fill)
             .height(Length::Fill)
