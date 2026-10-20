@@ -464,6 +464,12 @@ async fn handle_conn(
                 let reply = match decode_line::<Request>(&line) {
                     Err(e) => Reply::Error { message: format!("协议错误: {e}") },
                     Ok(req) => match req {
+                        // 协议版本握手:回自己的版本与产品名。旧客户端不发
+                        // Hello 也不影响——这只是一个普通请求分支。
+                        Request::Hello { protocol: _ } => Reply::Hello {
+                            protocol: dozer_core::protocol::PROTOCOL_VERSION,
+                            product: dozer_core::paths::product().name.to_string(),
+                        },
                         Request::App { request } => match request {
                             // 订阅要接管本连接后续的推送，不能塞进 `apps.handle`(它是一问一答)。
                             // 在这里拦截：拿到接收者就登记，之后由下方 select! 分支持续写出。

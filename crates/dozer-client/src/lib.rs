@@ -41,11 +41,113 @@ pub use bytehost_client::{AppApiError, AppChange, AppHostApi};
 #[derive(Clone)]
 pub struct Client {
     socket: PathBuf,
+    /// 握手结果缓存:check_version 只在首个业务请求前真正跑一次。
+    version_checked: std::sync::Arc<std::sync::OnceLock<()>>,
 }
+
+/// 版本握手失败:客户端与守护进程协议版本不一致。给出可读文案而不是
+/// 莫名其妙的反序列化错误。
+#[derive(Debug)]
+pub struct ClientError {
+    pub kind: ClientErrorKind,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ClientErrorKind {
+    /// 客户端与守护进程协议版本不一致。
+    ProtocolMismatch { client: u32, daemon: u32 },
+    /// 守护进程不认识 Hello(版本过旧),只回了别的帧或 Error。
+    DaemonTooOld,
+    /// 连不上守护进程。
+    Unreachable(String),
+}
+
+impl std::fmt::Display for ClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.kind {
+            ClientErrorKind::ProtocolMismatch { client, daemon } => write!(
+                f,
+                "协议版本不一致:客户端 {client},守护进程 {daemon}。                 请把 Digger/Dozer 与它的守护进程升级到同一版本"
+            ),
+            ClientErrorKind::DaemonTooOld => write!(
+                f,
+                "守护进程版本过旧,不认识协议握手。请把 Digger/Dozer 与它的守护进程升级到同一版本"
+            ),
+            ClientErrorKind::Unreachable(msg) => write!(f, "连不上守护进程: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for ClientError {}
 
 impl Client {
     pub fn new(socket: PathBuf) -> Self {
-        Self { socket }
+        Self {
+            socket,
+            version_checked: std::sync::Arc::new(std::sync::OnceLock::new()),
+        }
+    }
+
+    /// 协议版本握手:与守护进程比对 PROTOCOL_VERSION,不一致给出可读
+    /// 错误并拒绝后续使用。结果缓存——只在首个业务请求前真正跑一次,
+    /// 之后的所有调用直接返回缓存结果。
+    pub async fn check_version(&self) -> Result<(), ClientError> {
+        if self.version_checked.get().is_some() {
+            return Ok(());
+        }
+        let result = self.hello_once().await;
+        if result.is_ok() {
+            let _ = self.version_checked.set(());
+        }
+        result
+    }
+
+    async fn hello_once(&self) -> Result<(), ClientError> {
+        // 不走通用 roundtrip:它会把 Reply::Error 折叠成 anyhow 错误,
+        // 而握手恰恰要区分"守护进程回了 Error(版本过旧)"与"连不上"。
+        let reply = self
+            .roundtrip_keep_error(&Request::Hello {
+                protocol: dozer_core::protocol::PROTOCOL_VERSION,
+            })
+            .await
+            .map_err(|e| ClientError {
+                kind: ClientErrorKind::Unreachable(e.to_string()),
+            })?;
+        match reply {
+            Reply::Hello { protocol, product: _ } => {
+                if protocol == dozer_core::protocol::PROTOCOL_VERSION {
+                    Ok(())
+                } else {
+                    Err(ClientError {
+                        kind: ClientErrorKind::ProtocolMismatch {
+                            client: dozer_core::protocol::PROTOCOL_VERSION,
+                            daemon: protocol,
+                        },
+                    })
+                }
+            }
+            // 旧守护进程不认识 Hello,回的是 Error(或别的帧):
+            // 统一报"守护进程过旧"。
+            _ => Err(ClientError {
+                kind: ClientErrorKind::DaemonTooOld,
+            }),
+        }
+    }
+
+    /// roundtrip 的握手变体:Reply::Error 原样返回而不是折叠成错误,
+    /// 让调用方区分"守护进程拒绝了这个请求"与"通信失败"。
+    async fn roundtrip_keep_error(&self, req: &Request) -> Result<Reply> {
+        let stream = UnixStream::connect(&self.socket).await?;
+        let (r, mut w) = stream.into_split();
+        w.write_all(encode_line(req).as_bytes()).await?;
+        let mut lines = BufReader::new(r).lines();
+        let line = lines.next_line().await?.ok_or_else(|| {
+            anyhow::Error::new(ServiceError::new(
+                ServiceErrorKind::Unavailable,
+                "daemon 断开",
+            ))
+        })?;
+        Ok(decode_line(&line)?)
     }
 
     async fn roundtrip(&self, req: &Request) -> Result<Reply> {

@@ -13,9 +13,21 @@ pub use dozer_model::{
     SummaryTrigger, TodoInfo, TodoStoredStatus, ToolCallInfo, TurnRecord, UsagePayload,
 };
 
+/// C/S 协议版本。客户端与守护进程用它握手:不一致时给出可读错误而不是
+/// 莫名其妙的反序列化失败。只在协议帧形状变化(加/改变体、改字段语义)
+/// 时递增;纯加字段且带 serde default 的兼容变更不必递增。
+pub const PROTOCOL_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
+    /// 协议版本握手:任何业务请求前,客户端先发它确认双方版本一致。
+    /// 旧守护进程不认识这个变体时只会回 `Reply::Error`,客户端据此
+    /// 报"版本过旧"而不是反序列化炸裂。hook 的单向上报同样先发 Hello,
+    /// 版本不符就静默放弃(不影响 agent)。
+    Hello {
+        protocol: u32,
+    },
     /// bytehost 应用宿主的请求(安装/启动/停止/列表……),原样交给 dozerd 里的 `AppService`。
     /// 用结构体变体包一层,避免"内部带标签的枚举套内部带标签的枚举"。
     App {
@@ -523,6 +535,11 @@ pub enum Request {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Reply {
+    /// `Request::Hello` 的应答:守护进程的协议版本与产品名。
+    Hello {
+        protocol: u32,
+        product: String,
+    },
     /// 应用宿主请求的应答。失败走通用的 `Error`。
     App {
         reply: bytehost_apps::proto::AppReply,
@@ -755,6 +772,73 @@ pub fn decode_line<T: DeserializeOwned>(line: &str) -> anyhow::Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hello_round_trips_through_serde() {
+        let req = Request::Hello {
+            protocol: PROTOCOL_VERSION,
+        };
+        let line = encode_line(&req);
+        assert!(line.contains("\"type\":\"hello\""), "{line}");
+        assert!(line.contains("\"protocol\":1"), "{line}");
+        assert_eq!(decode_line::<Request>(&line).unwrap(), req);
+
+        let reply = Reply::Hello {
+            protocol: PROTOCOL_VERSION,
+            product: "dozer".into(),
+        };
+        let line = encode_line(&reply);
+        assert!(line.contains("\"type\":\"hello\""), "{line}");
+        assert!(line.contains("\"product\":\"dozer\""), "{line}");
+        assert_eq!(decode_line::<Reply>(&line).unwrap(), reply);
+    }
+
+    /// 新增变体不得改变既有变体的字节编码:每个既有变体各取一个
+    /// 样例,与改造前的 JSON 逐字比较(改造前该测试先在旧代码上
+    /// 记录期望值)。
+    #[test]
+    fn existing_variants_keep_their_exact_wire_encoding() {
+        // 旧编码样例(2026-10-20 记录):
+        let cases: [(&Request, &str); 4] = [
+            (
+                &Request::ListSessions,
+                "{\"type\":\"list_sessions\"}\n",
+            ),
+            (
+                &Request::Kill {
+                    session_id: "s1".into(),
+                },
+                "{\"type\":\"kill\",\"session_id\":\"s1\"}\n",
+            ),
+            (
+                &Request::HookEvent {
+                    session_id: "s1".into(),
+                    agent: AgentKind::Claude,
+                    event: "Stop".into(),
+                    ts_ms: 7,
+                    data: serde_json::Value::Null,
+                },
+                "{\"type\":\"hook_event\",\"session_id\":\"s1\",\"agent\":\"claude\",\"event\":\"Stop\",\"ts_ms\":7,\"data\":null}\n",
+            ),
+            (
+                &Request::Attach {
+                    session_id: "s1".into(),
+                    from_offset: 0,
+                },
+                "{\"type\":\"attach\",\"session_id\":\"s1\",\"from_offset\":0}\n",
+            ),
+        ];
+        for (req, want) in cases {
+            assert_eq!(encode_line(req), want);
+        }
+        assert_eq!(encode_line(&Reply::Ok), "{\"type\":\"ok\"}\n");
+        assert_eq!(
+            encode_line(&Reply::Error {
+                message: "boom".into()
+            }),
+            "{\"type\":\"error\",\"message\":\"boom\"}\n"
+        );
+    }
 
     #[test]
     fn app_host_requests_and_replies_roundtrip_through_the_line_codec() {
