@@ -32,7 +32,6 @@ const HOOK_BIN_PLACEHOLDER: &str = "__DOZER_HOOK_BIN_PATH__";
 // 后才存在的子目录，源码树里跑不起来，没法直接测）。装机时才改写成子目录
 // 路径，产出文件不变。
 const TRANSLATE_IMPORT_SRC: &str = "\"./dozer-translate\"";
-const TRANSLATE_IMPORT_INSTALLED: &str = "\"./dozer-lib/dozer-translate\"";
 
 /// 插件目录路径，`DOZER_OPENCODE_PLUGIN_DIR` 覆盖用于测试（跟
 /// `install.rs` 的 `DOZER_CLAUDE_SETTINGS`/`DOZER_CODEBUDDY_SETTINGS`
@@ -68,12 +67,27 @@ pub fn run_at(dir: &Path, install: bool) -> i32 {
 /// 进程内直接调用这层——沿用 `current_exe()` 会把 `dozer.ts` 里 spawn 的
 /// 二进制写成 `dozer-app` 自己的可执行文件路径，而不是 `dozer-hook` 的
 /// （跟 `install::run_at_with_exe` 同一个根因，同一次线上事故）。
-/// 插件文件名(`dozer.ts`/`<name>.ts`)与 `dozer-lib` 子目录名都按
-/// 当前产品身份推导,两个产品同装时文件互不覆盖。
 pub fn run_at_with_exe(dir: &Path, install: bool, exe: &str) -> i32 {
-    let product = dozer_core::paths::product();
+    run_at_with_exe_for(dir, install, exe, dozer_core::paths::product())
+}
+
+/// `run_at_with_exe` 的产品参数化内核:插件文件名(`dozer.ts`/`<name>.ts`)、
+/// `<name>-lib` 子目录名与安装后的 translate import 路径全部按传入的
+/// `product` 推导(复审 R1:import 路径曾写死 `./dozer-lib/...`,Digger
+/// 的插件会去 import Dozer 的库目录——Dozer 一卸载,Digger 的插件随之
+/// 失效)。测试用它构造另一个产品的并存场景,不依赖进程级 install。
+pub fn run_at_with_exe_for(
+    dir: &Path,
+    install: bool,
+    exe: &str,
+    product: &dozer_core::paths::ProductId,
+) -> i32 {
     let plugin_ts = format!("{}.ts", product.name);
     let lib_dir_name = format!("{}-lib", product.name);
+    // 安装后的 import 必须指向本产品自己的库目录,与写盘的 translate
+    // 文件位置逐字对应;源码树里的平铺 import(TRANSLATE_IMPORT_SRC)
+    // 在装机时被整体替换成这个路径。
+    let translate_import_installed = format!("\"./{lib_dir_name}/dozer-translate\"");
     if install {
         if let Err(e) = std::fs::create_dir_all(dir) {
             eprintln!("建目录失败: {e}");
@@ -87,7 +101,7 @@ pub fn run_at_with_exe(dir: &Path, install: bool, exe: &str) -> i32 {
         let escaped_exe = escape_ts_string_literal(exe);
         let dozer_ts = DOZER_TS_TEMPLATE
             .replace(HOOK_BIN_PLACEHOLDER, &escaped_exe)
-            .replace(TRANSLATE_IMPORT_SRC, TRANSLATE_IMPORT_INSTALLED);
+            .replace(TRANSLATE_IMPORT_SRC, &translate_import_installed);
         if let Err(e) = std::fs::write(dir.join(&plugin_ts), dozer_ts) {
             eprintln!("写 {plugin_ts} 失败: {e}");
             return 1;
@@ -123,6 +137,104 @@ pub fn run_at_with_exe(dir: &Path, install: bool, exe: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dozer 身份下安装产物里的 translate import 路径(复审 R1 前,这个
+    /// 值曾写死在生产代码常量里;现在由 `run_at_with_exe_for` 按产品
+    /// 动态生成,期望字符串保留在测试侧钉住 Dozer 身份的产物不变)。
+    const TRANSLATE_IMPORT_INSTALLED: &str = "\"./dozer-lib/dozer-translate\"";
+
+    /// Digger 身份夹具,与 `install.rs` 的并存测试同一套手法。
+    fn digger_product(root: &std::path::Path) -> dozer_core::paths::ProductId {
+        use dozer_core::paths::{ProductDirs, ProductId};
+        ProductId::custom(
+            "digger",
+            "DIGGER_SESSION_ID",
+            "digger-hook",
+            "diggerd.sock",
+            "digger.db",
+            ProductDirs::Fixed {
+                config: root.join("config"),
+                state: root.join("state"),
+            },
+        )
+    }
+
+    /// 复审 R1:Digger 身份安装时,插件文件是 `digger.ts`,translate import
+    /// 指向 Digger 自己的 `digger-lib`,目标文件真实存在,文本里不出现
+    /// Dozer 的 `./dozer-lib`。
+    #[test]
+    fn digger_install_writes_product_named_plugin_with_matching_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let digger = digger_product(dir.path());
+        assert_eq!(
+            run_at_with_exe_for(dir.path(), true, "/opt/digger-hook", &digger),
+            0
+        );
+        let plugin = std::fs::read_to_string(dir.path().join("digger.ts")).unwrap();
+        assert!(
+            dir.path().join("digger-lib/dozer-translate.ts").exists(),
+            "translate 必须落在 digger-lib/ 里"
+        );
+        assert!(
+            plugin.contains("\"./digger-lib/dozer-translate\""),
+            "import 必须指向 digger-lib"
+        );
+        assert_eq!(
+            plugin.matches("\"./digger-lib/dozer-translate\"").count(),
+            1
+        );
+        assert!(!plugin.contains("./dozer-lib"), "不得再引用 Dozer 的库目录");
+        assert!(
+            !dir.path().join("dozer.ts").exists() && !dir.path().join("dozer-lib").exists(),
+            "Digger 安装不得写 Dozer 名下的文件"
+        );
+    }
+
+    /// 复审 R1:同一插件目录里两个产品并存,互不引用;卸载任一产品,
+    /// 另一个的插件与库目录完整无损。
+    #[test]
+    fn digger_and_dozer_opencode_plugins_coexist_and_uninstall_leaves_the_other_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let digger = digger_product(dir.path());
+        let dozer = dozer_core::paths::ProductId::dozer();
+        assert_eq!(
+            run_at_with_exe_for(dir.path(), true, "/opt/dozer-hook", &dozer),
+            0
+        );
+        assert_eq!(
+            run_at_with_exe_for(dir.path(), true, "/opt/digger-hook", &digger),
+            0
+        );
+        // 两套文件并存
+        for f in [
+            "dozer.ts",
+            "dozer-lib/dozer-translate.ts",
+            "digger.ts",
+            "digger-lib/dozer-translate.ts",
+        ] {
+            assert!(dir.path().join(f).exists(), "缺 {f}");
+        }
+        let dozer_ts = std::fs::read_to_string(dir.path().join("dozer.ts")).unwrap();
+        let digger_ts = std::fs::read_to_string(dir.path().join("digger.ts")).unwrap();
+        assert!(dozer_ts.contains("\"./dozer-lib/dozer-translate\""));
+        assert!(!dozer_ts.contains("digger-lib"));
+        assert!(digger_ts.contains("\"./digger-lib/dozer-translate\""));
+        assert!(!digger_ts.contains("./dozer-lib"));
+        // 卸载 Digger:Dozer 一侧原样
+        assert_eq!(
+            run_at_with_exe_for(dir.path(), false, "/opt/digger-hook", &digger),
+            0
+        );
+        assert!(!dir.path().join("digger.ts").exists());
+        assert!(!dir.path().join("digger-lib").exists());
+        assert!(dir.path().join("dozer.ts").exists());
+        assert!(dir.path().join("dozer-lib/dozer-translate.ts").exists());
+        let dozer_ts_after = std::fs::read_to_string(dir.path().join("dozer.ts")).unwrap();
+        assert_eq!(
+            dozer_ts, dozer_ts_after,
+            "卸载 Digger 不得改动 Dozer 的插件"
+        );
+    }
 
     #[test]
     fn install_writes_both_files_with_exe_path_substituted() {

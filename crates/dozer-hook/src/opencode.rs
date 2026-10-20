@@ -16,10 +16,6 @@ use serde_json::Value;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-fn project_key(cwd: &str) -> String {
-    cwd.replace('/', "-")
-}
-
 fn home_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
 }
@@ -35,11 +31,11 @@ pub fn transcript_path(cwd: &str, session_id: &str) -> PathBuf {
 
 /// 同上，`home` 显式传入——测试用，避免读全局 `HOME`。
 fn transcript_path_in(home: &Path, cwd: &str, session_id: &str) -> PathBuf {
-    home.join(".dozer")
-        .join("agents")
-        .join("opencode")
-        .join("projects")
-        .join(project_key(cwd))
+    // 复审 R3(方案 A):不再自己拼 .dozer/agents/...,
+    // 与 dozerd 摄取侧共用 dozer_core::agent_paths 的同一个路径来源,
+    // 保证 hook 写一处、摄取读同一处;根目录随产品身份推导
+    // (Dozer ~/.dozer/agents/...,Digger ~/.digger/agents/...)。
+    dozer_core::agent_paths::opencode_project_dir_in(home, Path::new(cwd))
         .join(format!("{session_id}.jsonl"))
 }
 

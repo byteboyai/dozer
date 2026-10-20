@@ -36,10 +36,10 @@ pub fn plugins_dir() -> PathBuf {
 }
 
 /// 本产品独占的插件子目录（`plugin.json`/`hooks/hooks.json` 所在处）。
-/// 目录名取自产品身份——Dozer 是 `dozer`,Digger 是 `digger`,
+/// 目录名取自传入的产品身份——Dozer 是 `dozer`,Digger 是 `digger`,
 /// 两个产品同装一个 Goose 也互不覆盖。
-fn dozer_plugin_dir(base: &Path) -> PathBuf {
-    base.join(dozer_core::paths::product().name)
+fn plugin_dir_for(base: &Path, product: &dozer_core::paths::ProductId) -> PathBuf {
+    base.join(product.name)
 }
 
 /// 把一段（可能是绝对路径、可能带空格）安全地包进 `sh -c` 的单引号里。
@@ -47,8 +47,7 @@ fn sh_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-fn build_plugin_json() -> String {
-    let product = dozer_core::paths::product();
+fn build_plugin_json(product: &dozer_core::paths::ProductId) -> String {
     serde_json::json!({
         "name": product.name,
         "version": "0.1.0",
@@ -102,9 +101,21 @@ pub fn run_at(dir: &Path, install: bool) -> i32 {
 /// 内调用这层，沿用 `current_exe()` 会把 hook command 写成 `dozer-app` 自己的
 /// 可执行文件路径，跟 `install::run_at_with_exe` 同一根因）。
 pub fn run_at_with_exe(dir: &Path, install: bool, exe: &str) -> i32 {
-    let plugin_dir = dozer_plugin_dir(dir);
+    run_at_with_exe_for(dir, install, exe, dozer_core::paths::product())
+}
+
+/// `run_at_with_exe` 的产品参数化内核(复审 R1):插件子目录与
+/// `plugin.json` 的 `name` 都按传入的 `product` 推导。测试用它构造
+/// 另一个产品的并存场景,不依赖进程级 install。
+pub fn run_at_with_exe_for(
+    dir: &Path,
+    install: bool,
+    exe: &str,
+    product: &dozer_core::paths::ProductId,
+) -> i32 {
+    let plugin_dir = plugin_dir_for(dir, product);
     if install {
-        if let Err(e) = atomic_write(&plugin_dir.join("plugin.json"), &build_plugin_json()) {
+        if let Err(e) = atomic_write(&plugin_dir.join("plugin.json"), &build_plugin_json(product)) {
             eprintln!("写 plugin.json 失败: {e}");
             return 1;
         }
@@ -161,6 +172,78 @@ mod tests {
 
     fn base_dir() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    /// Digger 身份夹具,与 `install.rs`/`opencode_install.rs` 同一套手法。
+    fn digger_product(root: &std::path::Path) -> dozer_core::paths::ProductId {
+        use dozer_core::paths::{ProductDirs, ProductId};
+        ProductId::custom(
+            "digger",
+            "DIGGER_SESSION_ID",
+            "digger-hook",
+            "diggerd.sock",
+            "digger.db",
+            ProductDirs::Fixed {
+                config: root.join("config"),
+                state: root.join("state"),
+            },
+        )
+    }
+
+    /// 复审 R1:Digger 身份安装时,插件落在 `digger/` 子目录,plugin.json
+    /// 的 `name` 是 `digger`,hooks.json 也在同一子目录下;不写 Dozer 的
+    /// `dozer/`。
+    #[test]
+    fn digger_install_writes_its_own_plugin_dir_and_name() {
+        let d = base_dir();
+        let digger = digger_product(d.path());
+        assert_eq!(
+            run_at_with_exe_for(d.path(), true, "/opt/digger-hook", &digger),
+            0
+        );
+        let plugin_json = d.path().join("digger/plugin.json");
+        let hooks_json = d.path().join("digger/hooks/hooks.json");
+        assert!(plugin_json.exists());
+        assert!(hooks_json.exists());
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&plugin_json).unwrap()).unwrap();
+        assert_eq!(root["name"], "digger");
+        assert!(
+            !d.path().join("dozer").exists(),
+            "Digger 安装不得写 Dozer 名下的插件目录"
+        );
+    }
+
+    /// 复审 R1:两个产品的 Goose 插件并存;卸载任一个,另一个完整无损。
+    #[test]
+    fn digger_and_dozer_goose_plugins_coexist_and_uninstall_leaves_the_other_intact() {
+        let d = base_dir();
+        let digger = digger_product(d.path());
+        let dozer = dozer_core::paths::ProductId::dozer();
+        assert_eq!(
+            run_at_with_exe_for(d.path(), true, "/opt/dozer-hook", &dozer),
+            0
+        );
+        assert_eq!(
+            run_at_with_exe_for(d.path(), true, "/opt/digger-hook", &digger),
+            0
+        );
+        for f in [
+            "dozer/plugin.json",
+            "dozer/hooks/hooks.json",
+            "digger/plugin.json",
+            "digger/hooks/hooks.json",
+        ] {
+            assert!(d.path().join(f).exists(), "缺 {f}");
+        }
+        // 卸载 Digger:Dozer 一侧原样
+        assert_eq!(
+            run_at_with_exe_for(d.path(), false, "/opt/digger-hook", &digger),
+            0
+        );
+        assert!(!d.path().join("digger").exists());
+        assert!(d.path().join("dozer/plugin.json").exists());
+        assert!(d.path().join("dozer/hooks/hooks.json").exists());
     }
 
     fn install(exe: &str, dir: &Path) -> i32 {

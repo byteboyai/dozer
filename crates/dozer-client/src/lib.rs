@@ -45,8 +45,8 @@ pub struct Client {
     version_checked: std::sync::Arc<std::sync::OnceLock<()>>,
 }
 
-/// 版本握手失败:客户端与守护进程协议版本不一致。给出可读文案而不是
-/// 莫名其妙的反序列化错误。
+/// 版本握手失败:客户端与守护进程协议版本不一致、或连到了别的产品的
+/// 守护进程。给出可读文案而不是莫名其妙的反序列化错误。
 #[derive(Debug)]
 pub struct ClientError {
     pub kind: ClientErrorKind,
@@ -56,10 +56,54 @@ pub struct ClientError {
 pub enum ClientErrorKind {
     /// 客户端与守护进程协议版本不一致。
     ProtocolMismatch { client: u32, daemon: u32 },
-    /// 守护进程不认识 Hello(版本过旧),只回了别的帧或 Error。
-    DaemonTooOld,
-    /// 连不上守护进程。
+    /// 连到了别的产品的守护进程(Dozer 客户端连上 diggerd,或反之)。
+    ProductMismatch { client: String, daemon: String },
+    /// 连不上守护进程,或守护进程对握手回了无法解释的应答。
     Unreachable(String),
+}
+
+/// Hello 应答的判定结果。放行策略见 `classify_hello_reply`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelloCheck {
+    /// 版本与产品都匹配,正常使用。
+    Compatible,
+    /// 旧守护进程(不认识 Hello,回 Reply::Error):按用户 2026-10-20 的
+    /// 兼容裁决放行——常驻的同产品旧 dozerd 不能因为只升级了客户端就被
+    /// 拒之门外(那会逼用户先杀守护进程,丢掉所有存活会话)。`hello_once`
+    /// 对这种放行会记一条 warn。
+    OldDaemonAllowed,
+}
+
+/// 判定一帧 Hello 应答:版本一致且产品相同 → Compatible;旧守护进程回的
+/// Reply::Error → OldDaemonAllowed(放行,warn);其余给出对应错误。
+/// 抽成独立函数是为了让"哪几种应答算放行"可单测——这是兼容裁决的
+/// 落点,改动它必须连测试一起改。
+pub fn classify_hello_reply(reply: &Reply) -> Result<HelloCheck, ClientErrorKind> {
+    match reply {
+        Reply::Hello { protocol, product } => {
+            if *protocol != dozer_core::protocol::PROTOCOL_VERSION {
+                return Err(ClientErrorKind::ProtocolMismatch {
+                    client: dozer_core::protocol::PROTOCOL_VERSION,
+                    daemon: *protocol,
+                });
+            }
+            let own = dozer_core::paths::product().name;
+            if product != own {
+                return Err(ClientErrorKind::ProductMismatch {
+                    client: own.to_string(),
+                    daemon: product.clone(),
+                });
+            }
+            Ok(HelloCheck::Compatible)
+        }
+        // 旧守护进程(2026-10-20 之前)不认识 Hello,对未知请求一律回
+        // Reply::Error。放行只针对这一种情形;能正常应答 Hello 的
+        // 守护进程,版本/产品不一致就是不一致,不放行。
+        Reply::Error { .. } => Ok(HelloCheck::OldDaemonAllowed),
+        other => Err(ClientErrorKind::Unreachable(format!(
+            "守护进程对握手返回了意外的应答: {other:?}"
+        ))),
+    }
 }
 
 impl std::fmt::Display for ClientError {
@@ -67,11 +111,13 @@ impl std::fmt::Display for ClientError {
         match &self.kind {
             ClientErrorKind::ProtocolMismatch { client, daemon } => write!(
                 f,
-                "协议版本不一致:客户端 {client},守护进程 {daemon}。                 请把 Digger/Dozer 与它的守护进程升级到同一版本"
+                "协议版本不一致:客户端 {client},守护进程 {daemon}。\
+                 请把 Digger/Dozer 与它的守护进程升级到同一版本"
             ),
-            ClientErrorKind::DaemonTooOld => write!(
+            ClientErrorKind::ProductMismatch { client, daemon } => write!(
                 f,
-                "守护进程版本过旧,不认识协议握手。请把 Digger/Dozer 与它的守护进程升级到同一版本"
+                "连到了别的产品的守护进程:客户端是 \"{client}\",守护进程属于 \"{daemon}\"。\
+                 请检查两个产品各自的数据目录与守护进程是否匹配"
             ),
             ClientErrorKind::Unreachable(msg) => write!(f, "连不上守护进程: {msg}"),
         }
@@ -88,9 +134,17 @@ impl Client {
         }
     }
 
-    /// 协议版本握手:与守护进程比对 PROTOCOL_VERSION,不一致给出可读
-    /// 错误并拒绝后续使用。结果缓存——只在首个业务请求前真正跑一次,
-    /// 之后的所有调用直接返回缓存结果。
+    /// 协议版本握手:与守护进程比对 PROTOCOL_VERSION 与产品名。
+    ///
+    /// **接入方式(复审 R2):** `roundtrip` 与 `attach` 在发第一个业务
+    /// 请求前自动调用本方法(结果缓存),握手失败时业务请求直接返回对应
+    /// 错误、不再发请求。
+    ///
+    /// **放行策略(用户 2026-10-20 裁决):** 版本号不一致、或连到了别的
+    /// 产品的守护进程,一律拒绝;唯一放行的例外是**不认识 Hello 的旧
+    /// 守护进程**(早于本改动、仍在运行的 dozerd,对 Hello 只回
+    /// `Reply::Error`)——放行并记一条 warn,不阻断、不向用户弹错,
+    /// 否则只升级客户端的用户得先杀守护进程,会丢掉所有存活会话。
     pub async fn check_version(&self) -> Result<(), ClientError> {
         if self.version_checked.get().is_some() {
             return Ok(());
@@ -102,9 +156,16 @@ impl Client {
         result
     }
 
+    /// roundtrip/attach 用的 anyhow 包装:握手失败把 ClientError 原样
+    /// 交给业务调用方(可读文案随之带出去)。
+    async fn ensure_version_checked(&self) -> Result<()> {
+        self.check_version().await.map_err(anyhow::Error::new)
+    }
+
     async fn hello_once(&self) -> Result<(), ClientError> {
         // 不走通用 roundtrip:它会把 Reply::Error 折叠成 anyhow 错误,
-        // 而握手恰恰要区分"守护进程回了 Error(版本过旧)"与"连不上"。
+        // 而握手恰恰要区分"守护进程回了 Error(旧守护进程,放行)"与
+        // "连不上"。
         let reply = self
             .roundtrip_keep_error(&Request::Hello {
                 protocol: dozer_core::protocol::PROTOCOL_VERSION,
@@ -113,27 +174,16 @@ impl Client {
             .map_err(|e| ClientError {
                 kind: ClientErrorKind::Unreachable(e.to_string()),
             })?;
-        match reply {
-            Reply::Hello {
-                protocol,
-                product: _,
-            } => {
-                if protocol == dozer_core::protocol::PROTOCOL_VERSION {
-                    Ok(())
-                } else {
-                    Err(ClientError {
-                        kind: ClientErrorKind::ProtocolMismatch {
-                            client: dozer_core::protocol::PROTOCOL_VERSION,
-                            daemon: protocol,
-                        },
-                    })
-                }
+        match classify_hello_reply(&reply) {
+            Ok(HelloCheck::Compatible) => Ok(()),
+            Ok(HelloCheck::OldDaemonAllowed) => {
+                tracing::warn!(
+                    socket = %self.socket.display(),
+                    "守护进程不认识协议握手(版本过旧),按兼容策略放行;建议尽快把 dozerd 与客户端升级到同一版本"
+                );
+                Ok(())
             }
-            // 旧守护进程不认识 Hello,回的是 Error(或别的帧):
-            // 统一报"守护进程过旧"。
-            _ => Err(ClientError {
-                kind: ClientErrorKind::DaemonTooOld,
-            }),
+            Err(kind) => Err(ClientError { kind }),
         }
     }
 
@@ -154,6 +204,9 @@ impl Client {
     }
 
     async fn roundtrip(&self, req: &Request) -> Result<Reply> {
+        // 复审 R2:首个业务请求前自动握手(结果缓存);失败时业务请求
+        // 直接返回可读错误,不再把请求发给版本不符的守护进程。
+        self.ensure_version_checked().await?;
         let stream = UnixStream::connect(&self.socket).await?;
         let (r, mut w) = stream.into_split();
         w.write_all(encode_line(req).as_bytes()).await?;
@@ -1392,6 +1445,8 @@ impl Client {
         id: &str,
         from_offset: u64,
     ) -> Result<(Vec<u8>, u64, mpsc::UnboundedReceiver<TermEvent>)> {
+        // 复审 R2:attach 也是业务入口,同样先握手(缓存,只跑一次)。
+        self.ensure_version_checked().await?;
         let stream = UnixStream::connect(&self.socket).await?;
         let (r, mut w) = stream.into_split();
         w.write_all(
@@ -1487,6 +1542,9 @@ impl AppHostApi for Client {
     async fn subscribe(
         &self,
     ) -> std::result::Result<mpsc::UnboundedReceiver<AppChange>, AppApiError> {
+        self.ensure_version_checked()
+            .await
+            .map_err(|e| AppApiError::Transport(format!("{e:#}")))?;
         let stream = UnixStream::connect(&self.socket)
             .await
             .map_err(|e| AppApiError::Transport(format!("{e}")))?;
@@ -1572,11 +1630,18 @@ fn interpret_shutdown_reply(
 }
 
 /// 把 `Client` 内部的 `anyhow::Error` 归类成面板可区分的 `ServiceError`:带类型的原样返回,
-/// IO 错误(连不上/读写断开)归 `Unavailable`,其余(意外应答、解码失败)归 `Protocol`。
+/// IO 错误(连不上/读写断开)与握手的 `Unreachable`(守护进程不在/断开)归
+/// `Unavailable`,其余(版本/产品不一致、意外应答、解码失败)归 `Protocol`。
 pub fn into_service_error(e: anyhow::Error) -> ServiceError {
     match e.downcast::<ServiceError>() {
         Ok(se) => se,
         Err(e) if e.downcast_ref::<std::io::Error>().is_some() => {
+            ServiceError::new(ServiceErrorKind::Unavailable, e.to_string())
+        }
+        Err(e)
+            if e.downcast_ref::<ClientError>()
+                .is_some_and(|ce| matches!(ce.kind, ClientErrorKind::Unreachable(_))) =>
+        {
             ServiceError::new(ServiceErrorKind::Unavailable, e.to_string())
         }
         Err(e) => ServiceError::new(ServiceErrorKind::Protocol, e.to_string()),
@@ -1653,6 +1718,17 @@ mod app_subscribe_tests {
 
     /// 假服务端:读到 `Subscribe` 后回 `Subscribed`,再推 2 条 `Changed`,然后关连接。
     async fn fake_server(listener: tokio::net::UnixListener) {
+        // 握手是第一条连接;订阅流是下一条。先应答握手,再 accept 订阅流。
+        let (stream, _) = listener.accept().await.unwrap();
+        let (r, mut w) = stream.into_split();
+        let mut lines = BufReader::new(r).lines();
+        let _ = lines.next_line().await.unwrap();
+        let hello = Reply::Hello {
+            protocol: dozer_core::protocol::PROTOCOL_VERSION,
+            product: dozer_core::paths::product().name.to_string(),
+        };
+        w.write_all(encode_line(&hello).as_bytes()).await.unwrap();
+
         let (stream, _) = listener.accept().await.unwrap();
         let (r, mut w) = stream.into_split();
         let mut lines = BufReader::new(r).lines();
@@ -1705,6 +1781,19 @@ mod app_subscribe_tests {
         let sock = temp_sock("drop");
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
         let server = tokio::spawn(async move {
+            // 先应答握手(第一条连接)
+            {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (r, mut w) = stream.into_split();
+                let mut lines = BufReader::new(r).lines();
+                let _ = lines.next_line().await.unwrap();
+                let hello = Reply::Hello {
+                    protocol: dozer_core::protocol::PROTOCOL_VERSION,
+                    product: dozer_core::paths::product().name.to_string(),
+                };
+                w.write_all(encode_line(&hello).as_bytes()).await.unwrap();
+            }
+            // 再走订阅流
             let (stream, _) = listener.accept().await.unwrap();
             let (r, mut w) = stream.into_split();
             let mut lines = BufReader::new(r).lines();
@@ -1736,6 +1825,19 @@ mod app_subscribe_tests {
         let sock = temp_sock("fail");
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
         tokio::spawn(async move {
+            // 先应答握手(第一条连接)
+            {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (r, mut w) = stream.into_split();
+                let mut lines = BufReader::new(r).lines();
+                let _ = lines.next_line().await.unwrap();
+                let hello = Reply::Hello {
+                    protocol: dozer_core::protocol::PROTOCOL_VERSION,
+                    product: dozer_core::paths::product().name.to_string(),
+                };
+                w.write_all(encode_line(&hello).as_bytes()).await.unwrap();
+            }
+            // 再走订阅流
             let (stream, _) = listener.accept().await.unwrap();
             let (r, mut w) = stream.into_split();
             let mut lines = BufReader::new(r).lines();
@@ -2401,17 +2503,43 @@ mod todo_service_tests {
         ))
     }
 
-    /// 读一行请求后回 `reply`;`None` = 不应答直接挂断。
+    /// 先应答协议握手(Hello),再读一行业务请求回 `reply`;`None` =
+    /// 业务请求不应答直接挂断(握手仍正常放行,这样"挂断"只影响业务
+    /// 请求,语义与旧用例一致)。
     pub(super) fn serve_once(tag: &str, reply: Option<Reply>) -> PathBuf {
         let sock = temp_sock(tag);
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
         tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let (r, mut w) = stream.into_split();
-            let mut lines = BufReader::new(r).lines();
-            let _ = lines.next_line().await;
-            if let Some(reply) = reply {
-                let _ = w.write_all(encode_line(&reply).as_bytes()).await;
+            // 每个业务调用都是一条新连接(握手一条 + 业务一条),假服务端
+            // 必须持续 accept;且要按请求类型应答:Hello 请求回同版本握手,
+            // 业务请求回配置的 reply(否则业务连接会把握手应答错当业务应答)。
+            while let Ok((stream, _)) = listener.accept().await {
+                let reply = reply.clone();
+                tokio::spawn(async move {
+                    let (r, mut w) = stream.into_split();
+                    let mut lines = BufReader::new(r).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let is_hello = serde_json::from_str::<serde_json::Value>(&line)
+                            .ok()
+                            .and_then(|v| {
+                                v.get("type").and_then(|t| t.as_str()).map(|t| t == "hello")
+                            })
+                            .unwrap_or(false);
+                        let out = if is_hello {
+                            Reply::Hello {
+                                protocol: dozer_core::protocol::PROTOCOL_VERSION,
+                                product: dozer_core::paths::product().name.to_string(),
+                            }
+                        } else {
+                            match reply.clone() {
+                                Some(reply) => reply,
+                                // None = 业务请求不应答直接挂断(旧语义)
+                                None => return,
+                            }
+                        };
+                        let _ = w.write_all(encode_line(&out).as_bytes()).await;
+                    }
+                });
             }
         });
         sock
@@ -2982,13 +3110,27 @@ mod edit_history_service_tests {
     use dozer_services::{EditHistoryService, PreciseEdit, ServiceErrorKind};
     use std::sync::{Arc, Mutex};
 
-    /// 读一行请求,记下它,再回 `reply`。返回 (socket 路径, 记录请求行的共享槽)。
+    /// 读一行业务请求,记下它,再回 `reply`。返回 (socket 路径, 记录请求行的共享槽)。
+    /// 复审 R2:客户端先握手再发业务请求(两条连接),这里先应答握手。
     fn serve_capture(tag: &str, reply: Reply) -> (PathBuf, Arc<Mutex<Option<String>>>) {
         let sock = temp_sock(tag);
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
         let seen = Arc::new(Mutex::new(None));
         let slot = Arc::clone(&seen);
         tokio::spawn(async move {
+            // 握手连接
+            {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (r, mut w) = stream.into_split();
+                let mut lines = BufReader::new(r).lines();
+                let _ = lines.next_line().await;
+                let hello = Reply::Hello {
+                    protocol: dozer_core::protocol::PROTOCOL_VERSION,
+                    product: dozer_core::paths::product().name.to_string(),
+                };
+                let _ = w.write_all(encode_line(&hello).as_bytes()).await;
+            }
+            // 业务连接
             let (stream, _) = listener.accept().await.unwrap();
             let (r, mut w) = stream.into_split();
             let mut lines = BufReader::new(r).lines();

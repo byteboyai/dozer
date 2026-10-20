@@ -38,6 +38,27 @@ fn codebuddy_project_key(cwd: &Path) -> String {
         .replace('/', "-")
 }
 
+/// 本产品存放自有 agent journal 的根目录(方案 A,用户 2026-10-20 裁决):
+/// Dozer 是 <home>/.dozer/agents/<agent>,Digger 是
+/// <home>/.digger/agents/<agent>——根目录名随产品身份推导,两个产品
+/// 同机时 journal 互不混目录。只有本产品自己写 journal 的三家
+/// (opencode/goose/aider)从这里取路径;Claude/CodeBuddy/Codex/v8agent
+/// 读的是各 agent 自己的目录(如 ~/.claude/projects),天然被所有产品
+/// 共享,不属于产品数据目录,不走这里。项目目录里的 .dozer/*.toml
+/// 等项目级配置同理,不属于本函数管辖。
+fn product_agents_root_in(home: &Path, agent: &str) -> PathBuf {
+    home.join(format!(".{}", crate::paths::product().name))
+        .join("agents")
+        .join(agent)
+}
+
+/// journal 三家(opencode/goose/aider)共用的项目子目录构造。
+fn journal_project_dir_in(home: &Path, agent: &str, cwd: &Path) -> PathBuf {
+    product_agents_root_in(home, agent)
+        .join("projects")
+        .join(project_key(cwd))
+}
+
 fn project_dir_in(home: &Path, agent_root: &str, cwd: &Path) -> PathBuf {
     home.join(agent_root)
         .join("projects")
@@ -69,7 +90,7 @@ pub fn opencode_project_dir(cwd: &Path) -> PathBuf {
 }
 
 pub fn opencode_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
-    project_dir_in(home, ".dozer/agents/opencode", cwd)
+    journal_project_dir_in(home, "opencode", cwd)
 }
 
 pub fn v8agent_project_dir(cwd: &Path) -> PathBuf {
@@ -91,7 +112,7 @@ pub fn goose_project_dir(cwd: &Path) -> PathBuf {
 
 /// `home` 显式传入版本,测试用(不碰 `HOME` 环境变量)。
 pub fn goose_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
-    project_dir_in(home, ".dozer/agents/goose", cwd)
+    journal_project_dir_in(home, "goose", cwd)
 }
 
 /// Aider 一个 Dozer 会话的四条路径(见 spec D2)。`chat_history`/`input_history`
@@ -112,7 +133,7 @@ pub fn aider_project_dir(cwd: &Path) -> PathBuf {
 
 /// `home` 显式传入版本,测试用(不碰 `HOME` 环境变量)。
 pub fn aider_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
-    project_dir_in(home, ".dozer/agents/aider", cwd)
+    journal_project_dir_in(home, "aider", cwd)
 }
 
 /// Aider session ID 校验:只接受 Dozer 现有安全字符集(字母数字 + `-`,覆盖
@@ -156,18 +177,19 @@ pub fn codex_sessions_dir_in(home: &Path) -> PathBuf {
 /// 各家 agent 的"按项目建子目录"根:`<home>/<root>/projects`。供启动全量扫描枚举所有项目。
 /// 无通配 `match`:新增 `AgentKind` 变体时必须在这里表态。
 pub fn projects_root_in(agent: AgentKind, home: &Path) -> Option<PathBuf> {
-    let root = match agent {
-        AgentKind::Claude => ".claude",
-        AgentKind::Codebuddy => ".codebuddy",
-        AgentKind::Opencode => ".dozer/agents/opencode",
-        AgentKind::Goose => ".dozer/agents/goose",
-        AgentKind::Aider => ".dozer/agents/aider",
-        AgentKind::V8agent => ".v8agent",
+    // journal 三家走产品根目录(方案 A);其余各家读 agent 自己的目录,
+    // 与产品无关。
+    Some(match agent {
+        AgentKind::Opencode => product_agents_root_in(home, "opencode").join("projects"),
+        AgentKind::Goose => product_agents_root_in(home, "goose").join("projects"),
+        AgentKind::Aider => product_agents_root_in(home, "aider").join("projects"),
+        AgentKind::Claude => home.join(".claude").join("projects"),
+        AgentKind::Codebuddy => home.join(".codebuddy").join("projects"),
+        AgentKind::V8agent => home.join(".v8agent").join("projects"),
         // Codex 按日期建目录(见 `codex_sessions_dir_in`);Qodercn 目前只做到 L1,
         // 没有 transcript 解析;Unknown 不是 agent。
         AgentKind::Unknown | AgentKind::Codex | AgentKind::Qodercn => return None,
-    };
-    Some(home.join(root).join("projects"))
+    })
 }
 
 /// 某项目(`cwd`)在某家 agent 下的会话目录。`None` 的集合与 `projects_root_in` 一致。

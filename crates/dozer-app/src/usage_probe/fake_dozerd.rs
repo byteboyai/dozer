@@ -46,6 +46,20 @@ impl FakeDozerd {
                 let Ok(Some(line)) = lines.next_line().await else {
                     continue;
                 };
+                // 复审 R2:客户端业务请求前自动握手(Hello)。假 dozerd 按
+                // 同产品同版本应答后继续原有流程;HangUp 语义保持"业务
+                // 请求不应答直接挂断"。
+                if decode_line::<Request>(&line)
+                    .map(|req| matches!(req, Request::Hello { .. }))
+                    .unwrap_or(false)
+                {
+                    let hello = Reply::Hello {
+                        protocol: dozer_core::protocol::PROTOCOL_VERSION,
+                        product: dozer_core::paths::product().name.to_string(),
+                    };
+                    let _ = w.write_all(encode_line(&hello).as_bytes()).await;
+                    continue;
+                }
                 let Ok(Request::GetUsageSummary { cwd, .. }) = decode_line::<Request>(&line) else {
                     continue;
                 };

@@ -16,6 +16,7 @@ base64.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 dozerd = { path = "../dozerd" }
 uuid.workspace = true
 tempfile = "3"

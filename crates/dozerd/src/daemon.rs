@@ -69,10 +69,29 @@ impl DaemonConfig {
     }
 }
 
+/// 校验功能组合的合法性(复审 R4):task_poller 依赖 summaries 的
+/// 消费服务,开着 poller 关着 summaries 会让启动中途 panic。返回可读
+/// 错误,由 run 在任何有副作用的启动工作之前(单实例检查之前)调用。
+fn validate_features(features: DaemonFeatures) -> Result<()> {
+    if features.task_poller && !features.summaries {
+        anyhow::bail!(
+            "非法的功能组合:task_poller 需要 summaries(轮询器派发的任务由总结 worker 消费)。\
+             请把 summaries 一并打开,或把 task_poller 关掉"
+        );
+    }
+    Ok(())
+}
+
 pub async fn run(config: DaemonConfig) -> Result<()> {
     // 第一件事:安装进程级产品身份。之后所有 paths::* 自由函数
     // (数据库路径、日志目录、socket 兜底)读到的都是该产品。
     paths::install(config.product.clone())?;
+
+    // 复审 R4:非法组合在任何有副作用的启动工作之前校验,返回可读
+    // Err 而不是让启动中途 panic(此前 task_poller && !summaries 会走到
+    // .expect 直接炸)。DaemonFeatures 字段全是 pub,调用方可以合法构造
+    // 出这个组合,必须在入口拦住。
+    validate_features(config.features)?;
 
     let features = config.features;
     let socket = &config.socket;
@@ -169,6 +188,8 @@ pub async fn run(config: DaemonConfig) -> Result<()> {
         (None, None, None)
     };
     if features.task_poller {
+        // validate_features 已保证 summaries == true;unwrap 只是让类型
+        // 收窄,不再 panic。
         crate::task_poller::spawn(
             todos.clone(),
             categories.clone(),
@@ -178,7 +199,7 @@ pub async fn run(config: DaemonConfig) -> Result<()> {
             in_flight.clone(),
             summary_service
                 .clone()
-                .expect("summaries off 时不应有 task_poller"),
+                .expect("validate_features 已校验:task_poller 开启时 summaries 必须为 true"),
         );
     }
     let serve = server::serve(
@@ -271,6 +292,19 @@ mod tests {
                 && !f.task_poller
                 && !f.ide_bridge
         );
+    }
+
+    /// 复审 R4:非法组合返回可读错误,不 panic。
+    #[test]
+    fn task_poller_without_summaries_is_rejected_with_a_readable_error() {
+        let mut features = DaemonFeatures::minimal();
+        features.task_poller = true;
+        let err = validate_features(features).unwrap_err().to_string();
+        assert!(err.contains("task_poller"), "{err}");
+        assert!(err.contains("summaries"), "{err}");
+        // 合法组合不报错
+        assert!(validate_features(DaemonFeatures::default()).is_ok());
+        assert!(validate_features(DaemonFeatures::minimal()).is_ok());
     }
 
     #[test]
