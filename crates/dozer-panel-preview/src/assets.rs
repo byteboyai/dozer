@@ -663,7 +663,11 @@ mod tests {
     }
 
     fn scratch() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("dozer-assets-test-{}", std::process::id()));
+        // 每次调用一个独占目录:测试并行时共用同一个文件会互相截断,读到空 body。
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("dozer-assets-test-{}-{n}", std::process::id()));
         let _ = fs::create_dir_all(dir.join("sub"));
         fs::write(dir.join("host.html"), b"<html>").unwrap();
         fs::write(dir.join("sub").join("a.js"), b"js").unwrap();

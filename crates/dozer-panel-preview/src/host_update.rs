@@ -163,9 +163,9 @@ fn localized(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> 
     }
 }
 
-/// D-I3:保存路径必须落在项目根内。先看词法分量(挡住 `..` 逃逸),再把两侧
-/// canonical 后做前缀比较(挡住指向根外的符号链接)。canonical 失败时要求词法
-/// 命中——文件可能刚被删,这时更不该放行一次写到根外的保存。
+/// D-I3:保存路径必须落在项目根内。先看词法分量(挡住 `..` 逃逸),再把两侧 canonical 后做前缀比较
+/// (挡住指向根外的符号链接)。目标文件可能不存在(刚被删 / 另存为新文件):这时 canonical 它**已存在的
+/// 父目录**再拼回文件名,同样要落在根里;任何一步解析不了都**拒绝**(fail-closed),不再凭词法放行。
 pub(crate) fn path_within_root(root: &std::path::Path, path: &std::path::Path) -> bool {
     // `strip_prefix` 按分量匹配,但 `proj/../outside` 的词法前缀也是 `proj`,
     // 所以相对部分里出现 `..` 一律拒绝。
@@ -178,11 +178,22 @@ pub(crate) fn path_within_root(root: &std::path::Path, path: &std::path::Path) -
     {
         return false;
     }
-    match (std::fs::canonicalize(root), std::fs::canonicalize(path)) {
-        (Ok(croot), Ok(cpath)) => cpath.starts_with(&croot),
-        // 任一侧 canonical 不掉(根还没建好 / 目标刚被删):只认词法结论。
-        _ => true,
-    }
+    let Ok(croot) = std::fs::canonicalize(root) else {
+        return false;
+    };
+    let resolved = match std::fs::canonicalize(path) {
+        Ok(p) => p,
+        Err(_) => {
+            let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+                return false;
+            };
+            match std::fs::canonicalize(parent) {
+                Ok(p) => p.join(name),
+                Err(_) => return false,
+            }
+        }
+    };
+    resolved.starts_with(&croot)
 }
 
 fn editor_event(

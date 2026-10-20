@@ -1,21 +1,21 @@
 mod tests {
-    use crate::FILES_OWNER;
-    use crate::Message;
     use crate::adapter::FilesCapabilities;
-    use crate::dialogs::delete_confirm_spec;
     use crate::external_apps::ExternalAppsConfig;
-    use crate::git_status;
     use crate::i18n::{t, t_args};
-    use crate::menu::{FileContextMenuParams, context_menu_items, tab_context_menu_items};
+    use crate::menu::{context_menu_items, tab_context_menu_items, FileContextMenuParams};
     use crate::state::{
-        AppState, ContextMenu, PendingMove, SEARCH_FOCUSED, TREE_EDIT_FOCUSED, TabContextMenu,
-        TreeEdit, TreeEditMode, WorkspaceState, take_search_focused, take_tree_edit_focused,
+        AppState, ContextMenu, PendingMove, TabContextMenu, TreeEdit, TreeEditMode, WorkspaceState,
+        SEARCH_FOCUSED, TREE_EDIT_FOCUSED, take_search_focused, take_tree_edit_focused,
     };
-    use crate::state::{DRAG_HOVER_EXPAND_DELAY, search_field_id};
     use crate::tree::{
-        DropHit, TreeDragPhase, is_valid_move_target, tree_drop_target, tree_state_color,
+        is_valid_move_target, tree_drop_target, tree_state_color, DropHit, TreeDragPhase,
     };
     use crate::update::update;
+    use crate::Message;
+    use crate::dialogs::delete_confirm_spec;
+    use crate::git_status;
+    use crate::state::{search_field_id, DRAG_HOVER_EXPAND_DELAY};
+    use crate::FILES_OWNER;
 
     const ROW_H: f32 = 22.0;
     const GAP: f32 = 2.0;
@@ -121,30 +121,14 @@ mod tests {
         );
         // 第 2、3 行都是目录 → 各自命中。
         assert_eq!(
-            tree_drop_target(
-                200.0,
-                by + 2.0 * pitch + row_h / 2.0,
-                bounds,
-                scroll,
-                &rows,
-                row_h,
-                gap
-            ),
+            tree_drop_target(200.0, by + 2.0 * pitch + row_h / 2.0, bounds, scroll, &rows, row_h, gap),
             Some(DropHit {
                 highlight: PathBuf::from("/b"),
                 target: PathBuf::from("/b"),
             })
         );
         assert_eq!(
-            tree_drop_target(
-                200.0,
-                by + 3.0 * pitch + row_h / 2.0,
-                bounds,
-                scroll,
-                &rows,
-                row_h,
-                gap
-            ),
+            tree_drop_target(200.0, by + 3.0 * pitch + row_h / 2.0, bounds, scroll, &rows, row_h, gap),
             Some(DropHit {
                 highlight: PathBuf::from("/c"),
                 target: PathBuf::from("/c"),
@@ -162,15 +146,7 @@ mod tests {
         // 行间死区吸到下一行目录(idx1 是文件 /a/f.rs,2*pitch 的空档应在 /b
         // 之上;吸住 /b)。
         assert_eq!(
-            tree_drop_target(
-                200.0,
-                by + 2.0 * pitch - 1.0,
-                bounds,
-                scroll,
-                &rows,
-                row_h,
-                gap
-            ),
+            tree_drop_target(200.0, by + 2.0 * pitch - 1.0, bounds, scroll, &rows, row_h, gap),
             Some(DropHit {
                 highlight: PathBuf::from("/b"),
                 target: PathBuf::from("/b"),
@@ -190,15 +166,7 @@ mod tests {
         let pitch = row_h + gap;
         let by = bounds.1;
         assert_eq!(
-            tree_drop_target(
-                200.0,
-                by + pitch + row_h / 2.0,
-                bounds,
-                scroll,
-                &rows,
-                row_h,
-                gap
-            ),
+            tree_drop_target(200.0, by + pitch + row_h / 2.0, bounds, scroll, &rows, row_h, gap),
             Some(DropHit {
                 highlight: PathBuf::from("/a/f.rs"),
                 target: PathBuf::from("/a"),
@@ -1795,10 +1763,7 @@ mod tests {
         );
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
-        assert_eq!(
-            crate::i18n::t_from(&toasts[0].text, "en"),
-            "File operation failed: nope"
-        );
+        assert_eq!(crate::i18n::t_from(&toasts[0].text, "en"), "File operation failed: nope");
         update(
             &mut ws_state,
             &mut app_state,
@@ -2498,10 +2463,7 @@ mod tests {
                 is_git_repo: false,
                 external_apps: &crate::external_apps::ExternalAppsConfig::default(),
             },
-            &FilesCapabilities {
-                send_to_agent: false,
-                ..FilesCapabilities::all()
-            },
+            &FilesCapabilities { send_to_agent: false, ..FilesCapabilities::all() },
             "en",
         );
         let send = items.iter().find_map(|i| match i {

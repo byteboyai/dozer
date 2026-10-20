@@ -1825,6 +1825,42 @@ fn editor_event_for_a_foreign_path_is_dropped() {
     assert!(tab.load_state.is_active(), "路径失配的 ready 不得推进阶段");
 }
 
+/// D-I3:保存请求里的绑定路径与页签绑定路径不符时必须被拒绝——不产出 `SaveFile`,页签不变脏。
+#[test]
+fn save_is_rejected_when_the_event_path_differs_from_the_bound_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let other = file(dir.path(), "b.rs", "fn other() {}\n");
+    let caps = PreviewCapabilities::all();
+    let c = ctx(&caps, Some(dir.path()));
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    // 事件自洽地指向 b.rs(binding 与 envelope 一致),但页签绑定的是 a.rs。
+    let foreign = editor_binding(ViewerPanel::Files, id, &other);
+    let fx = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: foreign.clone(),
+            envelope: editor_event(
+                &foreign,
+                generation,
+                EditorEvent::SaveRequested {
+                    revision: generation,
+                    text: "fn evil() {}\n".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::SaveFile { .. })),
+        "路径不符的保存不得落盘: {fx:?}"
+    );
+    let tab = st.pane.tabs().iter().find(|t| t.id == id).unwrap();
+    assert!(!tab.dirty, "被拒绝的保存不得改动页签");
+    assert_eq!(std::fs::read_to_string(&rs).unwrap(), "fn main() {}\n");
+}
+
 /// D-I3:已关闭页签的 host 事件是空操作,不能复活页签或产生效果。
 #[test]
 fn host_event_for_a_closed_tab_is_ignored() {
@@ -2132,4 +2168,41 @@ fn take_host_scripts_skips_unpooled_webviews_and_encodes_the_rest() {
     assert_eq!(scripts[0].0, webview_id);
     assert!(scripts[0].1.contains("__dozer.dispatch"));
     assert!(scripts[0].1.contains("reveal_position"));
+}
+
+/// D-I3:`path_within_root` fail-closed——目标尚不存在时 canonical 它的父目录;指向根外的符号链接目录、
+/// 根本不存在的根、不存在的父目录一律拒绝。
+#[test]
+fn path_within_root_is_fail_closed() {
+    use crate::host_update::path_within_root;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    let outside = dir.path().join("outside");
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(root.join("ok.txt"), "x").unwrap();
+    // 根内:已存在 / 尚不存在(父目录在根内)。
+    assert!(path_within_root(&root, &root.join("ok.txt")));
+    assert!(path_within_root(&root, &root.join("sub/new.txt")));
+    // 词法 `..`。
+    assert!(!path_within_root(
+        &root,
+        &root.join("sub/../../outside/x.txt")
+    ));
+    // 根内的符号链接指向根外:已存在的文件与尚不存在的新文件都要拒绝。
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        std::fs::write(outside.join("secret.txt"), "s").unwrap();
+        assert!(!path_within_root(&root, &root.join("link/secret.txt")));
+        assert!(!path_within_root(&root, &root.join("link/new.txt")));
+    }
+    // 父目录不存在 / 根不存在:拒绝,不凭词法放行。
+    assert!(!path_within_root(&root, &root.join("missing_dir/new.txt")));
+    assert!(!path_within_root(
+        &dir.path().join("no_such_root"),
+        &dir.path().join("no_such_root/a.txt")
+    ));
+    // 根外。
+    assert!(!path_within_root(&root, &outside.join("secret.txt")));
 }
