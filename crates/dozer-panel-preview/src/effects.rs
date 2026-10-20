@@ -84,13 +84,6 @@ pub enum Effect {
         /// 发起写盘时页签的 revision;回执时比对,期间的编辑不能被旧写盘清掉。
         revision: u64,
     },
-    /// 把一段已编码的注入脚本交给产品的 webview 宿主执行(恢复正文 / 视图状态)。
-    /// 页面事件处理体排出的「立即注入一条 host 脚本」。宿主每帧调
-    /// `PreviewPane::take_host_scripts` 时把这里排的一并取走。
-    PushHostScript {
-        webview_id: usize,
-        script: String,
-    },
     /// 后台建窗口化行索引,结果 `Message::WindowIndex`。
     BuildLineIndex {
         tab_id: usize,
@@ -453,9 +446,6 @@ pub fn run_effect(
         | Effect::TabSelected { .. }
         | Effect::TabClosed { .. }
         | Effect::SelectionContextMenu { .. } => {}
-        Effect::PushHostScript { webview_id, script } => {
-            let _ = (webview_id, script);
-        }
     }
 }
 

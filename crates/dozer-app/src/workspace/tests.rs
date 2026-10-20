@@ -1478,9 +1478,80 @@ fn resolve_preview_command_target_by_path_and_tab() {
 /// 真机上 UI 卡顿。
 ///
 /// 本测试只做词法检查(不引入 parser 依赖),覆盖 plan T12 第一条约束的意图。
+/// 调用点是否**真的**落在 `spawn_blocking` / `handle.spawn` 的闭包体内。
+///
+/// 早期版本只看「函数起点到调用点之间出现没出现过 spawn 字样」,在一个函数里
+/// 混有已 spawn 分支时会假绿(`SaveFile` 的同步写盘就是这么漏掉的,D-I4)。
+///
+/// 判定:对每个 spawn 标记,取它之后遇到的第一个 `{`(中间不允许出现 `;`),
+/// 配对到闭合的 `}`,看调用点是否落在区间内。这样 `spawn(|| {...})`、
+/// `spawn_blocking(move || {...})`、`spawn(async move {...})` 三种写法都覆盖。
+fn call_is_inside_spawn(source: &str, at: usize) -> bool {
+    const MARKERS: &[&str] = &["spawn_blocking", "handle.spawn", ".spawn("];
+    let bytes = source.as_bytes();
+    for marker in MARKERS {
+        let mut from = 0;
+        while let Some(rel) = source[..at].get(from..).and_then(|s| s.find(marker)) {
+            let pos = from + rel;
+            from = pos + marker.len();
+            let mut i = pos + marker.len();
+            // 找闭包体的 `{`;中途遇到语句结束的 `;` 说明这条 spawn 用完了。
+            let body_start = loop {
+                match bytes.get(i) {
+                    None => break None,
+                    Some(b'{') => break Some(i),
+                    Some(b';') => break None,
+                    _ => i += 1,
+                }
+            };
+            let Some(body_start) = body_start else {
+                continue;
+            };
+            let mut depth: i32 = 0;
+            let mut body_end = None;
+            for (j, &b) in bytes.iter().enumerate().skip(body_start) {
+                match b {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            body_end = Some(j);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(body_end) = body_end
+                && body_start < at
+                && at < body_end
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 从「函数起点到调用点」的片段里取出该函数名。片段以 `fn `/`pub fn `/
+/// `async fn ` 开头(可能带缩进)时才有值。
+fn enclosing_fn_name(fragment: &str) -> Option<String> {
+    let trimmed = fragment.trim_start();
+    let rest = trimmed.strip_prefix("pub ").unwrap_or(trimmed);
+    let rest = rest.strip_prefix("async ").unwrap_or(rest);
+    let rest = rest.strip_prefix("fn ")?;
+    let name: String = rest
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    (!name.is_empty()).then_some(name)
+}
+
 #[test]
 fn ui_handlers_do_not_call_blocking_preview_entry_points() {
     // UI handler 源文件(相对 crate 根)。新增 UI 路径时在此登记。
+    // D-I4:写盘入口已经搬进库,审计范围必须跟过去,否则禁令在真实调用点上空转。
+    // `host_update.rs` 产出 `Effect::SaveFile`,`effects.rs` 真正执行它。
     const UI_HANDLER_FILES: &[&str] = &[
         "src/app/update.rs",
         "src/app/app.rs",
@@ -1488,6 +1559,8 @@ fn ui_handlers_do_not_call_blocking_preview_entry_points() {
         "src/app/state.rs",
         "src/workspace/state.rs",
         "src/workspace/view.rs",
+        "../dozer-panel-preview/src/host_update.rs",
+        "../dozer-panel-preview/src/effects.rs",
     ];
     // 被禁的同步阻塞入口(大文件读取 / 索引 / 解析 / 搜索 / 恢复快照)。
     const BLOCKING_ENTRY_POINTS: &[&str] = &[
@@ -1540,7 +1613,21 @@ fn ui_handlers_do_not_call_blocking_preview_entry_points() {
                 });
                 let fn_start = fn_start.unwrap_or(0);
                 let within = &source[fn_start..at];
-                let wrapped = SPAWN_MARKERS.iter().any(|m| within.contains(m));
+                // D-I4:只在「函数起点到调用点之间出现过 spawn 字样」是弱判定——
+                // 一个几十分支的 `run_effect` 里只要别的分支 spawn 过,这里就永久
+                // 假绿(`SaveFile` 的同步写盘就是这么漏的)。改为按花括号配对确认
+                // 调用点**位于某个 spawn 闭包体内**;直接命中不了时,再看调用点所在
+                // 函数是否只在 spawn 闭包里被调用(如 `read_recovery`)。
+                let mut wrapped = call_is_inside_spawn(&source, at);
+                if !wrapped && let Some(name) = enclosing_fn_name(within) {
+                    wrapped = source.match_indices(&name).any(|(call_at, _)| {
+                        if source[..call_at].trim_end().ends_with("fn") {
+                            return false;
+                        }
+                        call_is_inside_spawn(&source, call_at + name.len())
+                    });
+                }
+                let _ = (within, &SPAWN_MARKERS);
                 assert!(
                     wrapped,
                     "{file}:`{entry}` 出现在 UI handler 函数体的直接路径上(调用点前无 spawn 包装)。\
@@ -1550,22 +1637,12 @@ fn ui_handlers_do_not_call_blocking_preview_entry_points() {
             }
         }
     }
-    // P4:页面事件处理体(含 `EditorEvent::SaveRequested` 的写盘)整体搬进
-    // `dozer-panel-preview` 后,这条特例是**唯一**允许出现的阻塞入口,且必须
-    // 在 `spawn_blocking` 里(上面已逐条校验)。其余入口若一个都扫不到,说明
-    // 名单/扫描规则失效,或者又被搬走了——都该到这里来重新登记。
-    if audited == 0 {
-        for (file, needle) in [
-            ("src/app/update.rs", "PreviewPane::"),
-            ("src/workspace/preview_panel.rs", "run_preview_effects"),
-        ] {
-            let source = std::fs::read_to_string(root.join(file)).unwrap();
-            assert!(
-                source.contains(needle),
-                "审计未命中任何调用点:阻塞入口与扫描名单都已失效({file} 里也找不到 `{needle}`)"
-            );
-        }
-    }
+    // D-I4:恢复强断言。一个调用点都扫不到 = 路径写错 / 写法变了 / 名单失效,
+    // 不能再用「源码里含某些字样」蒙混过去。
+    assert!(
+        audited > 0,
+        "审计未命中任何调用点:阻塞入口名单与扫描规则都已失效"
+    );
 }
 
 // ---- bytehost H1:预览窗格访问器 ----

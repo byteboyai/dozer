@@ -588,16 +588,48 @@ pub(crate) fn loaded_workspace_mut(
     }
 }
 
-/// 预览页面事件该投给哪个工作区:按**绑定里的项目**取,与「当前聚焦项目」无关;
-/// 绑定项目已关闭(槽位不存在 / 仍是 `Stub`)时返回 `None`,调用方丢弃事件。
+/// `App::host_event` 的路由结论:这条页面事件该落到哪儿。
 ///
-/// 抽成自由函数是为了能 headless 单测(`App` 要 daemon 连接 + winit
-/// `EventLoopProxy` 才构造得出来)。`App::host_event` 与这里共用同一条规则。
-pub(crate) fn workspace_for_host_event(
-    projects: &mut HashMap<i64, WorkspaceSlot>,
-    project_id: i64,
-) -> Option<&mut Workspace> {
-    loaded_workspace_mut(projects, project_id)
+/// 生产代码与单测**共用**这一个推导(`App::host_event` 只负责执行),
+/// 这样测试测的是真正在跑的那条规则,而不是一个平行的包装函数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HostEventRoute {
+    /// 事件没有绑定项目,且是要直接交给 `App` 处理的特例(`ReviewTrace`)。
+    AppLevelReviewTrace,
+    /// 有绑定项目,但该项目已关闭(槽位不存在 / 仍是 `Stub`)——丢弃。
+    Drop,
+    /// 投给该项目的预览面板。`panel` 为 `None` 表示这类事件不走预览面板
+    /// (`GitLogDiff` 走 `App` 自己的 git log 消息)。
+    Project {
+        project_id: ProjectId,
+        panel: Option<PanelKind>,
+    },
+}
+
+/// 由事件本身 + 项目槽位表推出 [`HostEventRoute`]。
+pub(crate) fn host_event_route(
+    event: &dozer_panel_preview::host_ipc::HostEvent,
+    projects: &HashMap<i64, WorkspaceSlot>,
+) -> HostEventRoute {
+    use dozer_panel_preview::host_ipc::HostEvent;
+    let Some(project) = event.project_id() else {
+        return if matches!(event, HostEvent::ReviewTrace(_)) {
+            HostEventRoute::AppLevelReviewTrace
+        } else {
+            HostEventRoute::Drop
+        };
+    };
+    let project_id: ProjectId = project;
+    match projects.get(&project_id) {
+        Some(WorkspaceSlot::Loaded(_)) => HostEventRoute::Project {
+            project_id,
+            panel: match event {
+                HostEvent::GitLogDiff { .. } | HostEvent::ReviewTrace(_) => None,
+                _ => event.panel().map(Into::into),
+            },
+        },
+        _ => HostEventRoute::Drop,
+    }
 }
 
 /// 启动恢复的纯逻辑:把盘上记的"上次开着哪些页签"(`open_projects.json`)与

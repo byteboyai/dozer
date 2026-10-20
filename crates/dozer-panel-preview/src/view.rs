@@ -229,8 +229,8 @@ pub fn fallback_page<'p: 'a, 'b: 'a, 'a, M: Clone + 'static>(
     let product: &'a str = host.product_name();
     let model = fallback_model(tab, locale, product)?;
     // `model` 里的字符串在 `widget::text` 里被重新分配,只有各 `&str` 字段
-    // 会进 `Element<'a>`;因此要求 locale/product 活到 `'a` 即可,不再另求 `'b`。
-    let _: &'a str = locale;
+    // 会进 `Element<'a>`;因此要求 locale/product 活到 `'a` 即可,不再另求 `'b`
+    // (公共 API 的生命周期从 `'p + 'b` 收成 `'p + 'a`,已在提交说明里写明)。
     let tab_id = model.tab_id;
     let actions = model.actions;
 

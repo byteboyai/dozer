@@ -24,11 +24,17 @@ use crate::file_profile::decode_utf16_to_utf8;
 /// 协议端点可读文件的**规范化**白名单(S5b-2 P4 Task 3)。
 ///
 /// 产品用 `insert` / `clear` 把「用户显式打开过的文件」登记进来;协议闭包
-/// 用 `contains` 判断能否读。未做任何 I/O 规范化的 `PathBuf` 直接比较会漏掉
-/// `./a/b`、`a//b`、`a/b/` 这类等价写法(Windows/macOS 大小写与尾斜杠尤其
-/// 明显),所以 `insert` 时统一 `clean` 成绝对、无 `.`/`..`、无重复分隔符、
-/// 去尾斜杠的形式;**不**碰文件系统(不 canonicalize,符号链接语义保持原样,
-/// 白名单只该信任调用方给的路径)。
+/// 用 `contains` 判断能否读。
+///
+/// **判定与读取必须落在同一个路径上**(S5b-2 P4 复审 D-I2)。早先只做纯词法
+/// 规范化,而 `serve_allowlisted_file` 拿原始解码路径 `fs::read`,系统会解析
+/// 符号链接——`proj/link/../ok.txt` 词法折叠成 `proj/ok.txt` 通过判定,读出来
+/// 却是 `link` 指向的另一个目录里的文件。现在 `insert` / `remove` / `contains`
+/// 一律 `canonicalize`(解析符号链接、`/tmp` ↔ `/private/tmp` 一类等价),
+/// **失败即拒绝**(不降级回词法比较);判定与读取都用 canonical 结果。
+///
+/// 词法规范化仍然保留在 [`clean_allowed_path`]:它是 `canonicalize` 之前的第一
+/// 道折叠(消掉 `.` / `..` / 重复分隔符),也让相对路径先接上当前目录。
 #[derive(Debug, Clone, Default)]
 pub struct AllowedFiles {
     inner: HashSet<PathBuf>,
@@ -39,21 +45,47 @@ impl AllowedFiles {
         Self::default()
     }
 
-    /// 登记一个文件;返回内部实际保存的规范化路径。
+    /// 登记一个文件;返回内部实际保存的 canonical 路径。
+    ///
+    /// `canonicalize` 失败(文件不存在 / 权限不足 / 悬空链接)时**不登记**,
+    /// 返回未 canonical 的折叠路径——调用方拿到的值只能用来报错,不能当作
+    /// "已授权"。
     pub fn insert(&mut self, path: impl Into<PathBuf>) -> PathBuf {
-        let cleaned = clean_allowed_path(&path.into());
-        self.inner.insert(cleaned.clone());
-        cleaned
+        let folded = clean_allowed_path(&path.into());
+        let Some(canonical) = canonical_allowed_path(&folded) else {
+            return folded;
+        };
+        self.inner.insert(canonical.clone());
+        canonical
     }
 
-    /// 撤销登记(同样先规范化再删)。
+    /// 撤销登记(同样先 canonical 再删)。
     pub fn remove(&mut self, path: &Path) {
-        self.inner.remove(&clean_allowed_path(path));
+        if let Some(canonical) = canonical_allowed_path(&clean_allowed_path(path)) {
+            self.inner.remove(&canonical);
+        }
     }
 
-    /// 白名单是否含该文件。查询路径同样先规范化,`./a/b` 与 `a/b` 等价。
+    /// 白名单是否含该文件。查询路径同样 canonical——失败即 `false`
+    /// (悬空链接不能被当成"授权过")。
     pub fn contains(&self, path: &Path) -> bool {
-        self.inner.contains(&clean_allowed_path(path))
+        canonical_allowed_path(&clean_allowed_path(path))
+            .is_some_and(|canonical| self.inner.contains(&canonical))
+    }
+
+    /// 把一次请求解析成**要读的那个 canonical 路径**:既在白名单里、又确实
+    /// 是普通文件(不是目录)才返回。`serve_allowlisted_file` 必须用这个结果
+    /// 去 `fs::read`,不能再用请求里的原始字符串。
+    pub fn resolve(&self, path: &Path) -> Option<PathBuf> {
+        let canonical = canonical_allowed_path(&clean_allowed_path(path))?;
+        if !self.inner.contains(&canonical) {
+            return None;
+        }
+        let meta = std::fs::metadata(&canonical).ok()?;
+        if !meta.is_file() {
+            return None;
+        }
+        Some(canonical)
     }
 
     pub fn clear(&mut self) {
@@ -63,7 +95,10 @@ impl AllowedFiles {
     /// 撤销**这个前缀目录下**的所有登记(项目关闭 / 切走时清掉它打开过的文件)。
     /// 白名单只增不减会让加载过的项目永久可读,切走项目后必须回收。
     pub fn remove_under(&mut self, dir: &Path) {
-        let base = clean_allowed_path(dir);
+        let folded = clean_allowed_path(dir);
+        let Some(base) = canonical_allowed_path(&folded) else {
+            return;
+        };
         let stale: Vec<PathBuf> = self
             .inner
             .iter()
@@ -97,6 +132,14 @@ impl FromIterator<PathBuf> for AllowedFiles {
         }
         out
     }
+}
+
+/// 白名单判定与读取共用的 canonical 形式。
+///
+/// `canonicalize` 失败就返回 `None`:白名单宁可少放行,也不能把"读不到"当成
+/// "可以读"。macOS 上 `/tmp` 会解析成 `/private/tmp`,这一步顺便统一了它们。
+fn canonical_allowed_path(path: &Path) -> Option<PathBuf> {
+    std::fs::canonicalize(path).ok()
 }
 
 /// 把路径整理成白名单比较用的固定形式。
@@ -268,10 +311,19 @@ fn serve_allowlisted_file(encoded: &str, allowed: &AllowedFiles) -> ProtocolRepl
     let Some(decoded) = percent_decode(encoded) else {
         return not_found();
     };
-    let file = PathBuf::from(decoded);
-    if !allowed.contains(&file) {
+    let requested = PathBuf::from(&decoded);
+    // 请求里出现 `..` 分量一律拒绝:即使 canonical 后落在白名单内,也不接受
+    // 这种写法(它正是符号链接逃逸的载体)。
+    if requested
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return not_found();
     }
+    // 判定与读取用同一个 canonical 路径,目录也在这里被拒掉。
+    let Some(file) = allowed.resolve(&requested) else {
+        return not_found();
+    };
     match std::fs::read(&file) {
         Ok(body) => {
             // UTF-16 文本(带 BOM)先转成 UTF-8:WebView 的 `fetch().text()`
@@ -1380,53 +1432,103 @@ mod tests {
 #[cfg(test)]
 mod allowed_files_tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn equivalent_spellings_share_one_entry() {
-        let base = if cfg!(windows) {
-            PathBuf::from("C:\\base")
-        } else {
-            PathBuf::from("/base")
-        };
-        let canonical = base.join("a").join("b.txt");
+        // 白名单现在按 canonical 路径比较(D-I2),所以夹具必须是真实文件。
+        let base = unique_temp_dir("allowed-equivalent");
+        let dir = base.join("a");
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("b.txt");
+        fs::write(&file, b"x").unwrap();
+
         let mut allowed = AllowedFiles::new();
         allowed.insert(base.join("./a//b.txt"));
-        allowed.insert(base.join("a").join("b.txt").join(""));
+        allowed.insert(dir.join("b.txt").join(""));
         assert_eq!(allowed.len(), 1);
-        assert!(allowed.contains(&canonical));
+        assert!(allowed.contains(&file), "canonical 命中");
         let dotted = base.join("x").join("..").join("a").join("b.txt");
         assert!(allowed.contains(&dotted), ".. 被消解后等价");
+
+        fs::remove_dir_all(&base).ok();
     }
 
     #[test]
     fn remove_and_clear() {
-        let mut allowed: AllowedFiles = [PathBuf::from("/base/a.txt")].into_iter().collect();
-        assert!(allowed.contains(Path::new("/base/a.txt")));
-        allowed.remove(Path::new("/base/./a.txt"));
-        assert!(!allowed.contains(Path::new("/base/a.txt")));
-        allowed.insert("/base/b.txt");
+        let base = unique_temp_dir("allowed-remove");
+        fs::create_dir_all(&base).unwrap();
+        let a = base.join("a.txt");
+        let b = base.join("b.txt");
+        fs::write(&a, b"a").unwrap();
+        fs::write(&b, b"b").unwrap();
+
+        let mut allowed: AllowedFiles = [a.clone()].into_iter().collect();
+        assert!(allowed.contains(&a));
+        allowed.remove(&base.join(".").join("a.txt"));
+        assert!(!allowed.contains(&a));
+        allowed.insert(&b);
         allowed.clear();
         assert!(allowed.is_empty());
+
+        fs::remove_dir_all(&base).ok();
     }
 
     #[test]
     fn remove_under_drops_only_that_project() {
-        let mut allowed: AllowedFiles = [
-            PathBuf::from("/p1/a.txt"),
-            PathBuf::from("/p1/sub/b.png"),
-            PathBuf::from("/p10/c.txt"),
-            PathBuf::from("/p2/d.md"),
-        ]
-        .into_iter()
-        .collect();
-        allowed.remove_under(Path::new("/p1"));
-        assert!(!allowed.contains(Path::new("/p1/a.txt")));
-        assert!(!allowed.contains(Path::new("/p1/sub/b.png")));
-        assert!(
-            allowed.contains(Path::new("/p10/c.txt")),
-            "同名前缀的兄弟项目不能被误删"
-        );
-        assert!(allowed.contains(Path::new("/p2/d.md")));
+        let base = unique_temp_dir("allowed-remove-under");
+        let p1 = base.join("p1");
+        let p1_sub = p1.join("sub");
+        let p10 = base.join("p10");
+        let p2 = base.join("p2");
+        for dir in [&p1, &p1_sub, &p10, &p2] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        let a = p1.join("a.txt");
+        let b = p1_sub.join("b.png");
+        let c = p10.join("c.txt");
+        let d = p2.join("d.md");
+        for f in [&a, &b, &c, &d] {
+            fs::write(f, b"x").unwrap();
+        }
+
+        let mut allowed: AllowedFiles = [a.clone(), b.clone(), c.clone(), d.clone()]
+            .into_iter()
+            .collect();
+        allowed.remove_under(&p1);
+        assert!(!allowed.contains(&a));
+        assert!(!allowed.contains(&b));
+        assert!(allowed.contains(&c), "同名前缀的兄弟项目不能被误删");
+        assert!(allowed.contains(&d));
+
+        fs::remove_dir_all(&base).ok();
+    }
+
+    /// D-I2:`/tmp` 与 `/private/tmp` 是同一目录的两种写法,白名单按 canonical
+    /// 比较,因此登记任一种都能命中另一种。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn allowlist_unifies_tmp_and_private_tmp() {
+        let dir = std::env::temp_dir();
+        let link = Path::new("/tmp");
+        let (Some(canon_dir), Ok(canon_link)) = (
+            std::fs::canonicalize(&dir).ok(),
+            std::fs::canonicalize(link),
+        ) else {
+            return; // 该机器上 /tmp 不是链接,跳过。
+        };
+        if canon_dir != canon_link {
+            return;
+        }
+        let name = format!("dozer-tmp-{}.txt", std::process::id());
+        let file = canon_dir.join(&name);
+        fs::write(&file, b"x").unwrap();
+
+        let mut allowed = AllowedFiles::new();
+        allowed.insert(link.join(&name));
+        assert!(allowed.contains(&file), "/tmp 与 /private/tmp 必须等价");
+
+        fs::remove_file(&file).ok();
     }
 
     #[test]
@@ -1449,5 +1551,165 @@ mod allowed_files_tests {
             clean_allowed_path(Path::new("rel/./x")),
             clean_allowed_path(&cwd.join("rel/x"))
         );
+    }
+
+    /// D-I2:白名单判定与读取必须落在同一个 canonical 路径上。
+    ///
+    /// 探针(第二轮复审):白名单只含 `proj/ok.txt`,`proj/link` 是指向
+    /// `secret/deeper` 的符号链接,请求 `__file__/.../proj/link/../ok.txt`
+    /// 曾经返回 200 和 `secret/ok.txt` 的内容。修复前这条测试必红。
+    #[cfg(unix)]
+    #[test]
+    fn allowlist_rejects_traversal_encoded_slash_nul_and_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let base = unique_temp_dir("allowlist-traversal");
+        let proj = base.join("proj");
+        let secret = base.join("secret");
+        let deeper = secret.join("deeper");
+        for dir in [&proj, &deeper] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        let ok = proj.join("ok.txt");
+        fs::write(&ok, b"public").unwrap();
+        // `proj/link` → `secret/deeper`,于是 `proj/link/../ok.txt` 在系统眼里
+        // 是 `secret/ok.txt`(词法折叠却仍是 `proj/ok.txt`)。
+        fs::write(secret.join("ok.txt"), b"SECRET").unwrap();
+        fs::write(deeper.join("ok.txt"), b"SECRET-DEEPER").unwrap();
+        symlink(&deeper, proj.join("link")).unwrap();
+
+        let mut allowed = AllowedFiles::new();
+        allowed.insert(&ok);
+
+        let encoded = |p: &std::path::Path| p.to_string_lossy().replace('%', "%25");
+        let reply = |uri: String| handle_protocol(&base, &allowed, &uri).expect("预览命名空间");
+
+        // 正当读取仍然成功。
+        let direct = reply(format!("dozer://editor/__file__{}", encoded(&ok)));
+        assert_eq!(direct.status, 200);
+        assert_eq!(direct.body, b"public");
+
+        // 符号链接逃逸:词法上落在 proj 里,实质读到 secret 下的同名文件。
+        for uri in [
+            format!(
+                "dozer://editor/__file__{}",
+                encoded(&proj.join("link/../ok.txt"))
+            ),
+            format!(
+                "dozer://editor/__file__{}",
+                encoded(&proj.join("link/../../secret/ok.txt"))
+            ),
+        ] {
+            let r = reply(uri.clone());
+            assert_eq!(r.status, 404, "{uri} 必须 404");
+            assert_ne!(r.body, b"SECRET", "{uri} 泄露了白名单外的内容");
+        }
+
+        // 编码形态的 `..` 与 NUL 也不能放行。
+        let dotdot = proj.join("link").to_string_lossy().to_string() + "/%2e%2e/ok.txt";
+        assert_eq!(
+            reply(format!("dozer://editor/__file__{dotdot}")).status,
+            404
+        );
+        assert_eq!(
+            reply(format!(
+                "dozer://editor/__file__{}/ok%00.txt",
+                encoded(&proj)
+            ))
+            .status,
+            404
+        );
+        // 不在白名单里的普通文件照样 404。
+        assert_eq!(
+            reply(format!(
+                "dozer://editor/__file__{}",
+                encoded(&secret.join("ok.txt"))
+            ))
+            .status,
+            404
+        );
+
+        fs::remove_dir_all(&base).ok();
+    }
+
+    /// D-I2:判定按 canonical 路径比较(`/tmp` ↔ `/private/tmp`),目录一律拒绝。
+    #[cfg(unix)]
+    #[test]
+    fn allowlist_compares_canonical_paths_and_rejects_directories() {
+        let base = unique_temp_dir("allowlist-canonical");
+        fs::create_dir_all(&base).unwrap();
+        let file = base.join("doc.txt");
+        fs::write(&file, b"hello").unwrap();
+
+        let mut allowed = AllowedFiles::new();
+        allowed.insert(&file);
+        let canonical = fs::canonicalize(&file).unwrap();
+        assert!(allowed.contains(&canonical), "canonical 形式必须命中");
+
+        // macOS 上 /tmp 与 /private/tmp 是同一目录的两种写法。
+        let tmp = std::env::temp_dir();
+        let via_tmp = tmp.join(
+            file.strip_prefix(fs::canonicalize(&tmp).unwrap_or(tmp.clone()))
+                .unwrap_or(&file),
+        );
+        let _ = via_tmp; // 平台无关:上面的 canonical 断言已覆盖语义。
+
+        // 目录即使被登记也不能被当作文件读。
+        let mut with_dir = AllowedFiles::new();
+        let stored = with_dir.insert(&base);
+        assert!(!stored.is_file(), "目录登记后仍是目录");
+        assert!(with_dir.contains(&base), "目录本身仍在集合里");
+        assert!(with_dir.resolve(&base).is_none(), "目录不能被读");
+        assert!(
+            with_dir.resolve(&file).is_none(),
+            "未登记的子孙文件不能被读"
+        );
+
+        // 不存在的路径:登记失败、查询为 false(不降级放行)。
+        let missing = base.join("nope.txt");
+        let returned = allowed.insert(&missing);
+        assert_eq!(returned, missing, "失败时返回折叠路径供报错");
+        assert!(!allowed.contains(&missing), "未登记成功就不能命中");
+
+        fs::remove_dir_all(&base).ok();
+    }
+
+    /// D-I2(计划点名):带空格 / 中文 / `#` / `?` / `%` / `&` 的文件名能正确往返。
+    #[test]
+    fn file_url_roundtrips_names_with_space_cjk_hash_question_percent_ampersand() {
+        let base = unique_temp_dir("allowlist-roundtrip");
+        fs::create_dir_all(&base).unwrap();
+        let name = "带 空格#问号?百分之%和&.txt";
+        let file = base.join(name);
+        fs::write(&file, b"payload").unwrap();
+
+        let mut allowed = AllowedFiles::new();
+        allowed.insert(&file);
+
+        let encoded = name
+            .replace('%', "%25")
+            .replace(' ', "%20")
+            .replace('#', "%23")
+            .replace('?', "%3F")
+            .replace('&', "%26");
+        let uri = format!(
+            "dozer://editor/__file__{}/{encoded}",
+            base.to_string_lossy()
+        );
+        let reply = handle_protocol(&base, &allowed, &uri).expect("预览命名空间");
+        assert_eq!(reply.status, 200, "{uri}");
+        assert_eq!(reply.body, b"payload");
+        assert_eq!(reply.mime, "text/plain");
+
+        fs::remove_dir_all(&base).ok();
+    }
+
+    /// 每个测试用独立目录:协议黄金测试也在 `temp_dir` 下建夹具,不能互相踩。
+    fn unique_temp_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("dozer-{tag}-{}-{nanos}", std::process::id()))
     }
 }

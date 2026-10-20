@@ -4301,16 +4301,18 @@ impl App {
         // 页面事件按**绑定里的项目**路由,不能跟着「当前聚焦项目」跑:后台项目的
         // webview 迟到的事件若投给聚焦项目,会改错工作区(甚至改错文件)。
         // 绑定项目已不存在(已关闭)时丢弃。
-        let Some(project) = event.project_id() else {
-            if let HostEvent::ReviewTrace(trace) = event {
-                self.update(Message::ReviewTraceWebviewEvent(trace));
+        let route = super::host_event_route(&event, &self.projects);
+        let project_id = match route {
+            super::HostEventRoute::AppLevelReviewTrace => {
+                if let HostEvent::ReviewTrace(trace) = event {
+                    self.update(Message::ReviewTraceWebviewEvent(trace));
+                }
+                return;
             }
-            return;
+            // 绑定项目已关闭(槽位不存在 / 仍是 `Stub`):丢弃,不投给任何仍在的项目。
+            super::HostEventRoute::Drop => return,
+            super::HostEventRoute::Project { project_id, .. } => project_id,
         };
-        let project_id: ProjectId = project;
-        if loaded_workspace_mut(&mut self.projects, project_id).is_none() {
-            return;
-        }
         match event {
             HostEvent::GitLogDiff { binding, envelope } => {
                 self.update(Message::GitLogDiffWebviewEvent(binding, envelope));
@@ -5201,7 +5203,6 @@ impl App {
 #[cfg(test)]
 mod host_event_routing_tests {
     use super::*;
-    use crate::app::workspace_for_host_event;
     use crate::workspace::Workspace;
     use dozer_core::protocol::ProjectInfo;
 
@@ -5259,7 +5260,8 @@ mod host_event_routing_tests {
     }
 
     /// 后台项目(1)的页面事件不能按「当前聚焦项目」(2)路由:两边第一个页签
-    /// 必然同号,误投会改错工作区的状态。
+    /// 必然同号,误投会改错工作区的状态。走的是 `App::host_event` 真正用的
+    /// 那一条推导(`host_event_route`),不是平行包装。
     #[test]
     fn host_event_for_a_project_that_is_not_focused_applies_to_its_own_state() {
         let mut projects = std::collections::HashMap::new();
@@ -5270,8 +5272,26 @@ mod host_event_routing_tests {
             }
             projects.insert(id, slot);
         }
-        // 模拟 `App::host_event` 的路由:绑定项目 = 1(聚焦的是 2)。
-        let ws = workspace_for_host_event(&mut projects, 1).expect("1 已加载");
+        let binding = image_binding(1);
+        let event = dozer_panel_preview::host_ipc::HostEvent::ImageAnnotate {
+            binding,
+            envelope: image_envelope(1),
+        };
+        // 路由结论:绑定项目 = 1,与聚焦项目 2 无关。
+        assert_eq!(
+            crate::app::host_event_route(&event, &projects),
+            crate::app::HostEventRoute::Project {
+                project_id: 1,
+                panel: Some(PanelKind::Files),
+            }
+        );
+        // 执行:事件落到项目 1 自己的工作区。
+        let dozer_panel_preview::host_ipc::HostEvent::ImageAnnotate { binding, envelope } = event
+        else {
+            unreachable!()
+        };
+        let ws = loaded_workspace_mut(&mut projects, binding.project_id).expect("1 已加载");
+        let _ = envelope;
         ws.preview
             .apply_image_annotate_event(TAB, dozer_panel_preview::ImageAnnotateEvent::Ready);
         assert_eq!(error_of(&projects, 1, TAB), None, "事件落到它自己的项目");
@@ -5306,10 +5326,56 @@ mod host_event_routing_tests {
                 activity: None,
             },
         );
-        assert!(workspace_for_host_event(&mut projects, 9).is_none());
-        assert!(workspace_for_host_event(&mut projects, 42).is_none());
+        for id in [9, 42] {
+            let event = dozer_panel_preview::host_ipc::HostEvent::ImageAnnotate {
+                binding: image_binding(id),
+                envelope: image_envelope(id),
+            };
+            assert_eq!(
+                crate::app::host_event_route(&event, &projects),
+                crate::app::HostEventRoute::Drop,
+                "已关闭 / 未促成的项目必须丢弃事件(id={id})"
+            );
+        }
         // 被丢弃的事件没有波及仍在的项目。
         assert_eq!(error_of(&projects, 1, TAB), Some("before".into()));
+    }
+
+    /// `ReviewTrace` 没有绑定项目,是唯一允许绕过项目路由的例外。
+    #[test]
+    fn host_event_without_a_project_only_lets_review_trace_through() {
+        let projects = std::collections::HashMap::new();
+        let trace = dozer_panel_preview::host_ipc::HostEvent::ReviewTrace(
+            dozer_panel_preview::ReviewTraceEvent::DocumentLoaded,
+        );
+        assert_eq!(
+            crate::app::host_event_route(&trace, &projects),
+            crate::app::HostEventRoute::AppLevelReviewTrace
+        );
+    }
+
+    fn image_binding(project_id: i64) -> dozer_panel_preview::HostBinding {
+        dozer_panel_preview::HostBinding::new(
+            project_id,
+            dozer_panel_preview::ViewerPanel::Files,
+            TAB,
+            format!("/tmp/p{project_id}/pic.png"),
+        )
+    }
+
+    fn image_envelope(
+        project_id: i64,
+    ) -> dozer_panel_preview::WebviewEnvelope<dozer_panel_preview::ImageAnnotateEvent> {
+        dozer_panel_preview::WebviewEnvelope {
+            protocol_version: 1,
+            project_id,
+            panel: "files".into(),
+            tab_id: TAB,
+            document_id: String::new(),
+            revision: 0,
+            request_id: None,
+            payload: dozer_panel_preview::ImageAnnotateEvent::Ready,
+        }
     }
 }
 

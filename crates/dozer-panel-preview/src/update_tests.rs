@@ -1257,6 +1257,183 @@ fn save_finished_with_a_stale_revision_keeps_the_tab_dirty() {
     assert!(!st.pane.tabs().iter().find(|t| t.id == id).unwrap().dirty);
 }
 
+/// N2:revision 过期的回执**不能**清恢复快照——页签还脏,磁盘上的恢复文件是
+/// 崩溃后唯一能找回这段时间编辑的东西。
+#[test]
+fn stale_save_receipt_keeps_the_recovery_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let mut c = ctx(&caps, None);
+    c.recovery_dir = Some(dir.path());
+    c.failures_path = dir.path().join("preview_failures.json");
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let binding = editor_binding(ViewerPanel::Files, id, &rs);
+    let changed = |rev: u64| {
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                rev,
+                EditorEvent::DocumentChanged {
+                    revision: rev,
+                    length: 24,
+                    changes: Vec::new(),
+                },
+            ),
+        })
+    };
+    let _ = update(&mut st, changed(generation), &c);
+    // 写盘发起后又有编辑:回执的 revision 落后于当前正文。
+    let _ = update(&mut st, changed(generation + 1), &c);
+    let fx = update(
+        &mut st,
+        Message::SaveFinished {
+            tab_id: id,
+            revision: generation,
+            result: Ok(()),
+        },
+        &c,
+    );
+    assert!(
+        !fx.iter()
+            .any(|e| matches!(e, Effect::ClearRecoverySnapshot { .. })),
+        "过期回执不能删恢复快照"
+    );
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::PersistTabs { .. })),
+        "过期回执不能把旧内容写进落盘快照"
+    );
+    let tab = st.pane.tabs().iter().find(|t| t.id == id).unwrap();
+    assert!(tab.dirty, "页签仍是脏的");
+
+    // 追平的回执才清快照。
+    let fx = update(
+        &mut st,
+        Message::SaveFinished {
+            tab_id: id,
+            revision: generation + 1,
+            result: Ok(()),
+        },
+        &c,
+    );
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::ClearRecoverySnapshot { .. })),
+        "当前内容的回执应清掉恢复快照"
+    );
+}
+
+/// N2:写盘期间又有编辑、且用户已点了关闭 —— 过期回执不能关页签(会丢掉新编辑)。
+#[test]
+fn stale_save_receipt_does_not_close_a_tab_with_newer_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let mut c = ctx(&caps, None);
+    c.failures_path = dir.path().join("preview_failures.json");
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let binding = editor_binding(ViewerPanel::Files, id, &rs);
+    let event = |rev: u64, event: EditorEvent| {
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(&binding, rev, event),
+        })
+    };
+    // 编辑器就绪 → 正文变更(脏)。
+    let _ = update(
+        &mut st,
+        event(
+            generation,
+            EditorEvent::Ready {
+                read_only: false,
+                language: "rust".into(),
+            },
+        ),
+        &c,
+    );
+    let _ = update(
+        &mut st,
+        event(
+            generation,
+            EditorEvent::DocumentChanged {
+                revision: generation,
+                length: 24,
+                changes: Vec::new(),
+            },
+        ),
+        &c,
+    );
+    assert!(st.pane.tabs().iter().find(|t| t.id == id).unwrap().dirty);
+
+    // 用户点了关闭:脏 CodeMirror 页签应进 `pending_close`,不立刻消失。
+    let idx = st.pane.tabs().iter().position(|t| t.id == id).unwrap();
+    let _ = update(&mut st, Message::CloseTab(idx), &c);
+    assert!(st.pane.has_pending_close(id), "脏页签关闭应等保存");
+
+    // 保存在途时又编辑了一次(envelope 与 payload 的 revision 必须一致,
+    // `DocumentChanged` 才采纳——见 host_update 的 doc_revision == revision)。
+    let _ = update(
+        &mut st,
+        event(
+            generation + 1,
+            EditorEvent::DocumentChanged {
+                revision: generation + 1,
+                length: 30,
+                changes: Vec::new(),
+            },
+        ),
+        &c,
+    );
+    assert_eq!(
+        st.pane
+            .tabs()
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap()
+            .web_revision,
+        generation + 1,
+        "新编辑应推进 web_revision"
+    );
+
+    let fx = update(
+        &mut st,
+        Message::SaveFinished {
+            tab_id: id,
+            revision: generation,
+            result: Ok(()),
+        },
+        &c,
+    );
+    assert!(
+        st.pane.tabs().iter().any(|t| t.id == id),
+        "过期回执不能关掉带新编辑的页签"
+    );
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::TabClosed { .. })),
+        "不能报 TabClosed"
+    );
+    assert!(
+        st.pane.has_pending_close(id),
+        "关闭意图保留,等下一次按新 revision 保存"
+    );
+
+    // 新的回执追平后正常关闭。
+    let fx = update(
+        &mut st,
+        Message::SaveFinished {
+            tab_id: id,
+            revision: generation + 1,
+            result: Ok(()),
+        },
+        &c,
+    );
+    assert!(st.pane.tabs().iter().all(|t| t.id != id), "追平后关掉");
+    assert!(fx.iter().any(|e| matches!(e, Effect::TabClosed { .. })));
+}
+
 #[test]
 fn editor_save_finished_error_sets_web_error() {
     let dir = tempfile::tempdir().unwrap();
@@ -1646,6 +1823,285 @@ fn editor_event_for_a_foreign_path_is_dropped() {
     assert!(fx.is_empty(), "{fx:?}");
     let tab = st.pane.tabs().iter().find(|t| t.id == id).unwrap();
     assert!(tab.load_state.is_active(), "路径失配的 ready 不得推进阶段");
+}
+
+/// D-I3:已关闭页签的 host 事件是空操作,不能复活页签或产生效果。
+#[test]
+fn host_event_for_a_closed_tab_is_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let c = ctx(&caps, None);
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let binding = editor_binding(ViewerPanel::Files, id, &rs);
+    let idx = st.pane.tabs().iter().position(|t| t.id == id).unwrap();
+    let _ = update(&mut st, Message::CloseTab(idx), &c);
+    assert!(st.pane.tabs().iter().all(|t| t.id != id));
+    let before_len = st.pane.tabs().len();
+    for payload in [
+        EditorEvent::Ready {
+            read_only: false,
+            language: "rust".into(),
+        },
+        EditorEvent::DocumentChanged {
+            revision: generation,
+            length: 12,
+            changes: Vec::new(),
+        },
+        EditorEvent::SaveRequested {
+            revision: generation,
+            text: "fn main() {}\n".into(),
+        },
+    ] {
+        let fx = update(
+            &mut st,
+            Message::Host(HostEvent::Editor {
+                binding: binding.clone(),
+                envelope: editor_event(&binding, generation, payload),
+            }),
+            &c,
+        );
+        assert!(fx.is_empty(), "已关闭页签的事件不得产生效果: {fx:?}");
+        assert_eq!(st.pane.tabs().len(), before_len, "不得复活页签");
+    }
+}
+
+/// D-I3:比页签当前 revision 更旧的 host 事件被丢弃——旧 replay 不能把
+/// `web_revision` 推回去,也不能触发保存。
+#[test]
+fn host_event_from_a_stale_generation_is_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let c = ctx(&caps, None);
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let binding = editor_binding(ViewerPanel::Files, id, &rs);
+    // 先把页签推进到一个更新的 revision。
+    let newer = generation + 5;
+    let _ = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                newer,
+                EditorEvent::DocumentChanged {
+                    revision: newer,
+                    length: 20,
+                    changes: Vec::new(),
+                },
+            ),
+        }),
+        &c,
+    );
+    assert_eq!(
+        st.pane
+            .tabs()
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap()
+            .web_revision,
+        newer
+    );
+
+    // 一个更旧 generation 的事件。
+    let fx = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::SaveRequested {
+                    revision: generation,
+                    text: "old".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::SaveFile { .. })),
+        "过期 generation 不得触发写盘: {fx:?}"
+    );
+    assert_eq!(
+        st.pane
+            .tabs()
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap()
+            .web_revision,
+        newer,
+        "过期事件不得把 web_revision 推回去"
+    );
+}
+
+/// D-I3:保存路径必须落在项目根内。根外的文件即使能打开,也不能从这里写回。
+#[test]
+fn save_is_rejected_outside_the_project_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    let outside = dir.path().join("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let inside_file = file(dir.path(), "proj/in.rs", "fn main() {}\n");
+    let outside_file = file(dir.path(), "outside/out.rs", "fn other() {}\n");
+    let caps = PreviewCapabilities::all();
+    let c = ctx(&caps, Some(&root));
+    let mut st = PreviewPanelState::default();
+
+    // 根内:正常写盘。
+    let (id, generation) = open_markdown(&mut st, &c, &inside_file);
+    let binding = editor_binding(ViewerPanel::Files, id, &inside_file);
+    let _ = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::Ready {
+                    read_only: false,
+                    language: "rust".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let fx = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::SaveRequested {
+                    revision: generation,
+                    text: "fn main() { changed(); }\n".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::SaveFile { .. })),
+        "根内文件应允许保存: {fx:?}"
+    );
+
+    // 根外:拒绝,报错不给 SaveFile。
+    let (out_id, out_gen) = open_markdown(&mut st, &c, &outside_file);
+    let out_binding = editor_binding(ViewerPanel::Files, out_id, &outside_file);
+    let _ = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: out_binding.clone(),
+            envelope: editor_event(
+                &out_binding,
+                out_gen,
+                EditorEvent::Ready {
+                    read_only: false,
+                    language: "rust".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let fx = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: out_binding.clone(),
+            envelope: editor_event(
+                &out_binding,
+                out_gen,
+                EditorEvent::SaveRequested {
+                    revision: out_gen,
+                    text: "evil".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::SaveFile { .. })),
+        "根外文件不得写盘: {fx:?}"
+    );
+    let tab = st.pane.tabs().iter().find(|t| t.id == out_id).unwrap();
+    assert!(
+        tab.web_error.as_deref().is_some_and(|e| !e.is_empty()),
+        "根外保存要给出可见错误"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&outside_file).unwrap(),
+        "fn other() {}\n",
+        "磁盘内容不得被改写"
+    );
+}
+
+/// D-I3:保存正文超过单条消息上限时直接拒绝,不写盘、不改页签内容。
+#[test]
+fn oversized_text_change_is_rejected_without_changing_the_tab() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let c = ctx(&caps, Some(dir.path()));
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let binding = editor_binding(ViewerPanel::Files, id, &rs);
+    let _ = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::Ready {
+                    read_only: false,
+                    language: "rust".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let before = st
+        .pane
+        .tabs()
+        .iter()
+        .find(|t| t.id == id)
+        .unwrap()
+        .web_revision;
+    let huge = "a".repeat(webview_protocol::MAX_MESSAGE_BYTES + 1);
+    let fx = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::SaveRequested {
+                    revision: generation,
+                    text: huge,
+                },
+            ),
+        }),
+        &c,
+    );
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::SaveFile { .. })),
+        "超大正文不得写盘: {fx:?}"
+    );
+    let tab = st.pane.tabs().iter().find(|t| t.id == id).unwrap();
+    assert!(
+        tab.web_error.as_deref().is_some_and(|e| !e.is_empty()),
+        "超大正文要给出可见错误"
+    );
+    assert_eq!(tab.web_revision, before, "页签 revision 不得被超大正文推进");
+    assert_eq!(
+        std::fs::read_to_string(&rs).unwrap(),
+        "fn main() {}\n",
+        "磁盘内容不得被改写"
+    );
 }
 
 #[test]

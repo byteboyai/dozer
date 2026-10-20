@@ -70,7 +70,10 @@ pub fn save_finished(
     result: Result<(), String>,
     fx: &mut Vec<Effect>,
 ) {
+    // `None` = 这次回执不能当作"已落盘":写盘期间又有编辑(`revision` 落后于
+    // 页签的 `web_revision`),或写盘失败。
     let mut saved_path = None;
+    let mut receipt_is_current = false;
     {
         let pane = &mut state.pane;
         let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) else {
@@ -78,14 +81,16 @@ pub fn save_finished(
         };
         match result {
             Ok(()) => {
-                // 写盘期间若又有编辑(`revision` 已前进),这次旧写盘不能清脏。
+                // 写盘期间若又有编辑(`revision` 已前进),这次旧写盘不能清脏,
+                // 也**不能**清恢复快照——那会让崩溃丢掉这段时间的编辑(N2)。
                 if revision >= tab.web_revision {
                     tab.dirty = false;
                     tab.recovery_written = false;
                     tab.conflict_baseline = None;
-                }
-                if let TabKind::File(path) = &tab.kind {
-                    saved_path = Some(path.clone());
+                    if let TabKind::File(path) = &tab.kind {
+                        saved_path = Some(path.clone());
+                    }
+                    receipt_is_current = true;
                 }
             }
             Err(error) => {
@@ -107,7 +112,24 @@ pub fn save_finished(
             path,
         });
     }
-    // 「保存后关闭」:落盘尝试完成(成功或失败)后都真正移除 tab。
+    if ctx.behavior.persist_tabs
+        && let Some(project_id) = ctx.project_id
+        && receipt_is_current
+    {
+        // 仅在回执对应当前内容时更新落盘快照;过期回执会把旧内容写回去。
+        fx.push(Effect::PersistTabs {
+            project_id,
+            state: state.pane.persisted_snapshot(),
+        });
+    }
+    if !receipt_is_current {
+        // N2:revision 过期(或写盘失败)时**不关**页签——关掉就丢了写盘期间
+        // 的新编辑。`pending_close` 保留,页签仍显示脏标;用户下一次保存 / 关闭
+        // 会按新的 revision 重新走一遍(库不替用户决定覆盖)。
+        fx.push(Effect::ContextChanged { immediate: false });
+        return;
+    }
+    // 「保存后关闭」:只有**当前内容**落盘成功后才真正移除 tab。
     if state.pane.take_pending_close(tab_id) {
         let old_len = state.pane.tabs().len();
         let idx = state
@@ -141,6 +163,28 @@ fn localized(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> 
     }
 }
 
+/// D-I3:保存路径必须落在项目根内。先看词法分量(挡住 `..` 逃逸),再把两侧
+/// canonical 后做前缀比较(挡住指向根外的符号链接)。canonical 失败时要求词法
+/// 命中——文件可能刚被删,这时更不该放行一次写到根外的保存。
+pub(crate) fn path_within_root(root: &std::path::Path, path: &std::path::Path) -> bool {
+    // `strip_prefix` 按分量匹配,但 `proj/../outside` 的词法前缀也是 `proj`,
+    // 所以相对部分里出现 `..` 一律拒绝。
+    let Ok(rel) = path.strip_prefix(root) else {
+        return false;
+    };
+    if rel
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return false;
+    }
+    match (std::fs::canonicalize(root), std::fs::canonicalize(path)) {
+        (Ok(croot), Ok(cpath)) => cpath.starts_with(&croot),
+        // 任一侧 canonical 不掉(根还没建好 / 目标刚被删):只认词法结论。
+        _ => true,
+    }
+}
+
 fn editor_event(
     state: &mut PreviewPanelState,
     binding: &crate::EditorHostBinding,
@@ -153,6 +197,9 @@ fn editor_event(
     let revision = envelope.revision;
     // 关闭前保存:先探明,后面 tab 借用内不能再借 pane。
     let want_close = pane.has_pending_close(binding.tab_id);
+    // N2:只有"保存这件事已经有结论"的事件才能收尾关闭。编辑类事件(正文又变了 /
+    // 快照 / 选区)不代表保存结束,那时关页签会把保存在途期间的新编辑丢掉。
+    let mut close_settled = false;
     let mut save_queued = false;
     let mut pending_reveal: Option<(usize, u32)> = None;
     let mut context_changed = false;
@@ -320,6 +367,7 @@ fn editor_event(
                             ctx.locale,
                             &[],
                         ));
+                        close_settled = true;
                     }
                     SaveGate::Conflict => {
                         tab.web_error = Some(localized(
@@ -328,9 +376,36 @@ fn editor_event(
                             ctx.locale,
                             &[],
                         ));
+                        close_settled = true;
                     }
                     SaveGate::Allow => {
-                        if save_revision == revision && save_revision == tab.web_revision {
+                        // D-I3:路径必须仍在项目根内。`binding.path` 是 Rust 侧绑定的
+                        // 路径(`path` 已被前面校验过与它一致),所以看 `path`。
+                        let outside_root = ctx
+                            .project_root
+                            .is_some_and(|root| !path_within_root(root, &path));
+                        // D-I3:IPC 侧只挡「整条消息」的 8 MiB;一条合法的
+                        // `save_requested` 里塞接近上限的正文仍会让写盘阻塞很久。
+                        // 保存正文本身单独限一次,超限直接报错、不落盘。
+                        let too_large =
+                            save_text.len() > crate::webview_protocol::MAX_MESSAGE_BYTES;
+                        if too_large {
+                            tab.web_error = Some(localized(
+                                "text_save.too_large",
+                                "This document is too large to save.",
+                                ctx.locale,
+                                &[],
+                            ));
+                            close_settled = true;
+                        } else if outside_root {
+                            tab.web_error = Some(localized(
+                                "text_save.outside_root",
+                                "This file is outside the project; refusing to save.",
+                                ctx.locale,
+                                &[],
+                            ));
+                            close_settled = true;
+                        } else if save_revision == revision && save_revision == tab.web_revision {
                             save_queued = true;
                             fx.push(Effect::SaveFile {
                                 tab_id: tab.id,
@@ -338,9 +413,19 @@ fn editor_event(
                                 text: save_text,
                                 revision: save_revision,
                             });
+                        } else if save_revision > tab.web_revision {
+                            // 保存内容比页签新(host 之后又静默推进过):页签里的
+                            // 东西已经全在这份保存里了,关闭是安全的。
+                            close_settled = true;
                         } else if !want_close {
                             // 非关闭场景下的过期保存:与旧行为一致,丢弃。
                             return;
+                        } else {
+                            // N2:关闭时保存内容比页签旧 —— 落盘会覆盖掉保存期间
+                            // 产生的新编辑,关页签则直接丢掉它们。两者都错,所以
+                            // 保留 `pending_close`,等 host 再回一次对齐当前
+                            // revision 的保存。
+                            close_settled = false;
                         }
                     }
                 }
@@ -489,7 +574,7 @@ fn editor_event(
     // 关闭与否由产品在 `SaveFinished` 里收尾(见 `save_finished`);只有真正排了
     // 写盘的那条路径有这个收尾,其余路径(只读 / 冲突 / revision 不符)必须在这里
     // 自己把关闭做完,否则页签永远卡在 `pending_close`。
-    let pending_close = want_close && !save_queued;
+    let pending_close = want_close && close_settled && !save_queued;
     if context_changed {
         fx.push(Effect::ContextChanged { immediate: false });
     }
