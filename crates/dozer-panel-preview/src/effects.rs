@@ -81,6 +81,8 @@ pub enum Effect {
         tab_id: usize,
         path: PathBuf,
         text: String,
+        /// 发起写盘时页签的 revision;回执时比对,期间的编辑不能被旧写盘清掉。
+        revision: u64,
     },
     /// 把一段已编码的注入脚本交给产品的 webview 宿主执行(恢复正文 / 视图状态)。
     /// 页面事件处理体排出的「立即注入一条 host 脚本」。宿主每帧调
@@ -358,10 +360,19 @@ pub fn run_effect(
                 }
             });
         }
-        Effect::SaveFile { tab_id, path, text } => {
+        Effect::SaveFile {
+            tab_id,
+            path,
+            text,
+            revision,
+        } => {
             handle.spawn_blocking(move || {
                 let result = crate::save_text_atomic(&path, &text).map_err(|e| e.to_string());
-                emit(Message::SaveFinished { tab_id, result });
+                emit(Message::SaveFinished {
+                    tab_id,
+                    revision,
+                    result,
+                });
             });
         }
         Effect::BuildLineIndex {

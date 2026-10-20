@@ -34,9 +34,7 @@ pub fn host_event(
     fx: &mut Vec<Effect>,
 ) {
     match event {
-        HostEvent::Editor { binding, envelope } => {
-            editor_event(&mut state.pane, &binding, envelope, ctx, fx)
-        }
+        HostEvent::Editor { binding, envelope } => editor_event(state, &binding, envelope, ctx, fx),
         HostEvent::Json { binding, envelope } => {
             json_event(&mut state.pane, &binding, envelope, ctx, fx)
         }
@@ -61,6 +59,80 @@ pub fn host_event(
     }
 }
 
+/// 落盘回执的目标:清脏 + 清恢复快照 + (若在等关闭)关掉页签。`saved_revision`
+/// 是发起写盘时的页签 revision,回执时与当前 `web_revision` 比对——期间的编辑
+/// 不能被这次旧写盘清掉。
+pub fn save_finished(
+    state: &mut PreviewPanelState,
+    ctx: &UpdateCtx<'_>,
+    tab_id: usize,
+    revision: u64,
+    result: Result<(), String>,
+    fx: &mut Vec<Effect>,
+) {
+    let mut saved_path = None;
+    {
+        let pane = &mut state.pane;
+        let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        match result {
+            Ok(()) => {
+                // 写盘期间若又有编辑(`revision` 已前进),这次旧写盘不能清脏。
+                if revision >= tab.web_revision {
+                    tab.dirty = false;
+                    tab.recovery_written = false;
+                    tab.conflict_baseline = None;
+                }
+                if let TabKind::File(path) = &tab.kind {
+                    saved_path = Some(path.clone());
+                }
+            }
+            Err(error) => {
+                tab.web_error = Some(localized(
+                    "text_save.failed",
+                    "Save failed: {message}",
+                    ctx.locale,
+                    &[("message", &error)],
+                ));
+            }
+        }
+    }
+    if let (Some(path), Some(dir), Some(project_id)) =
+        (saved_path, ctx.recovery_dir, ctx.project_id)
+    {
+        fx.push(Effect::ClearRecoverySnapshot {
+            dir: dir.to_path_buf(),
+            project_id,
+            path,
+        });
+    }
+    // 「保存后关闭」:落盘尝试完成(成功或失败)后都真正移除 tab。
+    if state.pane.take_pending_close(tab_id) {
+        let old_len = state.pane.tabs().len();
+        let idx = state
+            .pane
+            .tabs()
+            .iter()
+            .position(|t| t.id == tab_id)
+            .unwrap_or(0);
+        state.pane.close(idx);
+        state.tab_first = 0;
+        fx.push(Effect::TabClosed {
+            index: idx,
+            old_len,
+        });
+    }
+    if ctx.behavior.persist_tabs
+        && let Some(project_id) = ctx.project_id
+    {
+        fx.push(Effect::PersistTabs {
+            project_id,
+            state: state.pane.persisted_snapshot(),
+        });
+    }
+    fx.push(Effect::ContextChanged { immediate: false });
+}
 fn localized(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> String {
     if args.is_empty() {
         crate::i18n::panel_text(PANEL_OWNER, key, fallback, locale)
@@ -70,16 +142,18 @@ fn localized(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> 
 }
 
 fn editor_event(
-    pane: &mut PreviewPane,
+    state: &mut PreviewPanelState,
     binding: &crate::EditorHostBinding,
     envelope: crate::WebviewEnvelope<EditorEvent>,
     ctx: &UpdateCtx<'_>,
     fx: &mut Vec<Effect>,
 ) {
+    let pane = &mut state.pane;
     let event = envelope.payload;
     let revision = envelope.revision;
     // 关闭前保存:先探明,后面 tab 借用内不能再借 pane。
     let want_close = pane.has_pending_close(binding.tab_id);
+    let mut save_queued = false;
     let mut pending_reveal: Option<(usize, u32)> = None;
     let mut context_changed = false;
     let mut build_index: Option<(usize, PathBuf, u64, Arc<std::sync::atomic::AtomicBool>)> = None;
@@ -257,10 +331,12 @@ fn editor_event(
                     }
                     SaveGate::Allow => {
                         if save_revision == revision && save_revision == tab.web_revision {
+                            save_queued = true;
                             fx.push(Effect::SaveFile {
                                 tab_id: tab.id,
                                 path: path.clone(),
                                 text: save_text,
+                                revision: save_revision,
                             });
                         } else if !want_close {
                             // 非关闭场景下的过期保存:与旧行为一致,丢弃。
@@ -410,11 +486,45 @@ fn editor_event(
     if let Some(tab_id) = find_request {
         pane.open_large_file_search(tab_id);
     }
-    // 关闭与否由产品在 `SaveFinished` 里收尾(见 `save_finished`)。
-    let _ = want_close;
+    // 关闭与否由产品在 `SaveFinished` 里收尾(见 `save_finished`);只有真正排了
+    // 写盘的那条路径有这个收尾,其余路径(只读 / 冲突 / revision 不符)必须在这里
+    // 自己把关闭做完,否则页签永远卡在 `pending_close`。
+    let pending_close = want_close && !save_queued;
     if context_changed {
         fx.push(Effect::ContextChanged { immediate: false });
     }
+    if pending_close {
+        close_pending_tab(state, binding.tab_id, ctx, fx);
+    }
+}
+
+fn close_pending_tab(
+    state: &mut PreviewPanelState,
+    tab_id: usize,
+    ctx: &UpdateCtx<'_>,
+    fx: &mut Vec<Effect>,
+) {
+    let pane = &mut state.pane;
+    if !pane.take_pending_close(tab_id) {
+        return;
+    }
+    let old_len = pane.tabs().len();
+    let idx = pane.tabs().iter().position(|t| t.id == tab_id).unwrap_or(0);
+    pane.close(idx);
+    state.tab_first = 0;
+    if ctx.behavior.persist_tabs
+        && let Some(project_id) = ctx.project_id
+    {
+        fx.push(Effect::PersistTabs {
+            project_id,
+            state: pane.persisted_snapshot(),
+        });
+    }
+    fx.push(Effect::TabClosed {
+        index: idx,
+        old_len,
+    });
+    fx.push(Effect::ContextChanged { immediate: true });
 }
 
 fn json_event(
@@ -685,55 +795,4 @@ fn plantuml_event(
             crate::EditorCommand::RevealPosition { line, column: 1 },
         );
     }
-}
-
-/// `Effect::SaveFile` 的落盘回执:清 dirty / 冲突基线,清恢复快照,并在该 tab
-/// 正等「保存后关闭」时真正关掉它(收尾与同步关闭路径一致)。
-pub fn save_finished(
-    state: &mut PreviewPanelState,
-    tab_id: usize,
-    result: Result<(), String>,
-    ctx: &UpdateCtx<'_>,
-    fx: &mut Vec<Effect>,
-) {
-    let pane = &mut state.pane;
-    let mut saved_path = None;
-    if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) {
-        match result {
-            Ok(()) => {
-                tab.dirty = false;
-                tab.recovery_written = false;
-                tab.conflict_baseline = None;
-                if let TabKind::File(path) = &tab.kind {
-                    saved_path = Some(path.clone());
-                }
-            }
-            Err(error) => {
-                tab.web_error = Some(localized(
-                    "text_save.failed",
-                    "Save failed: {message}",
-                    ctx.locale,
-                    &[("message", &error)],
-                ));
-            }
-        }
-    }
-    if let (Some(path), Some(dir), Some(project_id)) =
-        (saved_path, ctx.recovery_dir, ctx.project_id)
-    {
-        fx.push(Effect::ClearRecoverySnapshot {
-            dir: dir.to_path_buf(),
-            project_id,
-            path,
-        });
-    }
-    // 「保存后关闭」:落盘尝试完成(成功或失败)后都真正移除 tab。
-    if pane.take_pending_close(tab_id) {
-        pane.close_by_id(tab_id);
-        fx.push(Effect::TabClosed {
-            index: 0,
-            old_len: 0,
-        });
-    }
-    fx.push(Effect::ContextChanged { immediate: false });
 }

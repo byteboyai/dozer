@@ -2,8 +2,8 @@
 //! 并给 `tree_drop_target` 补一个使用产品主题几何量的包装,让既有调用点与
 //! 测试不必各自传行高/间距。
 
-pub(crate) use dozer_panel_files::tree::DropHit;
 use dozer_panel_files::fs::TreeRow;
+pub(crate) use dozer_panel_files::tree::DropHit;
 use iced_widget::core::Element;
 
 /// `dozer_panel_files::tree::tree_drop_target` 的包装:行高与区域间距取自

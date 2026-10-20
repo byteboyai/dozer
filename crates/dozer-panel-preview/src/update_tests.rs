@@ -1101,17 +1101,24 @@ fn editor_save_requested_emits_save_file_and_save_finished_clears_dirty() {
     let saved = fx
         .iter()
         .find_map(|e| match e {
-            Effect::SaveFile { path, text, .. } => Some((path.clone(), text.clone())),
+            Effect::SaveFile {
+                path,
+                text,
+                revision,
+                ..
+            } => Some((path.clone(), text.clone(), *revision)),
             _ => None,
         })
         .expect("SaveRequested 应产出 SaveFile");
     assert_eq!(saved.0, rs);
     assert_eq!(saved.1, "fn main() { println!(); }\n");
+    assert_eq!(saved.2, generation, "SaveFile 要带上发起时的 revision");
 
     let fx = update(
         &mut st,
         Message::SaveFinished {
             tab_id: id,
+            revision: generation,
             result: Ok(()),
         },
         &c,
@@ -1123,6 +1130,131 @@ fn editor_save_requested_emits_save_file_and_save_finished_clears_dirty() {
         e,
         Effect::ClearRecoverySnapshot { path, .. } if *path == rs
     )));
+}
+
+#[test]
+fn save_finished_then_close_reports_the_real_index_and_resets_tab_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let c = ctx(&caps, None);
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let binding = editor_binding(ViewerPanel::Files, id, &rs);
+    let _ = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::Ready {
+                    read_only: false,
+                    language: "rust".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let _ = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::DocumentChanged {
+                    revision: generation,
+                    length: 24,
+                    changes: Vec::new(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let idx = st.pane.tabs().iter().position(|t| t.id == id).unwrap();
+    let _ = update(&mut st, Message::CloseTab(idx), &c);
+    assert!(st.pane.has_pending_close(id));
+    st.tab_first = 3;
+    let old_len = st.pane.tabs().len();
+    let fx = update(
+        &mut st,
+        Message::SaveFinished {
+            tab_id: id,
+            revision: generation,
+            result: Ok(()),
+        },
+        &c,
+    );
+    assert!(st.pane.tabs().iter().all(|t| t.id != id), "保存回执后关掉");
+    assert_eq!(st.tab_first, 0, "关页签后 tab_first 归零");
+    let closed = fx
+        .iter()
+        .find_map(|e| match e {
+            Effect::TabClosed { index, old_len } => Some((*index, *old_len)),
+            _ => None,
+        })
+        .expect("应报 TabClosed");
+    assert_eq!(closed, (idx, old_len), "TabClosed 不能是 0/0 哑值");
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::PersistTabs { project_id: 7, .. })),
+        "关页签后要持久化新状态"
+    );
+}
+
+/// 写盘在途期间用户又改了正文:旧写盘的回执不能清掉新的脏标,也不能清冲突
+/// 基线(D-I1)。
+#[test]
+fn save_finished_with_a_stale_revision_keeps_the_tab_dirty() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let mut c = ctx(&caps, None);
+    c.failures_path = dir.path().join("preview_failures.json");
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let binding = editor_binding(ViewerPanel::Files, id, &rs);
+    let changed = |rev: u64| {
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                rev,
+                EditorEvent::DocumentChanged {
+                    revision: rev,
+                    length: 24,
+                    changes: Vec::new(),
+                },
+            ),
+        })
+    };
+    let _ = update(&mut st, changed(generation), &c);
+    // 写盘发起时 revision = generation;回执前又来了一次编辑。
+    let _ = update(&mut st, changed(generation + 1), &c);
+    let _ = update(
+        &mut st,
+        Message::SaveFinished {
+            tab_id: id,
+            revision: generation,
+            result: Ok(()),
+        },
+        &c,
+    );
+    let tab = st.pane.tabs().iter().find(|t| t.id == id).unwrap();
+    assert!(tab.dirty, "旧写盘不能清掉写盘后才产生的编辑");
+
+    // 回执的 revision 追平当前 → 正常清脏。
+    let _ = update(
+        &mut st,
+        Message::SaveFinished {
+            tab_id: id,
+            revision: generation + 1,
+            result: Ok(()),
+        },
+        &c,
+    );
+    assert!(!st.pane.tabs().iter().find(|t| t.id == id).unwrap().dirty);
 }
 
 #[test]
@@ -1138,6 +1270,7 @@ fn editor_save_finished_error_sets_web_error() {
         &mut st,
         Message::SaveFinished {
             tab_id: id,
+            revision: 0,
             result: Err("disk full".into()),
         },
         &c,
@@ -1181,6 +1314,218 @@ fn editor_snapshot_writes_recovery_only_with_a_recovery_dir() {
         e,
         Effect::WriteRecoverySnapshot { tab_id, .. } if *tab_id == id
     )));
+}
+
+#[test]
+fn save_and_close_closes_even_when_the_tab_is_read_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let c = ctx(&caps, None);
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let binding = editor_binding(ViewerPanel::Files, id, &rs);
+    let _ = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::Ready {
+                    read_only: false,
+                    language: "rust".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let _ = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::DocumentChanged {
+                    revision: generation,
+                    length: 24,
+                    changes: Vec::new(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let tab = st.pane.tabs_mut().iter_mut().find(|t| t.id == id).unwrap();
+    tab.backend = Some(PreviewBackend::Code(crate::CodeBackend {
+        mode: crate::CodeMode::ReadOnly,
+        language: "rust".into(),
+    }));
+    let idx = st.pane.tabs().iter().position(|t| t.id == id).unwrap();
+    let _ = update(&mut st, Message::CloseTab(idx), &c);
+    assert!(st.pane.has_pending_close(id), "脏页签应进入保存后关闭");
+    let fx = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::SaveRequested {
+                    revision: generation,
+                    text: "fn main() {}\n".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::SaveFile { .. })),
+        "只读不允许写盘"
+    );
+    assert!(
+        st.pane.tabs().iter().all(|t| t.id != id),
+        "只读页签也必须关掉"
+    );
+    assert!(!st.pane.has_pending_close(id));
+    assert!(fx.iter().any(|e| matches!(e, Effect::TabClosed { .. })));
+}
+
+#[test]
+fn save_and_close_closes_even_when_there_is_a_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let c = ctx(&caps, None);
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let binding = editor_binding(ViewerPanel::Files, id, &rs);
+    let _ = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::Ready {
+                    read_only: false,
+                    language: "rust".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let _ = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::DocumentChanged {
+                    revision: generation,
+                    length: 24,
+                    changes: Vec::new(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let idx = st.pane.tabs().iter().position(|t| t.id == id).unwrap();
+    let _ = update(&mut st, Message::CloseTab(idx), &c);
+    assert!(st.pane.has_pending_close(id));
+    let tab = st.pane.tabs_mut().iter_mut().find(|t| t.id == id).unwrap();
+    tab.conflict = Some(std::time::UNIX_EPOCH);
+    let fx = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::SaveRequested {
+                    revision: generation,
+                    text: "fn main() {}\n".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    assert!(!fx.iter().any(|e| matches!(e, Effect::SaveFile { .. })));
+    assert!(
+        st.pane.tabs().iter().all(|t| t.id != id),
+        "冲突页签也必须关掉"
+    );
+    assert!(!st.pane.has_pending_close(id));
+}
+
+#[test]
+fn save_and_close_closes_even_when_the_revision_is_stale() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let c = ctx(&caps, None);
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let binding = editor_binding(ViewerPanel::Files, id, &rs);
+    let _ = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::Ready {
+                    read_only: false,
+                    language: "rust".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let _ = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::DocumentChanged {
+                    revision: generation,
+                    length: 24,
+                    changes: Vec::new(),
+                },
+            ),
+        }),
+        &c,
+    );
+    let idx = st.pane.tabs().iter().position(|t| t.id == id).unwrap();
+    let _ = update(&mut st, Message::CloseTab(idx), &c);
+    assert!(st.pane.has_pending_close(id));
+    let log = update(
+        &mut st,
+        Message::Host(HostEvent::Editor {
+            binding: binding.clone(),
+            envelope: editor_event(
+                &binding,
+                generation,
+                EditorEvent::SaveRequested {
+                    revision: generation + 1,
+                    text: "stale".into(),
+                },
+            ),
+        }),
+        &c,
+    );
+    assert!(
+        !log.iter().any(|e| matches!(e, Effect::SaveFile { .. })),
+        "revision 不符不写盘"
+    );
+    assert!(
+        st.pane.tabs().iter().all(|t| t.id != id),
+        "revision 不符也必须关掉"
+    );
+    assert!(!st.pane.has_pending_close(id));
 }
 
 #[test]

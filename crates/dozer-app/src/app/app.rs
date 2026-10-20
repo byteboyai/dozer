@@ -588,6 +588,18 @@ pub(crate) fn loaded_workspace_mut(
     }
 }
 
+/// 预览页面事件该投给哪个工作区:按**绑定里的项目**取,与「当前聚焦项目」无关;
+/// 绑定项目已关闭(槽位不存在 / 仍是 `Stub`)时返回 `None`,调用方丢弃事件。
+///
+/// 抽成自由函数是为了能 headless 单测(`App` 要 daemon 连接 + winit
+/// `EventLoopProxy` 才构造得出来)。`App::host_event` 与这里共用同一条规则。
+pub(crate) fn workspace_for_host_event(
+    projects: &mut HashMap<i64, WorkspaceSlot>,
+    project_id: i64,
+) -> Option<&mut Workspace> {
+    loaded_workspace_mut(projects, project_id)
+}
+
 /// 启动恢复的纯逻辑:把盘上记的"上次开着哪些页签"(`open_projects.json`)与
 /// daemon 现在还认识的项目列表对一遍,给出该恢复成页签的项目顺序表 + 该聚焦
 /// 哪一个。

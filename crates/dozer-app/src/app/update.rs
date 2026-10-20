@@ -4234,12 +4234,27 @@ impl App {
 
     /// 预览面板的 UI 消息:交给库的 `update`,再处理需要 `App` 级状态的通知(拖拽武装、悬停清理)。
     pub(crate) fn preview_ui(&mut self, kind: PanelKind, msg: dozer_panel_preview::Message) {
+        self.preview_ui_for(None, kind, msg);
+    }
+
+    /// 预览面板消息的定向下发:`Some(project_id)` 时只投给该项目(页面事件必须
+    /// 回到它自己的工作区,不能跟着「当前聚焦项目」跑);`None` = 聚焦项目。
+    pub(crate) fn preview_ui_for(
+        &mut self,
+        project_id: Option<ProjectId>,
+        kind: PanelKind,
+        msg: dozer_panel_preview::Message,
+    ) {
         use dozer_panel_preview::Message as PM;
         let cursor = self.last_cursor;
         #[cfg(target_os = "macos")]
         if matches!(msg, PM::TabOverflowToggle { .. }) {
             // macOS:原生菜单,选中项回投 `SelectTab`。
-            let items = match self.active_workspace() {
+            let workspace = match project_id {
+                Some(id) => loaded_workspace_mut(&mut self.projects, id).map(|ws| &*ws),
+                None => self.active_workspace(),
+            };
+            let items = match workspace {
                 Some(ws) => {
                     let pane = ws.preview_pane(kind);
                     let entries: Vec<(usize, String, bool)> = pane
@@ -4267,9 +4282,14 @@ impl App {
         let avail_px = self.preview_tab_bar_avail_px(kind);
         let locale = self.locale.active_locale().to_string();
         let mut app_level = Vec::new();
-        self.with_focused_project(|ws, io| {
-            app_level = ws.preview_dispatch(kind, msg, io, &locale, avail_px);
-        });
+        match project_id {
+            Some(project_id) => self.with_project(project_id, |ws, io| {
+                app_level = ws.preview_dispatch(kind, msg, io, &locale, avail_px);
+            }),
+            None => self.with_focused_project(|ws, io| {
+                app_level = ws.preview_dispatch(kind, msg, io, &locale, avail_px);
+            }),
+        }
         self.handle_preview_app_effects(kind, app_level);
     }
 
@@ -4278,35 +4298,51 @@ impl App {
     /// (`dozer-panel-preview::update`),面板外单槽宿主仍由本 crate 处理。
     fn host_event(&mut self, event: dozer_panel_preview::host_ipc::HostEvent) {
         use dozer_panel_preview::host_ipc::HostEvent;
+        // 页面事件按**绑定里的项目**路由,不能跟着「当前聚焦项目」跑:后台项目的
+        // webview 迟到的事件若投给聚焦项目,会改错工作区(甚至改错文件)。
+        // 绑定项目已不存在(已关闭)时丢弃。
+        let Some(project) = event.project_id() else {
+            if let HostEvent::ReviewTrace(trace) = event {
+                self.update(Message::ReviewTraceWebviewEvent(trace));
+            }
+            return;
+        };
+        let project_id: ProjectId = project;
+        if loaded_workspace_mut(&mut self.projects, project_id).is_none() {
+            return;
+        }
         match event {
             HostEvent::GitLogDiff { binding, envelope } => {
                 self.update(Message::GitLogDiffWebviewEvent(binding, envelope));
             }
-            HostEvent::ReviewTrace(event) => {
-                self.update(Message::ReviewTraceWebviewEvent(event));
-            }
-            // 项目身份取自绑定(P4 之前各消息变体自己携带 binding,路由等价)。
-            HostEvent::Editor { binding, envelope } => self.preview_ui(
+            HostEvent::ReviewTrace(_) => {}
+            HostEvent::Editor { binding, envelope } => self.preview_ui_for(
+                Some(project_id),
                 binding.panel.into(),
                 dozer_panel_preview::Message::Host(HostEvent::Editor { binding, envelope }),
             ),
-            HostEvent::Json { binding, envelope } => self.preview_ui(
+            HostEvent::Json { binding, envelope } => self.preview_ui_for(
+                Some(project_id),
                 binding.panel.into(),
                 dozer_panel_preview::Message::Host(HostEvent::Json { binding, envelope }),
             ),
-            HostEvent::Tabular { binding, envelope } => self.preview_ui(
+            HostEvent::Tabular { binding, envelope } => self.preview_ui_for(
+                Some(project_id),
                 binding.panel.into(),
                 dozer_panel_preview::Message::Host(HostEvent::Tabular { binding, envelope }),
             ),
-            HostEvent::Flyfish { binding, envelope } => self.preview_ui(
+            HostEvent::Flyfish { binding, envelope } => self.preview_ui_for(
+                Some(project_id),
                 binding.panel.into(),
                 dozer_panel_preview::Message::Host(HostEvent::Flyfish { binding, envelope }),
             ),
-            HostEvent::ImageAnnotate { binding, envelope } => self.preview_ui(
+            HostEvent::ImageAnnotate { binding, envelope } => self.preview_ui_for(
+                Some(project_id),
                 binding.panel.into(),
                 dozer_panel_preview::Message::Host(HostEvent::ImageAnnotate { binding, envelope }),
             ),
-            HostEvent::PlantUml { binding, envelope } => self.preview_ui(
+            HostEvent::PlantUml { binding, envelope } => self.preview_ui_for(
+                Some(project_id),
                 binding.panel.into(),
                 dozer_panel_preview::Message::Host(HostEvent::PlantUml { binding, envelope }),
             ),
@@ -5159,6 +5195,121 @@ impl App {
                 bottom: 0.0,
             })
             .into()
+    }
+}
+
+#[cfg(test)]
+mod host_event_routing_tests {
+    use super::*;
+    use crate::app::workspace_for_host_event;
+    use crate::workspace::Workspace;
+    use dozer_core::protocol::ProjectInfo;
+
+    fn loading(id: i64) -> crate::app::WorkspaceSlot {
+        // 促成期的"加载中"占位恒有 `project: Some(_)`,与真实的已加载工作区同形。
+        crate::app::WorkspaceSlot::Loaded(Box::new(Workspace::loading_for_project(ProjectInfo {
+            id,
+            path: format!("/tmp/p{id}"),
+            name: format!("p{id}"),
+            last_active_ms: 0,
+            created_ms: 0,
+            updated_ms: 0,
+        })))
+    }
+
+    /// 页签 7 的图片 host 回 `ready` 会清掉 `web_error`,正好当作"这个工作区
+    /// 收到了自己的事件"的观测点。
+    const TAB: usize = 7;
+
+    fn give_dirty_tab(ws: &mut Workspace) {
+        let id = ws
+            .preview
+            .open_path(std::path::PathBuf::from("/tmp/p/photo.png"));
+        // `open_path` 新建的页签 id 从 1 起数;测试里统一改叫 `TAB`,两边项目同号
+        // 才复现"误投会改错工作区"的场景。
+        ws.preview
+            .tabs_mut()
+            .iter_mut()
+            .find(|t| t.id == id)
+            .expect("刚打开的页签")
+            .id = TAB;
+        let tab = ws
+            .preview
+            .tabs_mut()
+            .iter_mut()
+            .find(|t| t.id == TAB)
+            .expect("改号后的页签");
+        tab.web_error = Some("before".into());
+    }
+
+    fn error_of(
+        projects: &std::collections::HashMap<i64, crate::app::WorkspaceSlot>,
+        project: i64,
+        tab_id: usize,
+    ) -> Option<String> {
+        match projects.get(&project) {
+            Some(crate::app::WorkspaceSlot::Loaded(ws)) => ws
+                .preview
+                .tabs()
+                .iter()
+                .find(|t| t.id == tab_id)
+                .and_then(|t| t.web_error.clone()),
+            _ => None,
+        }
+    }
+
+    /// 后台项目(1)的页面事件不能按「当前聚焦项目」(2)路由:两边第一个页签
+    /// 必然同号,误投会改错工作区的状态。
+    #[test]
+    fn host_event_for_a_project_that_is_not_focused_applies_to_its_own_state() {
+        let mut projects = std::collections::HashMap::new();
+        for id in [1, 2] {
+            let mut slot = loading(id);
+            if let crate::app::WorkspaceSlot::Loaded(ws) = &mut slot {
+                give_dirty_tab(ws);
+            }
+            projects.insert(id, slot);
+        }
+        // 模拟 `App::host_event` 的路由:绑定项目 = 1(聚焦的是 2)。
+        let ws = workspace_for_host_event(&mut projects, 1).expect("1 已加载");
+        ws.preview
+            .apply_image_annotate_event(TAB, dozer_panel_preview::ImageAnnotateEvent::Ready);
+        assert_eq!(error_of(&projects, 1, TAB), None, "事件落到它自己的项目");
+        assert_eq!(
+            error_of(&projects, 2, TAB),
+            Some("before".into()),
+            "聚焦项目不能被后台项目的迟到事件改到"
+        );
+    }
+
+    /// 绑定项目已关闭:事件丢弃,不投给任何仍在的项目,也不 panic。
+    #[test]
+    fn host_event_for_a_removed_project_is_dropped() {
+        let mut projects = std::collections::HashMap::new();
+        let mut slot = loading(1);
+        if let crate::app::WorkspaceSlot::Loaded(ws) = &mut slot {
+            give_dirty_tab(ws);
+        }
+        projects.insert(1, slot);
+        // 未促成过的 `Stub` 也拿不到工作区。
+        projects.insert(
+            9,
+            crate::app::WorkspaceSlot::Stub {
+                info: ProjectInfo {
+                    id: 9,
+                    path: "/tmp/p9".into(),
+                    name: "p9".into(),
+                    last_active_ms: 0,
+                    created_ms: 0,
+                    updated_ms: 0,
+                },
+                activity: None,
+            },
+        );
+        assert!(workspace_for_host_event(&mut projects, 9).is_none());
+        assert!(workspace_for_host_event(&mut projects, 42).is_none());
+        // 被丢弃的事件没有波及仍在的项目。
+        assert_eq!(error_of(&projects, 1, TAB), Some("before".into()));
     }
 }
 

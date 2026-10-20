@@ -117,9 +117,10 @@ pub enum Message {
     // —— 页面事件(P4 进库)——
     /// 一条已由 `host_ipc::classify_ipc` 解析并校验归属的 webview 事件。
     Host(crate::host_ipc::HostEvent),
-    /// `Effect::SaveFile` 的落盘回执。
+    /// `Effect::SaveFile` 的落盘回执。`revision` 是发起写盘时的页签 revision。
     SaveFinished {
         tab_id: usize,
+        revision: u64,
         result: Result<(), String>,
     },
 }

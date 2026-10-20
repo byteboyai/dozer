@@ -60,6 +60,21 @@ impl AllowedFiles {
         self.inner.clear();
     }
 
+    /// 撤销**这个前缀目录下**的所有登记(项目关闭 / 切走时清掉它打开过的文件)。
+    /// 白名单只增不减会让加载过的项目永久可读,切走项目后必须回收。
+    pub fn remove_under(&mut self, dir: &Path) {
+        let base = clean_allowed_path(dir);
+        let stale: Vec<PathBuf> = self
+            .inner
+            .iter()
+            .filter(|p| p.starts_with(&base))
+            .cloned()
+            .collect();
+        for p in stale {
+            self.inner.remove(&p);
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
@@ -461,6 +476,25 @@ fn serve(assets_root: &Path, allowed: &AllowedFiles, rest: &str) -> ProtocolRepl
     }
 
     serve_vendored(assets_root, path)
+}
+
+#[cfg(test)]
+mod not_found_tests {
+    use super::not_found;
+
+    /// 404 回执必须是固定短体:带上请求路径就等于把宿主绝对路径回显给
+    /// webview 里跑的页面(审查项 D-I2)。
+    #[test]
+    fn not_found_body_is_a_constant_and_never_echoes_the_path() {
+        let a = not_found();
+        let b = not_found();
+        assert_eq!(a.status, 404);
+        assert_eq!(a.mime, "text/plain");
+        assert_eq!(a.body, b"not found");
+        assert_eq!(b.status, a.status);
+        assert_eq!(b.body, a.body);
+        assert!(!String::from_utf8_lossy(&a.body).contains('/'));
+    }
 }
 
 #[cfg(test)]
@@ -1373,6 +1407,26 @@ mod allowed_files_tests {
         allowed.insert("/base/b.txt");
         allowed.clear();
         assert!(allowed.is_empty());
+    }
+
+    #[test]
+    fn remove_under_drops_only_that_project() {
+        let mut allowed: AllowedFiles = [
+            PathBuf::from("/p1/a.txt"),
+            PathBuf::from("/p1/sub/b.png"),
+            PathBuf::from("/p10/c.txt"),
+            PathBuf::from("/p2/d.md"),
+        ]
+        .into_iter()
+        .collect();
+        allowed.remove_under(Path::new("/p1"));
+        assert!(!allowed.contains(Path::new("/p1/a.txt")));
+        assert!(!allowed.contains(Path::new("/p1/sub/b.png")));
+        assert!(
+            allowed.contains(Path::new("/p10/c.txt")),
+            "同名前缀的兄弟项目不能被误删"
+        );
+        assert!(allowed.contains(Path::new("/p2/d.md")));
     }
 
     #[test]

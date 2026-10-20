@@ -242,9 +242,11 @@ pub fn update(state: &mut PreviewPanelState, msg: Message, ctx: &UpdateCtx<'_>) 
                 .apply_plantuml_load_error(tab_id, generation, &error, ctx.locale),
         },
         Message::Host(event) => crate::host_update::host_event(state, event, ctx, &mut fx),
-        Message::SaveFinished { tab_id, result } => {
-            crate::host_update::save_finished(state, tab_id, result, ctx, &mut fx)
-        }
+        Message::SaveFinished {
+            tab_id,
+            revision,
+            result,
+        } => crate::host_update::save_finished(state, ctx, tab_id, revision, result, &mut fx),
     }
     fx
 }

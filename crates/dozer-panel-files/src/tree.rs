@@ -4,8 +4,8 @@
 //! 几何量(行高、区域间距、字号、行高倍数、光标与窗口尺寸)全部由产品经
 //! `adapter::PanelDisplay` 注入——库不认识产品的主题与窗口状态。
 
-use crate::git_status;
 use crate::fs::TreeRow;
+use crate::git_status;
 use byteui::interaction::icons;
 use iced_widget::core::{Border, Element, Length, Padding};
 use iced_widget::{column, container, row, text};
