@@ -4,7 +4,6 @@
 //! 同根第二个实例必须非零退出且不碰数据、app host 关闭时对 AppRequest
 //! 回 Unavailable。
 
-use dozer_client::Client;
 use dozer_core::protocol::{Reply, Request, decode_line, encode_line};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -75,7 +74,7 @@ async fn rpc(sock: &std::path::Path, req: Request) -> anyhow::Result<Reply> {
         .next_line()
         .await?
         .ok_or_else(|| anyhow::anyhow!("daemon 断开"))?;
-    Ok(decode_line(&line)?)
+    decode_line(&line)
 }
 
 /// 订阅流:attach 之后读若干行(带超时),收集是否收到任何输出。

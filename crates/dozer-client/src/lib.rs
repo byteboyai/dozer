@@ -150,7 +150,7 @@ impl Client {
                 "daemon 断开",
             ))
         })?;
-        Ok(decode_line(&line)?)
+        decode_line(&line)
     }
 
     async fn roundtrip(&self, req: &Request) -> Result<Reply> {
