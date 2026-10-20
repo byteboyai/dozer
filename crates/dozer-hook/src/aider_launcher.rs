@@ -48,7 +48,7 @@ pub fn build_aider_command(
 /// `dozer-hook launch aider` 入口：拉起 aider、上报生命周期、后台 watcher、
 /// 最后同步 transcript。返回 aider 退出码（launcher 自身不吞子进程退出码）。
 pub fn launch(extra_args: &[String]) -> i32 {
-    let Ok(session_id) = std::env::var("DOZER_SESSION_ID") else {
+    let Ok(session_id) = std::env::var(dozer_core::paths::session_env()) else {
         eprintln!("dozer-hook launch aider: 缺少 DOZER_SESSION_ID，拒绝进入集成模式");
         return 1;
     };
@@ -130,7 +130,7 @@ pub fn launch(extra_args: &[String]) -> i32 {
 /// Markdown → canonical，再发 Stop。缺任何受控环境变量时静默退出 0（spec §6：
 /// notification 子命令恒退出 0，不阻塞 Aider）。
 pub fn handle_stop() {
-    let Ok(session_id) = std::env::var("DOZER_SESSION_ID") else {
+    let Ok(session_id) = std::env::var(dozer_core::paths::session_env()) else {
         return;
     };
     let (Some(chat), Some(input), Some(canonical), Some(bridge)) = (

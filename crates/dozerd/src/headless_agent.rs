@@ -284,7 +284,7 @@ pub(crate) fn build_command_parts(
             // Transcripts are untrusted input. This mode omits every native,
             // skill, memory, dispatch, and MCP tool from the model request.
             cmd.env("V8AGENT_NO_TOOLS", "1");
-            cmd.env_remove("DOZER_SESSION_ID");
+            cmd.env_remove(dozer_core::paths::session_env());
             let stdin_text = format!("{instruction}\n\n{data}");
             Some((cmd, Some(stdin_text.into_bytes())))
         }
@@ -299,7 +299,7 @@ pub(crate) fn build_command_parts(
                 .arg("--quiet")
                 .arg("--text")
                 .arg(format!("{instruction}\n\n{data}"));
-            cmd.env_remove("DOZER_SESSION_ID");
+            cmd.env_remove(dozer_core::paths::session_env());
             Some((cmd, None))
         }
         AgentKind::Aider => {
@@ -318,7 +318,7 @@ pub(crate) fn build_command_parts(
                 .arg("--no-pretty")
                 .arg("--no-auto-commits")
                 .arg("--no-fancy-input");
-            cmd.env_remove("DOZER_SESSION_ID");
+            cmd.env_remove(dozer_core::paths::session_env());
             cmd.env_remove("AIDER_NOTIFICATIONS_COMMAND");
             cmd.env_remove("DOZER_AIDER_CHAT_HISTORY");
             cmd.env_remove("DOZER_AIDER_INPUT_HISTORY");
@@ -337,7 +337,7 @@ pub(crate) fn build_command_parts(
                 .arg("read-only")
                 .arg("--skip-git-repo-check")
                 .arg(format!("{instruction}\n\n{data}"));
-            cmd.env_remove("DOZER_SESSION_ID");
+            cmd.env_remove(dozer_core::paths::session_env());
             Some((cmd, None))
         }
         // L1 不做 headless(见 `bare_program_name`)。
@@ -350,7 +350,7 @@ pub(crate) fn build_command_parts(
 /// 碰项目文件;这次必须要,否则 agent 编辑的是 dozerd 进程自己的 cwd)
 /// 和 `DOZER_SESSION_ID` 环境变量(让 agent 侧 `dozer-mcp`/v8agent-cli 的
 /// MCP 挂载识别到正确的 session,agent 才能调 `toggle_todo` 之类工具)。
-/// V8agent 分支**不**像 `build_command` 那样 `env_remove("DOZER_SESSION_ID")`
+/// V8agent 分支**不**像 `build_command` 那样 `env_remove(dozer_core::paths::session_env())`
 /// ——总结场景故意不让 v8agent-cli 挂 MCP,这次场景反过来需要它挂上。
 fn build_task_command(
     agent: AgentKind,
@@ -363,7 +363,7 @@ fn build_task_command(
         AgentKind::Claude => {
             let mut cmd = tokio::process::Command::new(program);
             cmd.current_dir(project_dir)
-                .env("DOZER_SESSION_ID", session_id)
+                .env(dozer_core::paths::session_env(), session_id)
                 .arg("-p")
                 .arg(prompt)
                 .arg("--dangerously-skip-permissions");
@@ -372,7 +372,7 @@ fn build_task_command(
         AgentKind::Codebuddy => {
             let mut cmd = tokio::process::Command::new(program);
             cmd.current_dir(project_dir)
-                .env("DOZER_SESSION_ID", session_id)
+                .env(dozer_core::paths::session_env(), session_id)
                 .arg("-p")
                 .arg(prompt)
                 .arg("-y");
@@ -381,7 +381,7 @@ fn build_task_command(
         AgentKind::Opencode => {
             let mut cmd = tokio::process::Command::new(program);
             cmd.current_dir(project_dir)
-                .env("DOZER_SESSION_ID", session_id)
+                .env(dozer_core::paths::session_env(), session_id)
                 .arg("run")
                 .arg(prompt);
             Some((cmd, None))
@@ -389,7 +389,7 @@ fn build_task_command(
         AgentKind::V8agent => {
             let mut cmd = tokio::process::Command::new(program);
             cmd.current_dir(project_dir)
-                .env("DOZER_SESSION_ID", session_id)
+                .env(dozer_core::paths::session_env(), session_id)
                 .env("V8AGENT_ONESHOT", "1");
             Some((cmd, Some(prompt.as_bytes().to_vec())))
         }
@@ -399,7 +399,7 @@ fn build_task_command(
             // transcript。没有 `--no-session`——任务处理要能被 Dozer 感知。
             let mut cmd = tokio::process::Command::new(program);
             cmd.current_dir(project_dir)
-                .env("DOZER_SESSION_ID", session_id)
+                .env(dozer_core::paths::session_env(), session_id)
                 .arg("run")
                 .arg("--quiet")
                 .arg("--text")
@@ -414,7 +414,7 @@ fn build_task_command(
             // ——`record_task_turns` 是 Todo 唯一落库路径。
             let mut cmd = tokio::process::Command::new(program);
             cmd.current_dir(project_dir)
-                .env("DOZER_SESSION_ID", session_id)
+                .env(dozer_core::paths::session_env(), session_id)
                 .arg("--message")
                 .arg(prompt)
                 .arg("--yes-always")
@@ -734,11 +734,11 @@ mod tests {
             envs.iter()
                 .any(|(k, v)| *k == "V8AGENT_NO_TOOLS" && *v == Some(std::ffi::OsStr::new("1")))
         );
-        // DOZER_SESSION_ID 显式清掉,避免 v8agent-cli 误挂载 dozer-mcp
+        // dozer_core::paths::session_env() 显式清掉,避免 v8agent-cli 误挂载 dozer-mcp
         // (headless 总结走 stdout 解析,不需要 MCP,见 spec)。
         assert!(
             envs.iter()
-                .any(|(k, v)| *k == "DOZER_SESSION_ID" && v.is_none())
+                .any(|(k, v)| *k == dozer_core::paths::session_env() && v.is_none())
         );
         assert!(stdin.is_some());
     }
@@ -772,8 +772,8 @@ mod tests {
         let cleared = cmd
             .as_std()
             .get_envs()
-            .any(|(k, v)| k.to_str() == Some("DOZER_SESSION_ID") && v.is_none());
-        assert!(cleared, "总结场景移除 DOZER_SESSION_ID");
+            .any(|(k, v)| k.to_str() == Some(dozer_core::paths::session_env()) && v.is_none());
+        assert!(cleared, "总结场景移除 dozer_core::paths::session_env()");
     }
 
     fn turn(role: &str, content: &str) -> TurnRecord {
@@ -863,17 +863,17 @@ mod tests {
             .get_envs()
             .filter_map(|(k, v)| Some((k.to_str()?.to_string(), v?.to_str()?.to_string())))
             .collect();
-        assert_eq!(envs.get("DOZER_SESSION_ID"), Some(&"sess-1".to_string()));
+        assert_eq!(envs.get(dozer_core::paths::session_env()), Some(&"sess-1".to_string()));
     }
 
     #[test]
     fn build_task_command_v8agent_keeps_session_env_but_plain_command_clears_it() {
-        // 总结变体要清 DOZER_SESSION_ID(防挂 MCP),任务变体要保留。
+        // 总结变体要清 dozer_core::paths::session_env()(防挂 MCP),任务变体要保留。
         let (plain_cmd, _) = build_command(AgentKind::V8agent, "v8agent", "x").unwrap();
         let cleared = plain_cmd
             .as_std()
             .get_envs()
-            .any(|(k, v)| k.to_str() == Some("DOZER_SESSION_ID") && v.is_none());
+            .any(|(k, v)| k.to_str() == Some(dozer_core::paths::session_env()) && v.is_none());
         assert!(cleared);
         let (task_cmd, _) = build_task_command(
             AgentKind::V8agent,
@@ -888,7 +888,7 @@ mod tests {
             .get_envs()
             .filter_map(|(k, v)| Some((k.to_str()?.to_string(), v?.to_str()?.to_string())))
             .collect();
-        assert_eq!(envs.get("DOZER_SESSION_ID"), Some(&"sess-1".to_string()));
+        assert_eq!(envs.get(dozer_core::paths::session_env()), Some(&"sess-1".to_string()));
     }
 
     #[tokio::test]
@@ -944,8 +944,8 @@ mod tests {
         let cleared = cmd
             .as_std()
             .get_envs()
-            .any(|(k, v)| k.to_str() == Some("DOZER_SESSION_ID") && v.is_none());
-        assert!(cleared, "总结场景应移除 DOZER_SESSION_ID");
+            .any(|(k, v)| k.to_str() == Some(dozer_core::paths::session_env()) && v.is_none());
+        assert!(cleared, "总结场景应移除 dozer_core::paths::session_env()");
     }
 
     #[test]
@@ -968,7 +968,7 @@ mod tests {
             .filter_map(|(k, v)| Some((k.to_str()?.to_string(), v?.to_str()?.to_string())))
             .collect();
         assert_eq!(
-            envs.get("DOZER_SESSION_ID"),
+            envs.get(dozer_core::paths::session_env()),
             Some(&"sess-1".to_string()),
             "Todo 派发保留 DOZER_SESSION_ID 让 hooks 记录状态"
         );
@@ -1009,8 +1009,8 @@ mod tests {
         let cleared = cmd
             .as_std()
             .get_envs()
-            .any(|(k, v)| k.to_str() == Some("DOZER_SESSION_ID") && v.is_none());
-        assert!(cleared, "总结场景移除 DOZER_SESSION_ID");
+            .any(|(k, v)| k.to_str() == Some(dozer_core::paths::session_env()) && v.is_none());
+        assert!(cleared, "总结场景移除 dozer_core::paths::session_env()");
         let bridge_env_cleared = cmd
             .as_std()
             .get_envs()

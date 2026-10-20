@@ -299,7 +299,7 @@ async fn run_isolated_capture(
     }
     // 统一隔离层:清 session/MCP 关联环境变量(与 build_command 里各家分支
     // 的清理互为冗余,这里再兜底一次,防某家适配器漏清)。
-    cmd.env_remove("DOZER_SESSION_ID");
+    cmd.env_remove(dozer_core::paths::session_env());
     cmd.env_remove("DOZER_AIDER_CANONICAL_TRANSCRIPT");
     cmd.env_remove("DOZER_AIDER_BRIDGE_STATE");
     cmd.env_remove("DOZER_AIDER_CHAT_HISTORY");

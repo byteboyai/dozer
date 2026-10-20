@@ -189,6 +189,13 @@ pub fn logs_dir() -> PathBuf {
     product().logs_dir()
 }
 
+/// 进程当前产品的会话环境变量名(如 `DOZER_SESSION_ID`)。
+/// 除 `ProductId::dozer()` 的定义与测试外,代码里不得硬编码变量名
+/// (守护测试 no_session_env_literal 守护这一点)。
+pub fn session_env() -> &'static str {
+    product().session_env
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

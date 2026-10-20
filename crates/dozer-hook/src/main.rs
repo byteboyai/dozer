@@ -107,7 +107,7 @@ fn resolve_event(agent: AgentKind, event_arg: Option<&str>) -> Option<String> {
 /// （spec P1e 错误处理：dozerd 不在/超时/畸形输入一律吞掉）。
 fn forward(agent: AgentKind, event_arg: Option<&str>) {
     // 非 Dozer 会话（无注入的会话 id）：与 dozerd 无关，直接退出
-    let Ok(session_id) = std::env::var("DOZER_SESSION_ID") else {
+    let Ok(session_id) = std::env::var(dozer_core::paths::session_env()) else {
         return;
     };
     let mut input = String::new();

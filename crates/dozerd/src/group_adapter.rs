@@ -96,7 +96,7 @@ pub(crate) fn build_turn_command(
         AgentKind::Claude => {
             let mut cmd = tokio::process::Command::new(program);
             cmd.current_dir(project_dir)
-                .env_remove("DOZER_SESSION_ID")
+                .env_remove(dozer_core::paths::session_env())
                 .arg("-p")
                 .arg(CLAUDE_STDIN_POINTER)
                 .arg("--no-session-persistence")
@@ -106,7 +106,7 @@ pub(crate) fn build_turn_command(
         AgentKind::Codex => {
             let mut cmd = tokio::process::Command::new(program);
             cmd.current_dir(project_dir)
-                .env_remove("DOZER_SESSION_ID")
+                .env_remove(dozer_core::paths::session_env())
                 .arg("exec")
                 .arg("--ephemeral")
                 .arg("--sandbox")
@@ -285,7 +285,7 @@ mod tests {
         let cleared = cmd
             .as_std()
             .get_envs()
-            .any(|(k, v)| k.to_str() == Some("DOZER_SESSION_ID") && v.is_none());
+            .any(|(k, v)| k.to_str() == Some(dozer_core::paths::session_env()) && v.is_none());
         assert!(cleared);
     }
 

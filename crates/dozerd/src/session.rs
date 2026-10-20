@@ -96,7 +96,7 @@ impl Session {
         ] {
             cmd.env_remove(key);
         }
-        cmd.env("DOZER_SESSION_ID", &id);
+        cmd.env(dozer_core::paths::session_env(), &id);
         // zsh 会话注入 OSC 7/133 发射端（spec P1e D2；失败仅降级不阻断 spawn）
         if crate::shell_integration::should_inject(&spec.command) {
             match crate::shell_integration::ensure_zdotdir() {
@@ -405,7 +405,9 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_injects_dozer_session_id_env() {
-        let s = Session::spawn(spec("echo id=$DOZER_SESSION_ID; sleep 5")).unwrap();
+        // shell 里要展开的是环境变量本身,Rust 侧只负责把变量名拼进去
+        let script = format!("echo id=${}; sleep 5", dozer_core::paths::session_env());
+        let s = Session::spawn(spec(&script)).unwrap();
         let needle = format!("id={}", s.id());
         assert!(
             wait_contains(&s, needle.as_bytes()).await,

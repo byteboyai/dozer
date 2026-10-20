@@ -570,7 +570,7 @@ impl DozerMcpServer {
 }
 
 pub async fn run() -> anyhow::Result<()> {
-    let session_id = std::env::var("DOZER_SESSION_ID").map_err(|_| {
+    let session_id = std::env::var(dozer_core::paths::session_env()).map_err(|_| {
         anyhow::anyhow!("缺少 DOZER_SESSION_ID：dozer-mcp 只能在 dozer 拉起的会话里跑")
     })?;
     let client = Client::new(dozer_core::paths::socket_path());
