@@ -1635,3 +1635,109 @@ fn session_stream_golden() {
         .expect("缺少会话字节流黄金文件:先用 UPDATE_GOLDEN=1 生成并提交");
     assert!(actual == expected, "会话字节流与黄金不一致(抽库不得改变它)");
 }
+
+#[test]
+fn card_model_matches_the_legacy_text_for_every_combination() {
+    use crate::workspace::view::{CardCtx, TaskTitleSource, card_model};
+    use dozer_core::protocol::AgentState;
+    use iced_widget::core::Color;
+
+    struct Titles(Option<&'static str>);
+    impl TaskTitleSource for Titles {
+        fn task_title_for_session(&self, _session_id: &str) -> Option<String> {
+            self.0.map(str::to_string)
+        }
+    }
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut tab = make_test_tab(&rt, "s1", AgentKind::Claude);
+    tab.agent_state = AgentState::Idle;
+
+    // (llm_model, permission_mode, work, branch, dirty, override, project_dirty,
+    //  expected title, expected work line)
+    let cases = [
+        (
+            Some("claude-sonnet-5"),
+            Some("plan"),
+            Some("task"),
+            Some("main"),
+            false,
+            None,
+            false,
+            "claude (Sonnet 5, plan)",
+            "task  @main",
+        ),
+        (
+            Some("claude-sonnet-5"),
+            None,
+            None,
+            Some("main"),
+            false,
+            None,
+            false,
+            "claude (Sonnet 5)",
+            "@main",
+        ),
+        (
+            None,
+            Some("auto"),
+            Some("任务"),
+            Some("main"),
+            true,
+            None,
+            false,
+            "claude (auto)",
+            "任务  @main(Uncommitted)",
+        ),
+        (None, None, None, None, false, None, false, "claude", "@—"),
+        (
+            None,
+            None,
+            Some("task"),
+            Some("main"),
+            false,
+            Some(WorkspaceGitInfo {
+                branch: Some("feat".into()),
+                dirty: true,
+            }),
+            false,
+            "claude",
+            "task  @feat(Uncommitted)",
+        ),
+    ];
+
+    for (llm, mode, task, branch, dirty, override_info, project_dirty, want_title, want_work) in
+        cases
+    {
+        tab.llm_model = llm.map(str::to_string);
+        tab.permission_mode = mode.map(str::to_string);
+        tab.last_activity = task.map(str::to_string);
+        tab.workspace_override = override_info.clone();
+        let ctx = CardCtx {
+            titles: &Titles(None),
+            project_branch: branch,
+            project_dirty: project_dirty || dirty,
+        };
+        let m = card_model(&tab, false, &ctx, "en");
+        assert_eq!(m.title, want_title, "{llm:?}/{mode:?}");
+        assert_eq!(
+            m.work_line, want_work,
+            "{task:?}/{branch:?}/{override_info:?}"
+        );
+        assert!(!m.active);
+        let _ = Color::WHITE;
+    }
+
+    // 任务标题优先于 transcript 最后一句;两者都没有时只显示分支。
+    tab.workspace_override = None;
+    tab.last_activity = Some("from transcript".into());
+    let ctx = CardCtx {
+        titles: &Titles(Some("from todo")),
+        project_branch: Some("main"),
+        project_dirty: true,
+    };
+    let m = card_model(&tab, true, &ctx, "zh-CN");
+    assert_eq!(m.work_line, "from todo  @main(Uncommitted)");
+    assert_eq!(m.status, "空闲");
+    assert!(m.active);
+}

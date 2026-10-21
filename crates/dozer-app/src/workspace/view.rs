@@ -11,10 +11,10 @@ use crate::theme::terminal_font;
 use crate::ui_text::text;
 use byteui::interaction::icons;
 use byteui::interaction::icons::IconKind;
-use dozer_core::protocol::AgentKind;
+use dozer_core::protocol::{AgentKind, AgentState};
 use dozer_panel_preview::ViewCtx;
 use iced_widget::core::text::LineHeight;
-use iced_widget::core::{Border, Element, Length, Padding};
+use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::{Scrollable, button, column, container, row, scrollable};
 
 use super::*;
@@ -88,6 +88,95 @@ pub(crate) fn group_tabs_by_agent(tabs: &[SessionTab]) -> Vec<(AgentKind, Vec<us
             (!idxs.is_empty()).then_some((kind, idxs))
         })
         .collect()
+}
+
+/// 卡片数据源:任务标题反查(S6c-2 抽出的可测接缝;产品实现见
+/// `host_adapters::agent_panel`)。
+pub(crate) trait TaskTitleSource {
+    fn task_title_for_session(&self, session_id: &str) -> Option<String>;
+}
+
+/// 卡片渲染上下文:除 tab 自身字段外,卡片文本只依赖这三项。
+pub(crate) struct CardCtx<'a> {
+    pub titles: &'a dyn TaskTitleSource,
+    pub project_branch: Option<&'a str>,
+    pub project_dirty: bool,
+}
+
+/// 卡片纯数据(可测):标题、工作行、状态文案、状态点颜色、是否选中。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CardModel {
+    pub title: String,
+    pub work_line: String,
+    pub status: String,
+    pub dot: Color,
+    pub active: bool,
+}
+
+/// 标题:`"{title} ({model}, {mode})"`(只有一项只带那一项,都无则无括号)。
+pub(crate) fn card_title(
+    agent: AgentKind,
+    cwd: Option<&std::path::Path>,
+    fallback: &str,
+    llm_model: Option<&str>,
+    permission_mode: Option<&str>,
+) -> String {
+    let model_label = llm_model.map(format_model_label);
+    let llm_mode_value = match (&model_label, permission_mode) {
+        (Some(m), Some(mo)) => Some(format!("{m}, {mo}")),
+        (Some(m), None) => Some(m.clone()),
+        (None, Some(mo)) => Some(mo.to_string()),
+        (None, None) => None,
+    };
+    let title = tab_title(agent, cwd, fallback);
+    match llm_mode_value {
+        Some(v) => format!("{title} ({v})"),
+        None => title,
+    }
+}
+
+/// 工作行:`"{work}  @{branch}"`;`work` 缺省只有 `@{branch}`;脏标后缀
+/// `(Uncommitted)`;无分支为 `—`。
+pub(crate) fn work_line(work: Option<&str>, branch: Option<&str>, dirty: bool) -> String {
+    let workspace_value = match branch {
+        Some(b) if dirty => format!("{b}(Uncommitted)"),
+        Some(b) => b.to_string(),
+        None => "—".to_string(),
+    };
+    match work {
+        Some(w) => format!("{w}  @{workspace_value}"),
+        None => format!("@{workspace_value}"),
+    }
+}
+
+/// 把 tab + 上下文组装成卡片纯数据。
+pub(crate) fn card_model(
+    tab: &SessionTab,
+    active: bool,
+    ctx: &CardCtx<'_>,
+    locale: &str,
+) -> CardModel {
+    let work = ctx
+        .titles
+        .task_title_for_session(&tab.info.id)
+        .or_else(|| tab.last_activity.clone());
+    let (branch, dirty) = match &tab.workspace_override {
+        Some(w) => (w.branch.as_deref(), w.dirty),
+        None => (ctx.project_branch, ctx.project_dirty),
+    };
+    CardModel {
+        title: card_title(
+            tab.agent,
+            tab.cwd.as_deref(),
+            &tab.info.name,
+            tab.llm_model.as_deref(),
+            tab.permission_mode.as_deref(),
+        ),
+        work_line: work_line(work.as_deref(), branch, dirty),
+        status: agent_state_label(tab.agent_state, locale),
+        dot: dot_color(tab.agent_state, tab.alive),
+        active,
+    }
 }
 
 /// Agent 列表面板(右面板区"Agent"视图的列表侧):按 `AgentKind` 分组展示
@@ -169,48 +258,26 @@ pub(crate) fn agent_card<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tab = &ws.tabs[idx];
     let active = idx == ws.active;
-
-    let model_label = tab.llm_model.as_deref().map(format_model_label);
-    let mode_label = tab.permission_mode.as_deref();
-    let llm_mode_value = match (&model_label, mode_label) {
-        (Some(m), Some(mo)) => Some(format!("{m}, {mo}")),
-        (Some(m), None) => Some(m.clone()),
-        (None, Some(mo)) => Some(mo.to_string()),
-        (None, None) => None,
+    let ctx = CardCtx {
+        titles: &ws.todo,
+        project_branch: ws.project_panel.branch(),
+        project_dirty: ws.project_panel.dirty(),
     };
-    let title = tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name);
-    let title_text = match &llm_mode_value {
-        Some(v) => format!("{title} ({v})"),
-        None => title,
-    };
+    let model = card_model(tab, active, &ctx, locale);
 
     let mut lines = column![
-        text(title_text)
+        text(model.title)
             .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream),
     ]
     .spacing(4);
 
-    let work_content = ws
-        .todo
-        .task_title_for_session(&tab.info.id)
-        .map(str::to_string)
-        .or_else(|| tab.last_activity.clone());
-
-    let (branch, dirty) = match &tab.workspace_override {
-        Some(w) => (w.branch.as_deref(), w.dirty),
-        None => (ws.project_panel.branch(), ws.project_panel.dirty()),
-    };
-    lines = lines.push(work_content_and_workspace_row(
-        work_content.as_deref(),
-        branch,
-        dirty,
-    ));
+    lines = lines.push(work_content_and_workspace_row(model.work_line));
 
     lines = lines.push(
         row![
-            byteui::feedback::status::dot(dot_color(tab.agent_state, tab.alive)),
-            text(agent_state_label(tab.agent_state, locale))
+            byteui::feedback::status::dot(model.dot),
+            text(model.status)
                 .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().dim),
         ]
@@ -240,20 +307,9 @@ pub(crate) fn agent_card<'a>(
 /// 里分支切换菜单当前分支带脏标时的既有文案(`n.push_str("(Uncommitted)")`,
 /// 见该文件约第 1409 行)保持同一措辞,不新造一套脏标文案。
 pub(crate) fn work_content_and_workspace_row(
-    work_content: Option<&str>,
-    branch: Option<&str>,
-    dirty: bool,
+    line: String,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let workspace_value = match branch {
-        Some(b) if dirty => format!("{b}(Uncommitted)"),
-        Some(b) => b.to_string(),
-        None => "—".to_string(),
-    };
-    let value = match work_content {
-        Some(w) => format!("{w}  @{workspace_value}"),
-        None => format!("@{workspace_value}"),
-    };
-    text(value)
+    text(line)
         .size(byteui::theme::font::caption())
         .color(byteui::theme::color::current().dim)
         // 工作内容可能是无空格长串(如粘贴的临时文件路径),默认按词换行会外溢。
@@ -935,5 +991,12 @@ mod tests {
             r.entries = Vec::new();
             assert_eq!(review_pane_state(Some(&r)), ReviewPaneState::Ready);
         }
+    }
+}
+
+impl TaskTitleSource for crate::extensions::todo::WorkspaceState {
+    fn task_title_for_session(&self, session_id: &str) -> Option<String> {
+        crate::extensions::todo::WorkspaceState::task_title_for_session(self, session_id)
+            .map(str::to_string)
     }
 }
