@@ -56,6 +56,9 @@ SRC_ROOTS = [
     "crates/dozer-panel-todo/src",
     "crates/dozer-panel-project/src",
     "crates/dozer-panel-todo/web",
+    # 共享终端控件库(S6b):当前没有可本地化文案,登记进来是为了让日后
+    # 新增的 UI 文案仍被扫描到(见 OWNER_RULES)。
+    "crates/dozer-panel-term/src",
     "crates/dozer-preview-core/src",
     "crates/dozerd/src",
     "crates/dozer-core/src",
@@ -77,6 +80,8 @@ OWNER_RULES = [
     ("crates/dozer-panel-usage/", "dozer.usage"),
     ("crates/dozer-panel-todo/", "dozer.todo"),
     ("crates/dozer-panel-project/", "dozer.project"),
+    # 终端控件由 Agent 面板(与 SSH 面板)共用;库自身暂无文案。
+    ("crates/dozer-panel-term/", "dozer.agent"),
     ("crates/dozer-preview-core/", "dozer.preview"),
     ("crates/dozer-app/src/extensions/todo/", "dozer.todo"),
     ("crates/dozer-app/src/extensions/codehealth/", "dozer.codehealth"),

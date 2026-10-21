@@ -64,6 +64,8 @@ FILE_TASK = [
     ("crates/dozer-app/src/extensions/todo/", "09"),
     ("crates/dozer-panel-usage/", "09"),
     ("crates/dozer-panel-todo/", "09"),
+    # 共享终端控件库(S6b):模型/视图,当前无 UI 文案;归在 Agent 面板这批。
+    ("crates/dozer-panel-term/", "09"),
     ("crates/dozer-app/src/extensions/codehealth/", "09"),
     ("crates/dozer-app/web/codehealth-content/", "09"),
     # Remaining official panels + aux

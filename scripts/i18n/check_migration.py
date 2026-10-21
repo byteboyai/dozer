@@ -132,6 +132,7 @@ def _default_srcroots():
         os.path.join(ROOT, "crates", "dozer-panel-usage", "src"),
         os.path.join(ROOT, "crates", "dozer-panel-todo", "src"),
         os.path.join(ROOT, "crates", "dozer-panel-project", "src"),
+        os.path.join(ROOT, "crates", "dozer-panel-term", "src"),
         os.path.join(ROOT, "crates", "dozer-preview-core", "src"),
         os.path.join(ROOT, "crates", "dozer-panel-preview", "src"),
     ]
