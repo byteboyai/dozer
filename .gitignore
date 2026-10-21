@@ -6,6 +6,8 @@
 .dozer/
 .worktrees
 examples/
+# dozerd 的 product_daemon 示例是 product_isolation 进程级隔离测试的辅助二进制,必须入库。
+!crates/dozerd/examples/
 .aider*
 
 # Python bytecode from scripts/audit (run with PYTHONDONTWRITEBYTECODE=1)
