@@ -3,7 +3,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use bytehost_apps::proto::{AppReply, AppRequest};
 use dozer_core::protocol::{
-    AgentKind, AgentState, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
+    AgentKind, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
     CodeHealthReportInfo, ConversationSummary, GroupCancelScope, GroupInfo, GroupMessageInfo,
     LocalePreference, LocaleSnapshot, LocaleWriteOutcome, PreviewCommand, PreviewContext,
     ProjectInfo, Reply, Request, SessionInfo, SessionSummaryPayload, TodoInfo, TurnRecord,
@@ -3399,6 +3399,7 @@ mod session_protocol_golden {
     //! 改动协议形状会让这里失败,必须显式更新并说明兼容影响。
 
     use super::*;
+    use dozer_core::protocol::AgentState;
 
     fn sample_session() -> SessionInfo {
         SessionInfo {
@@ -3491,6 +3492,7 @@ mod session_protocol_golden {
 mod session_service_tests {
     use super::todo_service_tests::temp_sock;
     use super::*;
+    use dozer_core::protocol::AgentState;
     use dozer_model::SessionEvent;
     use dozer_services::{SessionService, SessionSpec};
     use std::any::TypeId;

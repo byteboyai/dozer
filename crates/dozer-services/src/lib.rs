@@ -360,6 +360,13 @@ pub struct SessionSpec {
 
 /// Agent 面板访问守护进程会话的唯一接缝。生产实现是 `dozer-client::Client`
 /// (Doze 连 `dozerd`,Digger 连 `diggerd`,只是 socket 不同)。
+/// `attach` 的结果:(快照字节, 快照结束偏移, 后续事件流)。
+pub type SessionAttach = (
+    Vec<u8>,
+    u64,
+    tokio::sync::mpsc::UnboundedReceiver<SessionEvent>,
+);
+
 pub trait SessionService: Send + Sync {
     fn list_sessions(&self) -> BoxFuture<'_, Result<Vec<SessionInfo>, ServiceError>>;
     fn create(&self, spec: SessionSpec) -> BoxFuture<'_, Result<SessionInfo, ServiceError>>;
@@ -367,17 +374,7 @@ pub trait SessionService: Send + Sync {
         &self,
         id: String,
         from_offset: u64,
-    ) -> BoxFuture<
-        '_,
-        Result<
-            (
-                Vec<u8>,
-                u64,
-                tokio::sync::mpsc::UnboundedReceiver<SessionEvent>,
-            ),
-            ServiceError,
-        >,
-    >;
+    ) -> BoxFuture<'_, Result<SessionAttach, ServiceError>>;
     fn write(&self, id: String, data: Vec<u8>) -> BoxFuture<'_, Result<(), ServiceError>>;
     fn resize(&self, id: String, cols: u16, rows: u16) -> BoxFuture<'_, Result<(), ServiceError>>;
     fn kill(&self, id: String) -> BoxFuture<'_, Result<(), ServiceError>>;

@@ -64,7 +64,7 @@ e92d5fb2 feat(services): SessionService 与 SessionEvent;加会话协议与字�
 | 检查 | 结果 |
 | --- | --- |
 | `cargo build --workspace` | 退出码 0 |
-| `cargo clippy --workspace --all-targets` | 退出码 0（既有 warning 与本期无关） |
+| `cargo clippy --workspace --all-targets` | 退出码 0;审核发现本期曾新增 2 条警告(`SessionService::attach` 复杂类型、`dozer-client` 未用导入 `AgentState`),已在审核修复提交中清除,`dozer-services` / `dozer-client` 现无警告 |
 | `cargo fmt --check` | 退出码 1；35 处 diff 全部落在**既有未格式化文件**（`app/view.rs`、`extensions/files/{state,tree}.rs`、`dozer-panel-files/*`），本期新增/修改文件均通过 rustfmt |
 | `bash scripts/check-i18n.sh` | 退出码 0（`unresolved=0`，`total=2692`） |
 | `scripts/audit/check_panel_boundary.py` | 通过（213 refs in 5 files） |
@@ -79,7 +79,7 @@ e92d5fb2 feat(services): SessionService 与 SessionEvent;加会话协议与字�
 - `python3 scripts/i18n/check_migration.py`：退出码 0，`unresolved=0`。
 - `python3 scripts/audit/check_panel_boundary.py`：通过。
 
-**注意（复验环境前置，不是代码问题）：** 干净 archive 不含 `.git` 与本地生成的 `assets/`，直接跑会有 3 条 `git_log` dogfood 测试（要求仓库自身有 git 历史）和 `dozer-panel-preview` 的静态资源测试失败。复验时把 worktree 的 `.git` 与生成产物 `crates/dozer-app/assets`、`crates/dozer-panel-preview/assets` 复制进快照后全部通过；源码仍是 archive 的提交树，未被未提交文件污染。
+**注意（复验环境，已按审核更正）：** 干净 archive 不含 `.git`,因此 3 条 `git_log` dogfood 测试(`build_marks_head_branch_and_labels`、`build_respects_max_count`、`commit_detail_uses_first_parent_diff`)会失败,这是环境原因,基线同样如此;其余全部通过(3405 通过 + 这 3 条 = 3408)。`assets/` 目录是已跟踪文件,archive 里就有,**不需要补拷**。此前报告称缺 `assets/` 导致预览静态资源测试失败,不属实,已撤回。
 
 ## 目测验收清单（推迟，原样保留）
 
