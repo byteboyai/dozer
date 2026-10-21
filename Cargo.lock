@@ -2052,6 +2052,7 @@ dependencies = [
  "dozer-core",
  "dozer-services",
  "dozerd",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",
