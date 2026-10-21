@@ -6,6 +6,8 @@ use crate::term::term_model::TerminalModel;
 use crate::transcript::ReviewEntry;
 use byteui::interaction::icons::IconKind;
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
+use dozer_panel_agent::launch::agent_launch_command;
+use dozer_panel_agent::style::{agent_state_label, format_model_label, group_tabs_by_agent};
 use dozer_panel_agent::tabs::effective_cwd;
 use std::path::{Path, PathBuf};
 
@@ -1638,8 +1640,9 @@ fn session_stream_golden() {
 
 #[test]
 fn card_model_matches_the_legacy_text_for_every_combination() {
-    use crate::workspace::view::{CardCtx, TaskTitleSource, card_model};
     use dozer_core::protocol::AgentState;
+    use dozer_panel_agent::adapter::TaskTitleSource;
+    use dozer_panel_agent::card::{CardCtx, card_model};
     use iced_widget::core::Color;
 
     struct Titles(Option<&'static str>);

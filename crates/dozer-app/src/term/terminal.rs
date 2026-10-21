@@ -16,14 +16,11 @@
 //! (`ssh_terminal_pane`/`workspace.rs` 预览页签栏也在用)同样留在
 //! `app.rs`。
 
-use super::term_view;
-use crate::app::{App, HoverId, Message, PanelKind, TabGroup, ZoneSide, tab_divider};
-use crate::chrome::tab_widget;
-use crate::theme;
-use crate::workspace::{SessionTab, Workspace, dot_color, tab_display_width, tab_title};
+use crate::app::{App, Message, PanelKind, TabGroup, ZoneSide};
+use crate::workspace::Workspace;
+use iced_widget::MouseArea;
 use iced_widget::core::mouse;
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{MouseArea, column, container, row, text};
 
 /// 终端相关消息(键盘/滚轮/选区/粘贴)该写去右侧共享终端条还是 SSH 面板
 /// 自己的内嵌终端——两者可能同时在屏幕上,裸消息本身不带这个信息,靠
@@ -57,149 +54,22 @@ pub(crate) fn terminal_pane<'a>(
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let region = theme::region::terminal_pane();
-    let mut content = column![tab_bar(app, ws)].spacing(region.gap);
-
-    // OSC 133;D 的最近命令非零退出码提示（下一条命令开始时消失）。
-    if let Some(code) = ws.tabs.get(ws.active).and_then(|t| t.last_exit)
-        && code != 0
-    {
-        content = content.push(
-            text(format!("exit {code}"))
-                .size(byteui::theme::font::label())
-                .color(byteui::theme::color::current().red),
-        );
-    }
-
-    // P1j 收敛：终端"审阅"按钮移除，会话审阅入口统一到右一对话列表。
-
-    let term = active_tab_view(app, ws);
     let pid = ws.project.as_ref().map(|p| p.id).unwrap_or_default();
-    // 展开的上下文列表浮在终端底部之上(有意偏差 1:不推挤终端,PTY 网格
-    // 不因展开/折叠重算)。`stack!` 让面板锚在底部、条的下缘。
-    let term: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match crate::extensions::agent_context::expanded_panel(
-            &ws.agent_context,
-            app.locale.active_locale(),
-        ) {
-            Some(panel) => iced_widget::stack![
-                term,
-                container(column![
-                    iced_widget::space::vertical(),
-                    container(panel.map(move |m| Message::AgentContext(pid, m))).padding(
-                        iced_widget::core::Padding {
-                            bottom: region.padding.bottom
-                                + crate::extensions::agent_context::STRIP_HEIGHT
-                                + region.gap,
-                            ..Default::default()
-                        }
-                    ),
-                ])
-                .width(Length::Fill)
-                .height(Length::Fill),
-            ]
-            .into(),
-            None => term,
-        };
-    content = content.push(term);
-    content = content.push(
-        crate::extensions::agent_context::strip(&ws.agent_context, app.locale.active_locale())
+    let display = crate::host_adapters::agent_panel::DozerDisplay::new(app, pid);
+    let locale = app.locale.active_locale();
+    let floating = crate::extensions::agent_context::expanded_panel(&ws.agent_context, locale)
+        .map(|panel| panel.map(move |m| Message::AgentContext(pid, m)));
+    let footer = Some(
+        crate::extensions::agent_context::strip(&ws.agent_context, locale)
             .map(move |m| Message::AgentContext(pid, m)),
     );
-
-    let body = container(content.spacing(region.gap).padding(region.padding))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(move |_theme: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: outer,
-            ..container::Style::default()
-        });
-
-    // 底部状态栏(agent 态/resume/dozerd 持有说明)已按要求去掉——`body`
-    // 自己的 `style` 已经用 `outer` 收了圆角(含底角),不需要额外元素
-    // 补底角,直接就是这块 pane 的全部内容。
-    container(body).width(width).height(Length::Fill).into()
-}
-
-/// tab 栏：两侧箭头翻页(到头变灰) + 每会话一个按钮(状态点 + 名称 + 关闭
-/// ×)。新建会话走 Agent 面板"＋"(纯 Shell 也在其菜单里),终端 tab 栏
-/// 不再放独立"＋"。P1L T5 验收返工：横向 scrollable(底部滚动条)
-/// 换成索引窗口化 + `clip`——`on_scroll` 只认滚轮/拖拽，程序化滚动在本
-/// app 自建循环里够不到，箭头翻页必须走状态驱动的窗口渲染。
-pub(crate) fn tab_bar<'a>(
-    app: &'a App,
-    ws: &'a Workspace,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let locale = app.locale.active_locale();
-    let widths: Vec<f32> = ws
-        .tabs
-        .iter()
-        .map(|t| tab_display_width(&tab_title(t.agent, t.cwd.as_deref(), &t.info.name)))
-        .collect();
-    let window = byteui::interaction::tab_strip::tab_window(
-        &widths,
-        4.0,
-        app.terminal_tab_bar_avail_px(),
-        ws.term_tab_first,
-    );
-    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = ws
-        .tabs
-        .iter()
-        .enumerate()
-        .filter(|(idx, _)| (window.first..window.visible_end).contains(idx))
-        .map(|(idx, tab)| {
-            let title_hover_t = app.hover_progress(HoverId::TermTabItem(idx));
-            let close_hover_t = app.hover_progress(HoverId::TermTabClose(idx));
-            let armed = app.dragging_group(TabGroup::Terminal);
-            tab_drag_surface(
-                tab_item(
-                    idx,
-                    tab,
-                    idx == ws.active,
-                    title_hover_t,
-                    close_hover_t,
-                    app.hover_tooltip_ready(HoverId::TermTabItem(idx)),
-                ),
-                TabGroup::Terminal,
-                idx,
-                armed,
-            )
-        })
-        .collect();
-
-    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;V 按钮钉在裁剪区外、tab 组
-    // 最左侧(验收反馈:V 是"全部 tab 一览入口",放最前更符合浏览顺序)。V
-    // "一直可见"：只要 tab 组非空就显示(`tab_overflow_button` 仅在全空时返回
-    // `None`),下拉列出组内全部 tab,供随时跳转,不只列横向可见的部分。
-    let tabs_row = row(items).spacing(4);
-    let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let overflow_button = tab_widget::tab_overflow_button(
-        ws.tabs.len(),
-        app.hover_progress(HoverId::TermTabOverflow),
-        Message::TermTabOverflowToggle,
-        move |hovered| Message::Hover(HoverId::TermTabOverflow, hovered),
-    );
-
-    let mut tab_row = row![]
-        .spacing(4)
-        .align_y(iced_widget::core::Alignment::Center);
-    if let Some(btn) = overflow_button {
-        tab_row = tab_row.push(btn);
-    }
-    tab_row = tab_row.push(clipped);
-    tab_row = tab_row.push(app.list_collapse_button(
-        PanelKind::Agent,
-        app.list_collapsed(PanelKind::Agent),
-        HoverId::list_collapse(PanelKind::Agent),
-        crate::i18n::host_text("panel.collapse_list", "Collapse list", locale),
-        crate::i18n::host_text("panel.expand_list", "Expand list", locale),
-        Message::TogglePanelListCollapse(PanelKind::Agent),
-        move |hovered| Message::Hover(HoverId::list_collapse(PanelKind::Agent), hovered),
-    ));
-
-    let base = column![tab_row, tab_divider()].spacing(4);
-    base.into()
+    dozer_panel_agent::view::terminal::terminal_pane(
+        &ws.agent,
+        &display,
+        dozer_panel_agent::display::TerminalSlots { floating, footer },
+        width,
+        outer,
+    )
 }
 
 /// 终端 tab 栏"溢出下拉"浮层。**必须**在 `App::view` 顶层 `stack![base, ...]`
@@ -213,68 +83,9 @@ pub(crate) fn term_tab_overflow_popup<'a>(
     app: &'a App,
     ws: &'a Workspace,
 ) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
-    let anchor = ws.term_tab_overflow_anchor?;
-    if ws.tabs.is_empty() {
-        return None;
-    }
-    let entries: Vec<tab_widget::TabOverflowEntry<'_, Message>> = ws
-        .tabs
-        .iter()
-        .enumerate()
-        .map(|(idx, tab)| tab_widget::TabOverflowEntry {
-            index: idx,
-            prefix: Some(byteui::feedback::status::dot(dot_color(
-                tab.agent_state,
-                tab.alive,
-            ))),
-            title: tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
-            active: idx == ws.active,
-            closable: true,
-            hover_t: app.hover_progress(HoverId::TabOverflowRow(idx)),
-        })
-        .collect();
-    Some(tab_widget::tab_overflow_menu(
-        tab_widget::TabOverflowMenuArgs {
-            entries,
-            anchor,
-            window_size: app.window_size,
-            on_select: Message::SelectTab,
-            on_close: Message::CloseTab,
-            on_dismiss: Message::TermTabOverflowDismiss,
-            on_row_hover: move |idx, hovered| Message::Hover(HoverId::TabOverflowRow(idx), hovered),
-        },
-    ))
-}
-
-/// 单个 tab：状态点（颜色见 `dot_color`）+ 名称的选中按钮，紧跟一个关闭
-/// 按钮（点击 = detach，见 `Message::CloseTab` 的文档）。状态不再用文字
-/// 胶囊表达，全部收敛到点点的颜色（goal.md）：各状态各自固定配色，常亮，
-/// 不再有闪烁动画。
-fn tab_item(
-    idx: usize,
-    tab: &SessionTab,
-    active: bool,
-    title_hover_t: f32,
-    close_hover_t: f32,
-    show_tooltip: bool,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let color = dot_color(tab.agent_state, tab.alive);
-    // 状态点作 `panel_tab` 的 prefix。
-    let dot = byteui::feedback::status::dot(color);
-
-    tab_widget::panel_tab(tab_widget::PanelTabArgs {
-        title: tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
-        active,
-        hover_t: title_hover_t,
-        close_hover_t,
-        prefix: Some(dot),
-        suffix: None,
-        on_select: Message::SelectTab(idx),
-        on_close: Message::CloseTab(idx),
-        show_tooltip,
-        title_hover: move |h| Message::Hover(HoverId::TermTabItem(idx), h),
-        close_hover: move |h| Message::Hover(HoverId::TermTabClose(idx), h),
-    })
+    let pid = ws.project.as_ref().map(|p| p.id).unwrap_or_default();
+    let display = crate::host_adapters::agent_panel::DozerDisplay::new(app, pid);
+    dozer_panel_agent::view::terminal::overflow_popup(&ws.agent, &display)
 }
 
 /// 给一块 tab 内容包上"拖拽换位"的感应层:内容本身仍是原来的交互(点标题
@@ -290,41 +101,13 @@ pub(crate) fn tab_drag_surface(
     group: TabGroup,
     index: usize,
     armed: bool,
+    on_move: Message,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let area = MouseArea::new(content).on_move(move |_| Message::TabDragMove { group, index });
+    let _ = (group, index);
+    let area = MouseArea::new(content).on_move(move |_| on_move.clone());
     if armed {
         let area = area.interaction(mouse::Interaction::Grabbing);
         return area.into();
     }
     area.into()
-}
-
-pub(crate) fn active_tab_view<'a>(
-    app: &'a App,
-    ws: &'a Workspace,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    match ws.tabs.get(ws.active) {
-        Some(tab) => {
-            let focused =
-                keyboard_term_target(app.left_view, app.active_zone) == TermTarget::Shared;
-            term_view::view(
-                &tab.model,
-                focused,
-                TermTarget::Shared,
-                focused.then(|| app.term_ime_preedit()).flatten(),
-            )
-        }
-        None => container(
-            text(crate::i18n::host_text(
-                "term.no_sessions",
-                "No sessions yet — click “+” in the Agent panel",
-                app.locale.active_locale(),
-            ))
-            .size(byteui::theme::font::subtitle())
-            .color(byteui::theme::color::current().dim),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into(),
-    }
 }

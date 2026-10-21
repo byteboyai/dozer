@@ -79,22 +79,13 @@ pub enum Message {
     /// (比如 Agent 面板右侧卡片列表)必须发 `SelectTabNoDrag`,否则会在
     /// 无关点击后意外武装拖拽状态机,松手前只要划过 tab 栏就会错误换位
     /// (2026-08-17 修的一个真实 bug)。
+    #[allow(dead_code)]
     SelectTab(usize),
-    /// 语义同 `SelectTab`(选中 + 路由键盘焦点),但**不武装拖拽状态机**。
-    /// 给"不是 tab 栏本身、但也要切换 tab"的调用方用(目前只有 Agent 面板
-    /// 右侧卡片列表 `agent_card`)。
-    SelectTabNoDrag(usize),
-    /// 关闭 tab = 结束会话：中断转发任务并 kill daemon 侧会话（P1e 验收
-    /// 反馈裁决：重开 app 只恢复"关 app 时还开着"的 tab，已关的不还魂）。
-    /// "会话存活"保的是关 app/崩溃不掉会话——退 app 才是 detach。
-    CloseTab(usize),
     /// 关 Agent 面板 tab 确认框:确认(目标会话确实在 Running/AwaitingInput,
     /// 用户仍要坚持关掉、结束此会话)。
     TermTabCloseConfirm,
     /// 关 Agent 面板 tab 确认框:取消,关掉确认框、什么都不做。
     TermTabCloseCancel,
-    /// Agent 面板"＋"按钮:开/关 agent 选择菜单。
-    AgentPickerToggle,
     /// agent 选择菜单:点击菜单外/Esc,关闭不建会话。
     AgentPickerClose,
     /// agent 选择菜单:选中一项(`Agent(None)` = 纯 Shell,`Agent(Some(a))`
@@ -242,9 +233,6 @@ pub enum Message {
     /// 终端滚轮：视口向历史方向（正数）/活动区方向（负数）滚动的行数。
     /// 只作用于当前激活 tab（滚轮事件来自它的 canvas）。
     TermScroll(terminal::TermTarget, i32),
-    /// 终端 tab 栏溢出下拉开关：点 V 按钮切换；打开时把 `App::last_cursor`
-    /// 记进 `Workspace::term_tab_overflow_anchor` 作为悬浮定位锚点。
-    TermTabOverflowToggle,
     /// 终端 tab 栏溢出下拉：点击外部区域关闭。
     TermTabOverflowDismiss,
     /// 终端左键按下：在视口格 `(col, row)` 起新选区（`right` = 按点在

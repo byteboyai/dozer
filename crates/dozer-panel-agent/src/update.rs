@@ -61,6 +61,8 @@ pub enum Message {
         at: Option<(f32, f32)>,
     },
     OverflowDismiss,
+    /// 悬停状态变化(产品映射到自己的 HoverId)。
+    Hover(crate::display::AgentHover, bool),
     /// 卡片刷新结果(库内 `card::spawn_refresh` 回灌)。
     CardRefreshed {
         tab_id: usize,
@@ -281,6 +283,7 @@ pub fn update(
             };
         }
         Message::OverflowDismiss => state.term_tab_overflow_anchor = None,
+        Message::Hover(_, _) => {}
         Message::CardRefreshed {
             tab_id,
             llm_model,

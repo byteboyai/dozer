@@ -30,7 +30,7 @@ use crate::workspace::{
 };
 use byteui::interaction::icons;
 use dozer_core::protocol::{
-    AgentKind, AgentState, BookmarkInfo, ProjectInfo, SummaryJobStatus, SummaryTrigger,
+    AgentKind, BookmarkInfo, ProjectInfo, SummaryJobStatus, SummaryTrigger,
 };
 use iced_widget::core::{Element, Length, Padding};
 use iced_widget::{column, container};
@@ -605,38 +605,6 @@ impl App {
                 });
             }
             Message::SelectTab(idx) => self.select_tab(idx),
-            Message::SelectTabNoDrag(idx) => self.select_tab_no_drag(idx),
-            Message::CloseTab(idx) => {
-                let mut closed_old_len = None;
-                self.with_focused_project(|ws, io| {
-                    // 目标会话仍在 Running/AwaitingInput → 先弹确认框,不直接
-                    // 关(避免误关正在跑/等输入的 agent 会话)。其它状态(IDle/
-                    // TurnEnded/已退出)直接关,保持原手感。
-                    let confirm_needed = ws.tabs.get(idx).is_some_and(|t| {
-                        matches!(
-                            t.agent_state,
-                            AgentState::Running | AgentState::AwaitingInput
-                        )
-                    });
-                    if confirm_needed {
-                        ws.pending_close_tab = ws.tabs.get(idx).map(|t| t.info.id.clone());
-                    } else {
-                        closed_old_len = Some(ws.tabs.len());
-                        ws.close_tab(io, idx);
-                        ws.ensure_project_terminal(io);
-                    }
-                });
-                // 见 `App::dehover_after_tab_close` 文档:关掉的 tab 若正被
-                // 悬停,残留的 hover 记录会被将来复用同一下标的新 tab 继承。
-                if let Some(old_len) = closed_old_len {
-                    self.dehover_after_tab_close(
-                        HoverId::TermTabItem,
-                        HoverId::TermTabClose,
-                        idx,
-                        old_len,
-                    );
-                }
-            }
             Message::TermTabCloseConfirm => {
                 let mut closed = None;
                 self.with_focused_project(|ws, io| {
@@ -666,22 +634,6 @@ impl App {
                 self.with_focused_project(|ws, _io| {
                     ws.pending_close_tab = None;
                 });
-            }
-            Message::AgentPickerToggle => {
-                #[cfg(target_os = "macos")]
-                {
-                    let (x, y) = self.last_cursor;
-                    let items = crate::workspace::agent_picker_items();
-                    if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
-                        self.update(msg);
-                    }
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    self.with_focused_project(|ws, _io| {
-                        ws.agent_picker_open = !ws.agent_picker_open;
-                    });
-                }
             }
             Message::AgentPickerClose => {
                 self.with_focused_project(|ws, _io| {
@@ -1149,44 +1101,6 @@ impl App {
                         tab.model.scroll_display(delta);
                     }
                 });
-            }
-            Message::TermTabOverflowToggle => {
-                #[cfg(target_os = "macos")]
-                {
-                    let last_cursor = self.last_cursor;
-                    let items = match self.active_workspace() {
-                        Some(ws) => {
-                            let entries: Vec<(usize, String, bool)> = ws
-                                .tabs
-                                .iter()
-                                .enumerate()
-                                .map(|(idx, tab)| {
-                                    (
-                                        idx,
-                                        tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
-                                        idx == ws.active,
-                                    )
-                                })
-                                .collect();
-                            tab_widget::tab_overflow_items(&entries, Message::SelectTab)
-                        }
-                        None => Vec::new(),
-                    };
-                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
-                        self.update(msg);
-                    }
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    let last_cursor = self.last_cursor;
-                    self.with_focused_project(|ws, _io| {
-                        ws.term_tab_overflow_anchor = if ws.term_tab_overflow_anchor.is_some() {
-                            None
-                        } else {
-                            Some(last_cursor)
-                        };
-                    });
-                }
             }
             Message::TermTabOverflowDismiss => {
                 self.with_focused_project(|ws, _io| {

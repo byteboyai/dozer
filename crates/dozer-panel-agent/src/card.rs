@@ -260,10 +260,17 @@ mod tests {
         tabs[0].llm_model = Some("keep-model".into());
         tabs[0].permission_mode = Some("keep-mode".into());
         tabs[0].last_activity = Some("keep-activity".into());
-        apply_refresh(&mut tabs, 1, None, None, None, Some(WorkspaceGitInfo {
-            branch: Some("feat".into()),
-            dirty: true,
-        }));
+        apply_refresh(
+            &mut tabs,
+            1,
+            None,
+            None,
+            None,
+            Some(WorkspaceGitInfo {
+                branch: Some("feat".into()),
+                dirty: true,
+            }),
+        );
         assert_eq!(tabs[0].llm_model.as_deref(), Some("keep-model"));
         assert_eq!(tabs[0].permission_mode.as_deref(), Some("keep-mode"));
         assert_eq!(tabs[0].last_activity.as_deref(), Some("keep-activity"));
@@ -307,7 +314,10 @@ mod tests {
         t.permission_mode = None;
         assert_eq!(card_model(&t, false, &ctx, "en").title, "claude");
 
-        assert_eq!(work_line(Some("task"), Some("main"), true), "task  @main(Uncommitted)");
+        assert_eq!(
+            work_line(Some("task"), Some("main"), true),
+            "task  @main(Uncommitted)"
+        );
         assert_eq!(work_line(None, None, false), "@—");
         assert_eq!(work_line(Some("任务"), None, false), "任务  @—");
     }

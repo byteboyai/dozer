@@ -108,7 +108,7 @@ pub enum TermEvent {
 
 /// 把事件经调用方的映射函数转成产品消息。单独抽出来是为了让测试能直接
 /// 验证四种事件的载荷在映射中不丢(不依赖 canvas 的事件构造)。
-fn mapped<T, M>(map: fn(T, TermEvent) -> M, target: T, event: TermEvent) -> M {
+fn mapped<T, M>(map: impl Fn(T, TermEvent) -> M, target: T, event: TermEvent) -> M {
     map(target, event)
 }
 
@@ -243,7 +243,7 @@ fn encode_wheel_report(up: bool, col: usize, row: usize, sgr: bool) -> Vec<u8> {
 /// canvas 绘制程序：持有当前 tab 的 `TerminalModel` 快照引用逐帧重画。
 /// 网格规模（百列 × 数十行）下 run 数量有限，不做 `canvas::Cache`——
 /// 终端输出本来就是高频失效场景，缓存收益低。
-struct TermCanvas<'a, T, M> {
+struct TermCanvas<'a, T, F> {
     model: &'a TerminalModel,
     focused: bool,
     target: T,
@@ -251,8 +251,8 @@ struct TermCanvas<'a, T, M> {
     /// `model`——真正的 PTY 网格只由 `Ime::Commit` 驱动。
     preedit: Option<&'a str>,
     style: &'a TermStyle,
-    /// 库事件 → 产品消息。函数指针(不是闭包)保持零分配。
-    map: fn(T, TermEvent) -> M,
+    /// 库事件 → 产品消息(`Fn`;函数指针与无捕获闭包都零分配)。
+    map: F,
 }
 
 /// canvas 内部交互状态：滚轮余量累积 + 拖选进行中标记。
@@ -347,9 +347,11 @@ fn cell_at(pos: Point, cols: usize, rows: usize, style: &TermStyle) -> (usize, u
     (col, row, right_half)
 }
 
-impl<T, M> canvas::Program<M, iced_widget::Theme, iced_renderer::Renderer> for TermCanvas<'_, T, M>
+impl<T, M, F> canvas::Program<M, iced_widget::Theme, iced_renderer::Renderer>
+    for TermCanvas<'_, T, F>
 where
     T: Copy,
+    F: Fn(T, TermEvent) -> M + Copy,
 {
     type State = InteractionState;
 
@@ -664,17 +666,18 @@ where
 /// 渲染整块终端网格。`preedit` 只在 `focused` 的那个 pane 传 `Some`——
 /// 调用方按 `App::keyboard_term_target()` 是否等于自己的 `target` 判断
 /// (与 `focused` 用的同一个比较,不重复烘焙一套判断)。
-pub fn view<'a, T, M>(
+pub fn view<'a, T, M, F>(
     model: &'a TerminalModel,
     focused: bool,
     target: T,
     preedit: Option<&'a str>,
     style: &'a TermStyle,
-    map: fn(T, TermEvent) -> M,
+    map: F,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>
 where
     T: Copy + 'a,
     M: Clone + 'a,
+    F: Fn(T, TermEvent) -> M + Copy + 'a,
 {
     Canvas::new(TermCanvas {
         model,

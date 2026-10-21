@@ -112,7 +112,6 @@ fn truncate_activity(text: &str) -> String {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,10 +281,7 @@ mod hostile_tests {
         assert_eq!(activity.as_deref(), Some("hi"));
 
         let bad = "not json\n{\"type\":\"user\"}\n{broken\n";
-        assert_eq!(
-            latest_model_mode_and_activity(bad),
-            (None, None, None)
-        );
+        assert_eq!(latest_model_mode_and_activity(bad), (None, None, None));
 
         let huge = format!(
             "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"{}\"}}}}\n",
@@ -299,10 +295,7 @@ mod hostile_tests {
         let (_, _, activity) = latest_model_mode_and_activity(ai_only);
         assert_eq!(activity, None);
 
-        assert_eq!(
-            latest_model_mode_and_activity(""),
-            (None, None, None)
-        );
+        assert_eq!(latest_model_mode_and_activity(""), (None, None, None));
     }
 
     #[test]

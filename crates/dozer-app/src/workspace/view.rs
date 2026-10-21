@@ -9,19 +9,17 @@ use crate::preview::ViewerPanel;
 use crate::theme;
 use crate::theme::terminal_font;
 use crate::ui_text::text;
-use byteui::interaction::icons;
 use byteui::interaction::icons::IconKind;
-use dozer_core::protocol::{AgentKind, AgentState};
+#[cfg(test)]
+use dozer_core::protocol::AgentKind;
 use dozer_panel_preview::ViewCtx;
 use iced_widget::core::text::LineHeight;
-use iced_widget::core::{Border, Color, Element, Length, Padding};
+use iced_widget::core::{Border, Element, Length, Padding};
 use iced_widget::{Scrollable, button, column, container, row, scrollable};
 
 use super::*;
 
-pub(crate) use dozer_panel_agent::adapter::TaskTitleSource;
-pub(crate) use dozer_panel_agent::card::{CardCtx, CardModel, card_model, card_title, work_line};
-pub(crate) use dozer_panel_agent::style::group_tabs_by_agent;
+pub(crate) use dozer_panel_agent::card::CardCtx;
 
 /// 会话详情"加载更多"按钮(2026-08-27):居中的 `<summary>` 样式的图标按钮,
 /// hover 金边提示,点击追加下一页回合。`after_turn_index` 用 `entries.len()`
@@ -70,123 +68,14 @@ pub(crate) fn agent_list_pane<'a>(
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let region = theme::region::agent_list_pane();
-    let locale = app.locale.active_locale();
-    let mut content = column![
-        // 套用统一 panel head:暖金 `#dcc9a3` 的 Bot 图标 + "Agent" 标题 +
-        // 1px 分割线;新建 agent 的"＋"按钮放到标题同一行的右侧(见
-        // `home_panel_head_with_actions` 的 `actions` 参数),不再单独占一行。
-        home_panel_head_with_actions(
-            IconKind::Brain,
-            "Agent",
-            Some(agent_picker_toggle_button(app)),
-        ),
-    ]
-    .spacing(region.gap);
-
-    if ws.tabs.is_empty() {
-        content = content.push(lh(text(crate::i18n::host_text(
-            "agent.no_conversations",
-            "No conversations",
-            locale,
-        ))
-        .size(byteui::theme::font::body())
-        .color(byteui::theme::color::current().dim)));
-    } else {
-        for (agent, idxs) in group_tabs_by_agent(&ws.tabs) {
-            content = content.push(
-                row![
-                    icons::view(
-                        agent_icon(agent),
-                        byteui::theme::icon_size::row(),
-                        agent_dot_color(agent),
-                    ),
-                    lh(text(format!("{}（{}）", agent.display_label(), idxs.len()))
-                        .size(byteui::theme::font::caption())
-                        .color(byteui::theme::color::current().dim)),
-                ]
-                .align_y(iced_widget::core::alignment::Vertical::Center)
-                .spacing(8),
-            );
-            for idx in idxs {
-                content = content.push(agent_card(ws, idx, locale));
-            }
-        }
-    }
-
-    container(content.padding(region.padding))
-        .width(width)
-        .height(Length::Fill)
-        .style(move |_theme: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: outer,
-            ..container::Style::default()
-        })
-        .into()
-}
-
-/// Agent 面板里单条会话卡片,三行:1) 图标 + agent 名(+ `(model, mode)`,
-/// 只要有一项能读到就跟名字拼一起,两项都没有就只显示名字);2) "当前
-/// 工作内容"(优先 Todo 任务派发出来时反查到的任务标题,拿不到就用
-/// transcript 最后活动摘要兜底,都没有就省略)紧跟工作区文案(分支名+脏标),
-/// 同一行不换行(卡片改版要求,work_content 在前);3) 状态点 + 状态文字。
-/// 整卡可点选中该 tab(`idx == ws.active` 时金色边框高亮、无背景;hover 时
-/// 显示 `CARD` 背景 + 金色边框)。Task 6 起 `TodoInfo` 自带派发记录,
-/// `task_title_for_session` 不再需要 `app` 侧的元数据表(见 todo.rs)。
-pub(crate) fn agent_card<'a>(
-    ws: &'a Workspace,
-    idx: usize,
-    locale: &str,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let tab = &ws.tabs[idx];
-    let active = idx == ws.active;
-    struct TodoTitles<'a>(&'a crate::extensions::todo::WorkspaceState);
-    impl TaskTitleSource for TodoTitles<'_> {
-        fn task_title_for_session(&self, session_id: &str) -> Option<String> {
-            crate::extensions::todo::WorkspaceState::task_title_for_session(self.0, session_id)
-                .map(str::to_string)
-        }
-    }
-    let titles = TodoTitles(&ws.todo);
+    let project_id = ws.project.as_ref().map(|p| p.id).unwrap_or_default();
+    let display = crate::host_adapters::agent_panel::DozerDisplay::new(app, project_id);
     let ctx = CardCtx {
-        titles: &titles,
+        titles: ws,
         project_branch: ws.project_panel.branch(),
         project_dirty: ws.project_panel.dirty(),
     };
-    let model = card_model(tab, active, &ctx, locale);
-
-    let mut lines = column![
-        text(model.title)
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().cream),
-    ]
-    .spacing(4);
-
-    lines = lines.push(work_content_and_workspace_row(model.work_line));
-
-    lines = lines.push(
-        row![
-            byteui::feedback::status::dot(model.dot),
-            text(model.status)
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().dim),
-        ]
-        .spacing(6)
-        .align_y(iced_widget::core::Alignment::Center),
-    );
-
-    button(container(lines).padding(10))
-        // 不是左侧 tab 栏本身,发 `SelectTabNoDrag` 而不是 `SelectTab`——
-        // 后者会顺带武装左侧 tab 栏的拖拽状态机,导致点这张卡片后只要
-        // 光标划过 tab 栏就被误判成"正在拖 tab"而错误换位(见
-        // `Message::SelectTab` 文档,2026-08-17 修的真实 bug)。
-        .on_press(Message::SelectTabNoDrag(idx))
-        .width(Length::Fill)
-        .style(byteui::interaction::cards::button_card(
-            active,
-            byteui::theme::color::current().card,
-        ))
-        .into()
+    dozer_panel_agent::view::list::agent_list(&ws.agent, &display, &ctx, width, outer)
 }
 
 /// "当前工作内容"(有就显示,没有就省略)+ 工作区(`@分支名` + 脏标,所有
@@ -196,43 +85,6 @@ pub(crate) fn agent_card<'a>(
 /// 未提交改动时分支名后缀 `(Uncommitted)`——跟 `extensions/files.rs`
 /// 里分支切换菜单当前分支带脏标时的既有文案(`n.push_str("(Uncommitted)")`,
 /// 见该文件约第 1409 行)保持同一措辞,不新造一套脏标文案。
-pub(crate) fn work_content_and_workspace_row(
-    line: String,
-) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    text(line)
-        .size(byteui::theme::font::caption())
-        .color(byteui::theme::color::current().dim)
-        // 工作内容可能是无空格长串(如粘贴的临时文件路径),默认按词换行会外溢。
-        .wrapping(iced_widget::core::text::Wrapping::WordOrGlyph)
-        .into()
-}
-
-/// Agent 面板头部"＋"按钮:点击切换 `agent_picker_open`,弹出 agent
-/// 选择菜单(`agent_picker_popup`)。样式与顶栏页签行的"＋"一致——无背景、
-/// Lucide `SquarePlus` 图标、静止灰(`DIM`)、hover 平滑过渡到金(`GOLD`),
-/// 由 `HoverId::named(PanelKind::Agent, "picker_toggle")` + `MouseArea` 驱动同一套悬停动画。
-pub(crate) fn agent_picker_toggle_button<'a>(
-    app: &App,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    icons::icon_button_entry(
-        icons::IconKind::SquarePlus,
-        byteui::theme::icon_size::row(),
-        false,
-        false,
-        app.hover_progress(HoverId::named(PanelKind::Agent, "picker_toggle")),
-        false,
-        byteui::theme::geometry::tab_button_size(),
-        true,
-        Message::AgentPickerToggle,
-        |hovered| Message::Hover(HoverId::named(PanelKind::Agent, "picker_toggle"), hovered),
-        crate::i18n::host_text(
-            "agent.new_session",
-            "New agent session",
-            app.locale.active_locale(),
-        ),
-    )
-}
-
 /// `agent_picker_popup` 的原生菜单版本,纯数据组装——九个选项与旧版完全
 /// 一致(七 agent + 分隔线 + Git Shell/OS Shell),agent 图标用各自专属色
 /// (`agent_dot_color`)、文字用 BODY。仅 macOS 编译,非 mac 平台继续走
@@ -363,34 +215,11 @@ pub(crate) fn agent_close_confirm_spec(
     ws: &Workspace,
     locale: &str,
 ) -> Option<byteui::feedback::dialog::ConfirmDialog<Message>> {
-    let id = ws.pending_close_tab.as_ref()?;
-    let agent_label = ws
-        .tabs
-        .iter()
-        .find(|t| &t.info.id == id)
-        .map(|t| t.agent.label().to_string())
-        .unwrap_or_else(|| "agent".to_string());
-    Some(byteui::feedback::dialog::ConfirmDialog {
-        icon: Some(IconKind::CircleAlert),
-        title: crate::i18n::host_text_args(
-            "agent.close_tab_title",
-            "Close the \"{agent}\" Agent?",
-            locale,
-            &[("agent", agent_label.as_str())],
-        ),
-        description: crate::i18n::host_text_args(
-            "agent.close_tab_description",
-            "The \"{agent}\" Agent is currently active. Closing it ends the session and clears its context.",
-            locale,
-            &[("agent", agent_label.as_str())],
-        ),
-        cancel_label: crate::i18n::host_text("common.cancel", "Cancel", locale),
-        cancel_msg: Message::TermTabCloseCancel,
-        confirm_label: crate::i18n::host_text("common.close", "Close", locale),
-        confirm_msg: Message::TermTabCloseConfirm,
-        close_msg: Some(Message::TermTabCloseCancel),
-        confirm_color: byteui::theme::color::current().red,
-        content_spacing: 8.0,
+    let project_id = ws.project.as_ref().map(|p| p.id).unwrap_or_default();
+    dozer_panel_agent::picker::close_confirm_spec(&ws.agent, locale, move |m| match m {
+        dozer_panel_agent::update::Message::CloseConfirm => Message::TermTabCloseConfirm,
+        dozer_panel_agent::update::Message::CloseCancel => Message::TermTabCloseCancel,
+        other => Message::Agent(project_id, other),
     })
 }
 
@@ -803,8 +632,6 @@ pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64, locale: &str) ->
     }
 }
 
-pub(crate) use dozer_panel_agent::launch::{agent_launch_command, sh_single_quote};
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -812,7 +639,6 @@ mod tests {
     mod review_pane_state_tests {
         use super::*;
         use crate::transcript::ReviewEntry;
-        use dozer_core::protocol::AgentKind;
 
         fn rv(nonce: u64, loaded_nonce: Option<u64>) -> ReviewView {
             ReviewView {

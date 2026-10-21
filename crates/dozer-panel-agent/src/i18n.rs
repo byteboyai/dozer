@@ -71,7 +71,11 @@ pub fn resolver() -> &'static Resolver {
     RESOLVER.get_or_init(|| {
         dozer_i18n::resolver_from_json([
             (AGENT_OWNER.to_string(), "en".to_string(), EN.to_string()),
-            (AGENT_OWNER.to_string(), "zh-CN".to_string(), ZH_CN.to_string()),
+            (
+                AGENT_OWNER.to_string(),
+                "zh-CN".to_string(),
+                ZH_CN.to_string(),
+            ),
         ])
         .expect("内嵌的 Agent 语言包必须是合法扁平原")
     })

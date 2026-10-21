@@ -4,25 +4,17 @@
 //! `forward_events` 异步桥。
 
 use crate::app::{Message, ProjectId};
-use byteui::interaction::icons::IconKind;
 use dozer_client::{Client, TermEvent};
-use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo};
-use iced_widget::core::Color;
+use dozer_core::protocol::{AgentKind, ProjectInfo};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
 use super::*;
 
-pub(crate) use dozer_panel_agent::launch::{
-    attached_agent, picker_launch_command, should_answer_dynamic_color,
-};
-pub(crate) use dozer_panel_agent::style::{
-    agent_dot_color, agent_icon, agent_state_label, dot_color, format_model_label,
-};
-pub(crate) use dozer_panel_agent::tabs::{
-    should_summarize_on_close, tab_display_width, tab_title, text_width_units,
-};
+pub(crate) use dozer_panel_agent::launch::{attached_agent, should_answer_dynamic_color};
+pub(crate) use dozer_panel_agent::style::{agent_dot_color, agent_icon, dot_color};
+pub(crate) use dozer_panel_agent::tabs::{tab_display_width, tab_title, text_width_units};
 
 dozer_core::scope!(LOG, module, "shell");
 

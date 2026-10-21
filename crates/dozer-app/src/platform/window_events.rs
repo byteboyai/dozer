@@ -2322,7 +2322,6 @@ impl Runner {
         } else if matches!(
             message,
             Message::SelectTab(_)
-                | Message::SelectTabNoDrag(_)
                 | Message::TabAttached(_, _, _, _, _)
                 | Message::AgentPickerSelect(_)
         ) {

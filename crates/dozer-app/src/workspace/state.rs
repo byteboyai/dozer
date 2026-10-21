@@ -19,7 +19,7 @@ use crate::osc::OscScanner;
 use crate::preview::{PreviewPane, TabKind};
 use crate::project::FileTree;
 use crate::term::term_model::TerminalModel;
-use crate::transcript::{self, ReviewEntry};
+use crate::transcript::ReviewEntry;
 use crate::ui_text::text;
 use byteui::interaction::tab_strip::tab_window_reveal;
 use dozer_client::{Client, TermEvent};
@@ -192,11 +192,13 @@ pub struct ReviewView {
     pub loaded_nonce: Option<u64>,
 }
 
+#[allow(unused_imports)]
 pub(crate) use dozer_panel_agent::card::{
     apply_refresh as apply_agent_card_refresh, refresh_plan as agent_card_refresh_plan,
     workspace_git_info,
 };
 pub use dozer_panel_agent::state::AgentPanelState;
+#[allow(unused_imports)]
 pub use dozer_panel_agent::tabs::{SessionTab, TabBackend, TabOut, WorkspaceGitInfo};
 use dozer_services::SessionService;
 use std::sync::Arc as StdArc;

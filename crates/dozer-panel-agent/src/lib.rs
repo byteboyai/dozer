@@ -9,11 +9,13 @@
 
 pub mod adapter;
 pub mod card;
+pub mod display;
 pub mod i18n;
 pub mod launch;
 pub mod picker;
 pub mod state;
 pub mod style;
-pub mod transcript_tail;
 pub mod tabs;
+pub mod transcript_tail;
 pub mod update;
+pub mod view;

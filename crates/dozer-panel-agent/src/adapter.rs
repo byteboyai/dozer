@@ -53,6 +53,6 @@ pub trait HookInstaller: Send + Sync {
 }
 
 /// 卡片"当前工作内容"的任务标题反查(产品实现:Doze 的 Todo 派发记录)。
-pub trait TaskTitleSource: Send + Sync {
+pub trait TaskTitleSource {
     fn task_title_for_session(&self, session_id: &str) -> Option<String>;
 }

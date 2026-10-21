@@ -25,9 +25,8 @@ pub enum PickerEntry {
 /// `AgentKind::known()` 派生、按展示名不分大小写排序,分隔线后固定
 /// `Git Shell`、`OS Shell`。`Unknown` 不出现。
 pub fn picker_entries() -> Vec<PickerEntry> {
-    let mut agents: Vec<(&'static str, AgentKind)> = AgentKind::known()
-        .map(|k| (k.display_label(), k))
-        .collect();
+    let mut agents: Vec<(&'static str, AgentKind)> =
+        AgentKind::known().map(|k| (k.display_label(), k)).collect();
     agents.sort_by_key(|(label, _)| label.to_lowercase());
     let mut out: Vec<PickerEntry> = agents
         .into_iter()
@@ -41,7 +40,11 @@ pub fn picker_entries() -> Vec<PickerEntry> {
     out.push(PickerEntry::Separator);
     for (label, launch, icon) in [
         ("Git Shell", PickerLaunch::Git, IconKind::GitBranch),
-        ("OS Shell", PickerLaunch::Agent(None), IconKind::SquareTerminal),
+        (
+            "OS Shell",
+            PickerLaunch::Agent(None),
+            IconKind::SquareTerminal,
+        ),
     ] {
         out.push(PickerEntry::Launch {
             launch,

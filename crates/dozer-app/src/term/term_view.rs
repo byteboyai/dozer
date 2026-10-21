@@ -30,8 +30,13 @@ pub fn terminal_style() -> TermStyle {
     style().clone()
 }
 
+/// 终端样式的 `'static` 引用(视图适配层用,避免每次构造临时值)。
+pub(crate) fn terminal_style_ref() -> &'static TermStyle {
+    style()
+}
+
 /// 库事件 → 内核消息。载荷一一对应,不丢字段。
-fn map_event(target: TermTarget, event: TermEvent) -> Message {
+pub(crate) fn map_event(target: TermTarget, event: TermEvent) -> Message {
     match event {
         TermEvent::Input(bytes) => Message::TermInput(target, bytes),
         TermEvent::Scroll(lines) => Message::TermScroll(target, lines),

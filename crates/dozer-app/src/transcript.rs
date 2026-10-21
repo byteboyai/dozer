@@ -6,7 +6,6 @@
 
 use dozer_core::protocol::{ToolCallInfo, TurnRecord};
 use serde::Serialize;
-use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum ReviewEntry {
@@ -169,8 +168,6 @@ pub fn review_entries_from_turns(turns: &[TurnRecord]) -> Vec<ReviewEntry> {
 /// (`type:"message"`+`role:"user"`,`content[].type:"input_text"`)和
 /// Codex 形状(`type:"response_item"`+`payload.type:"message"`+
 /// `payload.role:"user"`)的
-pub use dozer_panel_agent::transcript_tail::latest_model_mode_and_activity;
-
 #[cfg(test)]
 mod tests {
     use super::*;
