@@ -1,0 +1,13 @@
+{
+  "agent.no_conversations": "No conversations",
+  "agent.new_session": "New agent session",
+  "agent.close_tab_title": "Close the \"{agent}\" Agent?",
+  "agent.close_tab_description": "The \"{agent}\" Agent is currently active. Closing it ends the session and clears its context.",
+  "agent.state_running": "Running",
+  "agent.state_awaiting_input": "Awaiting input",
+  "agent.state_turn_ended": "Turn ended",
+  "agent.state_idle": "Idle",
+  "term.no_sessions": "No sessions yet — click “+” in the Agent panel",
+  "close_confirm.cancel": "Cancel",
+  "close_confirm.confirm": "Close"
+}

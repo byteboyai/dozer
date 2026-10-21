@@ -12,6 +12,11 @@ dozer-model = { path = "../dozer-model" }
 dozer-services = { path = "../dozer-services" }
 dozer-panel-host = { path = "../dozer-panel-host" }
 dozer-panel-term = { path = "../dozer-panel-term" }
+dozer-i18n = { path = "../dozer-i18n" }
+bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1" }
+serde_json.workspace = true
 byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.5" }
 tokio.workspace = true
 tracing.workspace = true
+iced_widget = { version = "0.14", features = ["canvas", "svg"] }
+iced_renderer = "0.14"

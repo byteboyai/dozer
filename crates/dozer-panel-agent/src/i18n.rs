@@ -57,3 +57,38 @@ pub fn term_dispatch_write_failed(error: impl ToString) -> LocalizedText {
     )
     .with_arg("error", error.to_string())
 }
+
+use dozer_i18n::Resolver;
+use std::sync::OnceLock;
+
+const EN: &str = include_str!("../locales/en.json");
+const ZH_CN: &str = include_str!("../locales/zh-CN.json");
+
+/// 库自带的 `dozer.agent` 词表(与 `dozer-app` 里 agent_context 的同名
+/// owner 是两份独立解析器;库只读自己的嵌入资源,不往宿主 resolver 注册)。
+pub fn resolver() -> &'static Resolver {
+    static RESOLVER: OnceLock<Resolver> = OnceLock::new();
+    RESOLVER.get_or_init(|| {
+        dozer_i18n::resolver_from_json([
+            (AGENT_OWNER.to_string(), "en".to_string(), EN.to_string()),
+            (AGENT_OWNER.to_string(), "zh-CN".to_string(), ZH_CN.to_string()),
+        ])
+        .expect("内嵌的 Agent 语言包必须是合法扁平原")
+    })
+}
+
+/// 按当前 locale 解析一条 Agent 文案(缺 key/参数时回落 `fallback`)。
+pub fn text(key: &str, fallback: &str, locale: &str) -> String {
+    resolver()
+        .resolve(&LocalizedText::keyed(AGENT_OWNER, key, fallback), locale)
+        .text
+}
+
+/// 带具名参数的版本。
+pub fn text_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> String {
+    let mut t = LocalizedText::keyed(AGENT_OWNER, key, fallback);
+    for (name, value) in args {
+        t = t.with_arg(*name, *value);
+    }
+    resolver().resolve(&t, locale).text
+}

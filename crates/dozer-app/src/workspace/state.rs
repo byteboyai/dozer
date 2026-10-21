@@ -192,6 +192,10 @@ pub struct ReviewView {
     pub loaded_nonce: Option<u64>,
 }
 
+pub(crate) use dozer_panel_agent::card::{
+    apply_refresh as apply_agent_card_refresh, refresh_plan as agent_card_refresh_plan,
+    workspace_git_info,
+};
 pub use dozer_panel_agent::state::AgentPanelState;
 pub use dozer_panel_agent::tabs::{SessionTab, TabBackend, TabOut, WorkspaceGitInfo};
 use dozer_services::SessionService;
@@ -868,70 +872,6 @@ impl Workspace {
         });
     }
 
-    /// hook 事件驱动的"卡片元信息"刷新(仿 `spawn_review_load` 的写法):
-    /// model/permissionMode(Claude 与 Unknown——后者是老装 hook 上报的
-    /// "还不知道具体是哪家",但 transcript 仍是 Claude 形状,见
-    /// `transcript::latest_model_mode_and_activity`)+ 工作区覆盖(仅当该 session
-    /// 的 cwd 偏离项目根目录——即不在 `project_root` 路径前缀下——时才
-    /// 查;常见情形直接复用 `project_panel` 的项目级缓存,这里不产生任何
-    /// IO)。两者都不需要时不起异步任务,但仍同步发一条全 `None` 的
-    /// `AgentCardRefreshed`,确保 `workspace_override` 之类的残留覆盖能被
-    /// 清掉(见 `apply_agent_card_refresh`)。
-    pub(crate) fn spawn_agent_card_refresh(
-        &self,
-        io: &ShellIo,
-        tab_id: usize,
-        agent: AgentKind,
-        transcript_path: Option<String>,
-        cwd: PathBuf,
-        project_root: Option<PathBuf>,
-    ) {
-        let Some(project_id) = self.project_id() else {
-            return;
-        };
-        let (needs_model_mode, needs_activity, needs_workspace) =
-            agent_card_refresh_plan(agent, &cwd, project_root.as_deref());
-        if !needs_model_mode && !needs_activity && !needs_workspace {
-            // cwd 未偏离项目根、且这个 agent 没有可提取的 model/mode/activity:
-            // 不需要起 IO/async 任务,同步把这个明确值发出去即可,顺便清掉
-            // 可能残留的 workspace_override(见 apply_agent_card_refresh 的
-            // 无条件覆盖注释)。
-            let _ = io.proxy.send_event(Message::AgentCardRefreshed(
-                project_id, tab_id, None, None, None, None,
-            ));
-            return;
-        }
-        let proxy = io.proxy.clone();
-        io.handle.spawn(async move {
-            let (llm_model, mode, activity, workspace) = tokio::task::spawn_blocking(move || {
-                let (llm_model, mode, activity) = if needs_model_mode || needs_activity {
-                    let (m, mo, a) = transcript_path
-                        .and_then(|p| std::fs::read_to_string(p).ok())
-                        .map(|s| transcript::latest_model_mode_and_activity(&s))
-                        .unwrap_or((None, None, None));
-                    (
-                        if needs_model_mode { m } else { None },
-                        if needs_model_mode { mo } else { None },
-                        if needs_activity { a } else { None },
-                    )
-                } else {
-                    (None, None, None)
-                };
-                let workspace = if needs_workspace {
-                    workspace_git_info(&cwd)
-                } else {
-                    None
-                };
-                (llm_model, mode, activity, workspace)
-            })
-            .await
-            .unwrap_or((None, None, None, None));
-            let _ = proxy.send_event(Message::AgentCardRefreshed(
-                project_id, tab_id, llm_model, mode, activity, workspace,
-            ));
-        });
-    }
-
     /// 项目切换清理：关掉所有终端 tab（=结束会话，同 CloseTab 语义）与
     /// 所有预览 tab，给新项目一个干净起点。webview 池由
     /// main.rs 的 sync_previews 依据空的期望清单自动销毁。
@@ -1027,7 +967,6 @@ impl Workspace {
             term_tab_bar_avail_px: 0.0,
             caps: dozer_panel_agent::adapter::AgentCapabilities::all(),
             hooks: &hooks,
-            locale: "",
             track_exit_critical: &|task| io.track_exit_critical(task),
         };
         dozer_panel_agent::update::close_tab(&mut self.agent, &ctx, idx);
@@ -1242,7 +1181,6 @@ impl Workspace {
             term_tab_bar_avail_px: 0.0,
             caps: dozer_panel_agent::adapter::AgentCapabilities::all(),
             hooks: &hooks,
-            locale: "",
             track_exit_critical: &|task| io.track_exit_critical(task),
         };
         let proxy = io.proxy.clone();
@@ -2032,95 +1970,6 @@ impl Workspace {
     }
 }
 
-/// 决定这次 hook 事件驱动的卡片刷新要不要做 model/mode 提取、要不要
-/// 单独查一次工作区 git 信息。抽成纯函数只为可测——
-/// `Workspace::spawn_agent_card_refresh` 里直接调用,不重复判断逻辑。
-pub(crate) fn agent_card_refresh_plan(
-    agent: AgentKind,
-    cwd: &Path,
-    project_root: Option<&Path>,
-) -> (bool, bool, bool) {
-    // Unknown 同样走 Claude 形状的 transcript 解析(见 transcript.rs 里
-    // parse_transcript 对 Unknown 的既有处理和注释——老装 hook 上报的
-    // Unknown agent 不该因为这道门禁又变回"空白卡片"这同一类 bug)。
-    // Codebuddy 有独立 schema,但 latest_model_mode_and_activity 已经兼认它的
-    // providerData.model 字段(mode 恒 None——transcript 没有 permissionMode
-    // 等价字段,卡片 Mode 行因此天然不渲染,不是 bug)。Opencode 的合成
-    // transcript 是 Claude 形状,dozer-hook 插件(dozer-translate.ts::
-    // onUserMessage)已经把 chat.message hook 拿到的 model(`{providerID,
-    // modelID}`,spike 实测两个字段都有)格式化成 `"providerID/modelID"`
-    // 写进 `message.model`,同一条 `latest_model_mode_and_activity` 路径
-    // 直接读得到,不需要单独分支。mode 恒 None(OpenCode 没有
-    // permissionMode 等价字段,同 Codebuddy)。Codex 现在也能从 `turn_context`
-    // 行里提取到 model(见 `transcript::latest_model_mode_and_activity`),
-    // mode 恒 None(同 Codebuddy)。V8agent 仍不在这道门禁里:
-    // 它的合成 transcript 还没有 model 字段,加了也读不到值。
-    let needs_model_mode = matches!(
-        agent,
-        AgentKind::Claude
-            | AgentKind::Unknown
-            | AgentKind::Codebuddy
-            | AgentKind::Opencode
-            | AgentKind::Codex
-    );
-    // "当前工作内容"兜底摘要的门禁比 model/mode 宽——只要 transcript
-    // schema 能被 `parse_transcript` 解出人类/AI 文本就值得读(Opencode
-    // 的合成 transcript 是 Claude 形状,真有内容,只是没写 model/mode
-    // 字段而已;V8agent 的 transcript 现在也走同一条 Claude 形状解析路径,
-    // 见 dozerd `transcripts/parse.rs` 的 `parse_chunk` 分派)。Codex 现在也能
-    // 从 `response_item` 行里提取到 activity(见
-    // `transcript::latest_model_mode_and_activity`),同样打开这道门。
-    let needs_activity = true;
-    // 精确相等太脆弱——cd 进项目根的任意子目录都会被判定成"偏离",既多做
-    // 一次不必要的 git 查询,也是 Finding 1 那个 bug 更容易被触发的原因之
-    // 一。改成路径前缀包含关系:cwd 是 project_root 的子路径就算"未偏离"。
-    let needs_workspace = match project_root {
-        Some(root) => !cwd.starts_with(root),
-        None => true,
-    };
-    (needs_model_mode, needs_activity, needs_workspace)
-}
-
-/// `Message::AgentCardRefreshed` 落地:在 `tabs` 里找 `tab_id`。
-/// `llm_model`/`mode` 的 `None` 表示这次没有新值,不覆盖已有值(每次刷新
-/// 只重新扫描"当前" transcript 内容,理论上不会无中生有变回 `None`,这里
-/// 的保护针对 transcript 读取失败等异常情形,不让卡片从"有值"闪回
-/// "无值")。`workspace` 语义不同——它的 `None` 是上游
-/// `spawn_agent_card_refresh`/`agent_card_refresh_plan` 给出的明确信号
-/// "cwd 未偏离项目根",必须无条件覆盖(含清空 `Some` → `None`),否则
-/// session 一旦偏离过一次项目根,`workspace_override` 就再也清不掉了。
-/// tab 不存在(已关闭)时整体 no-op,不 panic。只依赖 `&mut [SessionTab]`
-/// 不依赖整个 `Workspace`,同 `group_tabs_by_agent` 的既有写法,方便
-/// 直接单测。
-pub(crate) fn apply_agent_card_refresh(
-    tabs: &mut [SessionTab],
-    tab_id: usize,
-    llm_model: Option<String>,
-    mode: Option<String>,
-    activity: Option<String>,
-    workspace: Option<WorkspaceGitInfo>,
-) {
-    let Some(tab) = tabs.iter_mut().find(|t| t.tab_id == tab_id) else {
-        return;
-    };
-    if llm_model.is_some() {
-        tab.llm_model = llm_model;
-    }
-    if mode.is_some() {
-        tab.permission_mode = mode;
-    }
-    if activity.is_some() {
-        tab.last_activity = activity;
-    }
-    // workspace 不走"只在 Some 时覆盖"这条——上游 spawn_agent_card_refresh
-    // 现在保证 None 在这里永远是明确语义("cwd 未偏离项目根,该清空覆盖"),
-    // 不是"这次没查、保留原值"，跟 llm_model/mode 的 None 语义不同(那两个
-    // 的 None 才是"没查到新值,保留旧值")。无条件覆盖——修复此前
-    // workspace_override 一旦被设置过就再也清不掉的 bug:session 只要偏离
-    // 过一次项目根,就算 cd 回去了,卡片工作区行也会永远停在旧快照上。
-    tab.workspace_override = workspace;
-}
-
 /// 项目 git/磁盘状态在多个地方触发刷新,完成后分发成两条
 /// 独立消息:`Files(StatusesRefreshed)` 只带文件级状态,`Project(GitRefreshed)`
 /// 带分支/脏/remote。两个 extension 互不知道对方存在,内核是唯一知道
@@ -2145,18 +1994,6 @@ pub(crate) fn spawn_project_git_refresh(project_id: i64, repo_path: PathBuf, io:
             project_id, b, d, r,
         )));
     });
-}
-
-/// agent 会话当前 cwd 所属仓库的分支/脏标(卡片工作区行用)。cwd 不是目录、不在任何仓库里、
-/// 或仓库是 bare 时为 `None`;cwd 在仓库**子目录**里照样向上找到仓库。
-pub(crate) fn workspace_git_info(cwd: &Path) -> Option<WorkspaceGitInfo> {
-    let repo = bytegit::Repo::discover_workdir(cwd).ok()?;
-    Some(WorkspaceGitInfo {
-        branch: repo.head().ok().and_then(|h| h.branch),
-        dirty: repo
-            .is_dirty(bytegit::StatusOptions::default())
-            .unwrap_or(false),
-    })
 }
 
 /// 项目的 git 快照:`(当前分支, 是否有改动, 文件级状态, 全部 remote 的 URL)`。

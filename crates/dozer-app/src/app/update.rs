@@ -383,28 +383,16 @@ impl App {
                     }
                 });
             }
-            Message::AgentStateChanged(project_id, tab_id, agent, state, transcript_path) => {
-                self.agent_state_changed(project_id, tab_id, agent, state, transcript_path)
-            }
-            Message::AgentCardRefreshed(
-                project_id,
-                tab_id,
-                llm_model,
-                mode,
-                activity,
-                workspace,
-            ) => {
-                self.with_project(project_id, |ws, _io| {
-                    crate::workspace::apply_agent_card_refresh(
-                        &mut ws.tabs,
+            Message::AgentStateChanged(project_id, tab_id, agent, state, transcript_path) => self
+                .agent_panel_message(
+                    project_id,
+                    dozer_panel_agent::update::Message::AgentState {
                         tab_id,
-                        llm_model,
-                        mode,
-                        activity,
-                        workspace,
-                    );
-                });
-            }
+                        agent,
+                        state,
+                        transcript_path,
+                    },
+                ),
             Message::ReviewLoaded(project_id, source, append, result) => {
                 self.with_project(project_id, |ws, _io| {
                     if result.is_ok() {
@@ -4564,155 +4552,86 @@ impl App {
         self.project_preview_open_path(readme);
     }
 
-    /// 处理 `dozer-panel-agent` 的异步回灌消息:输出/attach/失败走库
-    /// `update`;agent 状态与退出沿用 Dozer 既有的跨面板联动。
+    /// 处理 `dozer-panel-agent` 的消息:先经库 `update` 落状态,再排空
+    /// 发件箱(提示 → Toast、请求 → 原生菜单、宿主事件 → 跨面板刷新)。
     fn agent_panel_message(
         &mut self,
         project_id: ProjectId,
         msg: dozer_panel_agent::update::Message,
     ) {
-        use dozer_panel_agent::update::Message as AgentMsg;
-        match msg {
-            AgentMsg::AgentState {
-                tab_id,
-                agent,
-                state,
-                transcript_path,
-            } => self.agent_state_changed(project_id, tab_id, agent, state, transcript_path),
-            AgentMsg::Exited { tab_id } => {
-                self.with_project(project_id, |ws, _io| {
-                    if let Some(tab) = ws.tab_by_id_mut(tab_id) {
-                        tab.alive = false;
-                        let _ = tab.model.feed(&exited_marker());
-                    }
-                });
+        let avail_px = self.terminal_tab_bar_avail_px();
+        let mut notices = Vec::new();
+        let mut requests = Vec::new();
+        let mut host_events = Vec::new();
+        self.with_project(project_id, |ws, io| {
+            let Some(project) = ws.project.clone() else {
+                return;
+            };
+            let hooks: std::sync::Arc<dyn dozer_panel_agent::adapter::HookInstaller> =
+                std::sync::Arc::new(crate::host_adapters::agent_panel::DozerHooks);
+            let services = crate::host_adapters::services::services_for(&io.client);
+            let ctx = dozer_panel_agent::update::UpdateCtx {
+                project: &project,
+                svc: &services.session,
+                handle: &io.handle,
+                cols: io.cols,
+                rows: io.rows,
+                term_tab_bar_avail_px: avail_px,
+                caps: dozer_panel_agent::adapter::AgentCapabilities::all(),
+                hooks: &hooks,
+                track_exit_critical: &|task| io.track_exit_critical(task),
+            };
+            let proxy = io.proxy.clone();
+            let emit = move |m| {
+                let _ = proxy.send_event(Message::Agent(project_id, m));
+            };
+            dozer_panel_agent::update::update(&mut ws.agent, msg, &ctx, emit);
+            notices = ws.agent.take_outbox();
+            requests = ws.agent.take_requests();
+            host_events = ws.agent.take_host_events();
+        });
+        for n in notices {
+            let level = match n.level {
+                dozer_panel_host::NoticeLevel::Info => toast::Level::Info,
+                dozer_panel_host::NoticeLevel::Success => toast::Level::Success,
+                dozer_panel_host::NoticeLevel::Warning => toast::Level::Warning,
+                dozer_panel_host::NoticeLevel::Error => toast::Level::Error,
+            };
+            match n.key {
+                Some(key) => self.push_toast_keyed(LOG, level, n.text, &key),
+                None => self.push_toast(LOG, level, n.text),
             }
-            other => {
-                let avail_px = self.terminal_tab_bar_avail_px();
-                let mut notices = Vec::new();
-                let mut requests = Vec::new();
-                let mut host_events = Vec::new();
-                self.with_project(project_id, |ws, io| {
-                    let Some(project) = ws.project.clone() else {
-                        return;
-                    };
-                    let hooks: std::sync::Arc<dyn dozer_panel_agent::adapter::HookInstaller> =
-                        std::sync::Arc::new(crate::host_adapters::agent_panel::DozerHooks);
-                    let services = crate::host_adapters::services::services_for(&io.client);
-                    let ctx = dozer_panel_agent::update::UpdateCtx {
-                        project: &project,
-                        svc: &services.session,
-                        handle: &io.handle,
-                        cols: io.cols,
-                        rows: io.rows,
-                        term_tab_bar_avail_px: avail_px,
-                        caps: dozer_panel_agent::adapter::AgentCapabilities::all(),
-                        hooks: &hooks,
-                        locale: "en",
-                        track_exit_critical: &|task| io.track_exit_critical(task),
-                    };
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Agent(project_id, m));
-                    };
-                    dozer_panel_agent::update::update(&mut ws.agent, other, &ctx, emit);
-                    notices = ws.agent.take_outbox();
-                    requests = ws.agent.take_requests();
-                    host_events = ws.agent.take_host_events();
-                });
-                for n in notices {
-                    let level = match n.level {
-                        dozer_panel_host::NoticeLevel::Info => toast::Level::Info,
-                        dozer_panel_host::NoticeLevel::Success => toast::Level::Success,
-                        dozer_panel_host::NoticeLevel::Warning => toast::Level::Warning,
-                        dozer_panel_host::NoticeLevel::Error => toast::Level::Error,
-                    };
-                    match n.key {
-                        Some(key) => self.push_toast_keyed(LOG, level, n.text, &key),
-                        None => self.push_toast(LOG, level, n.text),
-                    }
-                }
-                if !requests.is_empty() {
-                    let _ = self.proxy.send_event(Message::AgentPickerToggle);
-                }
-                for ev in host_events {
-                    if let dozer_panel_agent::adapter::AgentHostEvent::StateChanged {
-                        tab_id,
-                        agent,
-                        state,
-                        transcript_path,
-                    } = ev
-                    {
-                        self.agent_state_changed(project_id, tab_id, agent, state, transcript_path);
-                    }
-                }
+        }
+        if requests.iter().any(|r| {
+            matches!(
+                r,
+                dozer_panel_agent::adapter::AgentRequest::ShowPicker { .. }
+            )
+        }) {
+            let last_cursor = self.last_cursor;
+            let items = crate::workspace::agent_picker_items();
+            if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
+                let _ = self.proxy.send_event(msg);
+            }
+        }
+        for ev in host_events {
+            if let dozer_panel_agent::adapter::AgentHostEvent::TurnEnded { tab_id } = ev {
+                self.agent_turn_ended(project_id, tab_id);
             }
         }
     }
 
-    pub(crate) fn agent_state_changed(
-        &mut self,
-        project_id: ProjectId,
-        tab_id: usize,
-        agent: AgentKind,
-        state: AgentState,
-        transcript_path: Option<String>,
-    ) {
+    /// 回合结束后的跨面板刷新(会话列表、项目 git/磁盘占用、审阅重载)。
+    /// 卡片本身的刷新由库在 `AgentState` 分支内完成。
+    fn agent_turn_ended(&mut self, project_id: ProjectId, tab_id: usize) {
         self.with_project(project_id, |ws, io| {
-            // 当前项目路径先取出（下面要 &mut 借 tab，冲突）；重锚:项目优先。
-            let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
-            // 卡片刷新要传的数据在这里先摘出来（`Option` 同时充当"tab 是否
-            // 存在"的哨兵）：`tab`（来自 `ws.tab_by_id_mut`）借的是整个
-            // `ws`，下面 TurnEnded 分支还要再用 `tab`，中间插一句
-            // `ws.spawn_agent_card_refresh`（借 `&ws`）会跟这个 `&mut ws`
-            // 借用重叠、过不了借用检查；摘成局部变量、挪到这个 `if let`
-            // 块结束、`tab` 借用已经释放之后再调用，规避这个冲突,语义不变
-            // (仍然是"tab 存在就必调用一次,不进 TurnEnded 条件分支")。
-            let mut card_refresh_args: Option<(Option<String>, PathBuf)> = None;
-            if let Some(tab) = ws.tab_by_id_mut(tab_id) {
-                tab.agent_state = state;
-                tab.agent = agent;
-                // 补一道:picker 不是唯一入口(比如在已开着的纯 shell tab 里
-                // 手打 `opencode`),那种情况下 `on_tab_attached` 拿不到
-                // picker 提示,只能靠这条 hook 上报事后补上——虽然大概率已经
-                // 错过了 agent 进程启动瞬间那波终端探测查询,但仍是"跟真实
-                // agent 保持同步"的唯一后备信号。
-                tab.model
-                    .set_answer_dynamic_color(agent == AgentKind::Opencode);
-                if let Some(tp) = transcript_path {
-                    tab.transcript_path = Some(tp);
-                }
-                dozer_core::log_info!(LOG, tab_id, ?state, "agent 状态变更");
-                card_refresh_args = Some((tab.transcript_path.clone(), tab.effective_cwd()));
+            ws.spawn_conversations_refresh(io);
+            if let Some(project) = &ws.project {
+                let repo_path = PathBuf::from(&project.path);
+                spawn_project_git_refresh(project_id, repo_path.clone(), io);
+                spawn_disk_usage_refresh(project_id, repo_path, io);
             }
-            if let Some((transcript_path, cwd)) = card_refresh_args {
-                ws.spawn_agent_card_refresh(
-                    io,
-                    tab_id,
-                    agent,
-                    transcript_path,
-                    cwd,
-                    active_repo.clone(),
-                );
-            }
-            // 回合结束后刷新会话列表(transcript 增长/新增；P1j)与项目 git/
-            // 磁盘占用状态(文件树装饰随之更新；P1h)。这两项刷新原先分别挂在
-            // 会话列表自己的耦合链路、以及已删除的验收检测异步回调
-            // (`delivery_checked`)上——验收闭环删除后,后者连带的刷新触发点
-            // 也没了,这里改成回合结束就无条件触发,不再依赖任何验收检测结果
-            // (前半"会话列表"这条 P1j 当年就已经这样修过一次,这次是把后半
-            // "git/磁盘占用"也补齐同样的处理)。
-            if state == AgentState::TurnEnded {
-                ws.spawn_conversations_refresh(io);
-                if let Some(project) = &ws.project {
-                    let repo_path = PathBuf::from(&project.path);
-                    spawn_project_git_refresh(project_id, repo_path.clone(), io);
-                    spawn_disk_usage_refresh(project_id, repo_path, io);
-                }
-            }
-            // 审阅 tab 若开着且属本会话,回合结束重解析 transcript（P1i）。
-            if state == AgentState::TurnEnded
-                && let Some(rv) = &ws.review
+            if let Some(rv) = &ws.review
                 && review_should_refresh_on_turn(&rv.source, tab_id)
                 && let Some((path, tab_agent)) = ws
                     .tabs

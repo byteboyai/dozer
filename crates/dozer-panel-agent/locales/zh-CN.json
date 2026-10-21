@@ -1,0 +1,13 @@
+{
+  "agent.no_conversations": "暂无会话",
+  "agent.new_session": "新建 Agent 会话",
+  "agent.close_tab_title": "关闭\"{agent}\" Agent吗？",
+  "agent.close_tab_description": "\"{agent}\" Agent 当前正处于活动状态，关闭后会结束会话，并清空会话上下文。",
+  "agent.state_running": "运行中",
+  "agent.state_awaiting_input": "待输入",
+  "agent.state_turn_ended": "回合毕",
+  "agent.state_idle": "空闲",
+  "term.no_sessions": "暂无会话——到 Agent 面板点「＋」",
+  "close_confirm.cancel": "取消",
+  "close_confirm.confirm": "关闭"
+}

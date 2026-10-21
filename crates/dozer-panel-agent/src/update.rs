@@ -61,6 +61,14 @@ pub enum Message {
         at: Option<(f32, f32)>,
     },
     OverflowDismiss,
+    /// 卡片刷新结果(库内 `card::spawn_refresh` 回灌)。
+    CardRefreshed {
+        tab_id: usize,
+        llm_model: Option<String>,
+        mode: Option<String>,
+        activity: Option<String>,
+        workspace: Option<crate::tabs::WorkspaceGitInfo>,
+    },
     /// 异步失败:统一经 `outbox` 出一条带 key 的提示。
     Failed {
         key: &'static str,
@@ -78,7 +86,6 @@ pub struct UpdateCtx<'a> {
     pub term_tab_bar_avail_px: f32,
     pub caps: AgentCapabilities,
     pub hooks: &'a Arc<dyn HookInstaller>,
-    pub locale: &'a str,
     /// 退出前必须等待的任务(kill/总结)。Dozer 传 `ShellIo::track_exit_critical`。
     pub track_exit_critical: &'a dyn Fn(tokio::task::JoinHandle<()>),
 }
@@ -172,6 +179,21 @@ pub fn update(
             if agent_state == AgentState::TurnEnded {
                 state.host_events.push(AgentHostEvent::TurnEnded { tab_id });
             }
+            let (transcript_path, cwd) = {
+                let Some(tab) = state.tab_by_id(tab_id) else {
+                    return;
+                };
+                (tab.transcript_path.clone(), tab.effective_cwd())
+            };
+            crate::card::spawn_refresh(
+                ctx.handle,
+                emit,
+                tab_id,
+                agent,
+                transcript_path,
+                cwd,
+                Some(std::path::PathBuf::from(&ctx.project.path)),
+            );
         }
         Message::SelectTab(idx) | Message::SelectTabNoDrag(idx) => {
             if idx < state.tabs.len() {
@@ -259,6 +281,22 @@ pub fn update(
             };
         }
         Message::OverflowDismiss => state.term_tab_overflow_anchor = None,
+        Message::CardRefreshed {
+            tab_id,
+            llm_model,
+            mode,
+            activity,
+            workspace,
+        } => {
+            crate::card::apply_refresh(
+                &mut state.tabs,
+                tab_id,
+                llm_model,
+                mode,
+                activity,
+                workspace,
+            );
+        }
         Message::Failed { key, error } => {
             state
                 .outbox
@@ -726,7 +764,6 @@ mod tests {
                 term_tab_bar_avail_px: 400.0,
                 caps: AgentCapabilities::all(),
                 hooks: &self.hooks_dyn,
-                locale: "en",
                 track_exit_critical: tracked,
             }
         }
@@ -1292,6 +1329,62 @@ mod tests {
         );
         assert_eq!(state.active, state.tabs.len() - 1);
         assert!(state.term_tab_first > 0, "新 tab 应滚入可见窗口");
+    }
+
+    #[tokio::test]
+    async fn agent_state_message_requests_a_card_refresh_for_an_existing_tab_only() {
+        let h = Harness::new();
+        let svc = h.svc();
+        let handle = tokio::runtime::Handle::current();
+        let ctx = h.ctx(&svc, &handle, &|_| {});
+        let mut state = AgentPanelState::new();
+        state.tabs.push(make_tab(&handle, 5, AgentKind::Unknown));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        update(
+            &mut state,
+            Message::AgentState {
+                tab_id: 5,
+                agent: AgentKind::Claude,
+                state: AgentState::Running,
+                transcript_path: None,
+            },
+            &ctx,
+            move |m| {
+                let _ = tx.send(m);
+            },
+        );
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("卡片刷新应在合理时间内回灌")
+            .expect("消息");
+        assert!(
+            matches!(msg, Message::CardRefreshed { tab_id: 5, .. }),
+            "{msg:?}"
+        );
+
+        // 不存在的 tab 不触发刷新任务。
+        let (tx2, mut rx2) = mpsc::unbounded_channel();
+        let keep_tx2 = tx2.clone();
+        update(
+            &mut state,
+            Message::AgentState {
+                tab_id: 999,
+                agent: AgentKind::Claude,
+                state: AgentState::Running,
+                transcript_path: None,
+            },
+            &ctx,
+            move |m| {
+                let _ = tx2.send(m);
+            },
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), rx2.recv())
+                .await
+                .is_err(),
+            "不存在的 tab 不应产生 CardRefreshed"
+        );
+        drop(keep_tx2);
     }
 
     #[tokio::test]

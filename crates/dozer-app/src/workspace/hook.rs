@@ -17,6 +17,9 @@ use super::*;
 pub(crate) use dozer_panel_agent::launch::{
     attached_agent, picker_launch_command, should_answer_dynamic_color,
 };
+pub(crate) use dozer_panel_agent::style::{
+    agent_dot_color, agent_icon, agent_state_label, dot_color, format_model_label,
+};
 pub(crate) use dozer_panel_agent::tabs::{
     should_summarize_on_close, tab_display_width, tab_title, text_width_units,
 };
@@ -141,98 +144,6 @@ pub(crate) fn ensure_mcp_installed(agent: AgentKind) {
 pub(crate) fn preview_tab_display_width(title: &str) -> f32 {
     // 名称 ≈ units * 半宽 8.0(14px), 关闭× ≈ 18, pill padding ≈ 12
     text_width_units(title) * 8.0 + 18.0 + 12.0
-}
-
-/// agent 四态文案（终端状态栏用，按当前 locale 渲染）。
-pub(crate) fn agent_state_label(state: AgentState, locale: &str) -> String {
-    let (key, fallback) = match state {
-        AgentState::Running => ("agent.state_running", "Running"),
-        AgentState::AwaitingInput => ("agent.state_awaiting_input", "Awaiting input"),
-        AgentState::TurnEnded => ("agent.state_turn_ended", "Turn ended"),
-        AgentState::Idle => ("agent.state_idle", "Idle"),
-    };
-    crate::i18n::host_text(key, fallback, locale)
-}
-
-/// tab 前状态点配色：死会话灰；存活按 agent 状态——绿=空闲/运行、
-/// 紫蓝=待输入、金=回合结束（金是甲方动作专属色：该出手了）。运行态
-/// 与空闲态同为绿，靠 `tab_item` 里的闪烁区分（工作中才闪）。
-pub(crate) fn dot_color(state: AgentState, alive: bool) -> Color {
-    if !alive {
-        return byteui::theme::color::current().dim;
-    }
-    match state {
-        AgentState::Idle => byteui::theme::color::current().cyan,
-        AgentState::Running => byteui::theme::color::current().green,
-        AgentState::AwaitingInput => byteui::theme::color::current().red,
-        AgentState::TurnEnded => byteui::theme::color::current().gold,
-    }
-}
-
-/// `claude-sonnet-5` → `Sonnet 5`:去掉 `claude-` 前缀,按 `-` 分词、每
-/// 词首字母大写、空格拼接。不以 `claude-` 开头的原样返回(不确定形状,
-/// 不强行摘,避免拍出乱码;不维护会过期的型号对照表)。
-pub(crate) fn format_model_label(raw: &str) -> String {
-    match raw.strip_prefix("claude-") {
-        Some(rest) => rest
-            .split('-')
-            .map(|w| {
-                let mut chars = w.chars();
-                match chars.next() {
-                    Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
-                    None => String::new(),
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" "),
-        None => raw.to_string(),
-    }
-}
-
-/// agent → 对话列表圆点颜色。避开 `byteui::theme::color::current().gold`(甲方动作专属色,
-/// CLAUDE.md 明文规定,不能被 agent 分类语义借用)。
-pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
-    match agent {
-        AgentKind::Claude => byteui::theme::color::current().cyan,
-        AgentKind::Codebuddy => byteui::theme::color::current().purple,
-        AgentKind::Opencode => byteui::theme::color::current().green,
-        // Codex 品牌 logo 是蓝紫渐变但更偏蓝,用 `blue`(纯蓝)贴合,与 Claude 的
-        // `cyan`、Codebuddy 的 `purple` 都拉开差距。Goose 原本占 `blue`,为避免
-        // 与 Codex 撞色改走新增的 `teal`。web 侧 `AGENT_COLOR_VAR` 须同步。
-        AgentKind::Codex => byteui::theme::color::current().blue,
-        AgentKind::Goose => byteui::theme::color::current().teal,
-        AgentKind::Aider => byteui::theme::color::current().magenta,
-        AgentKind::V8agent => byteui::theme::color::current().lime,
-        // byteui 的语义色相已被前面七家用完;`ignored` 与 `dim` 数值相同(会和普通 shell 的圆点
-        // 混淆),只剩 `red` 不与任何 agent 重复。红色在别处表示错误,这是个待用户确认的折中
-        // (真正的解法是 byteui 增加一个 agent 专用色,需要单独发版)。
-        AgentKind::Qodercn => byteui::theme::color::current().red,
-        AgentKind::Unknown => byteui::theme::color::current().dim,
-    }
-}
-
-/// agent → 品牌图标(新建 agent 菜单用)。颜色由调用方按 `agent_dot_color`
-/// 同款语义传入,使图标色与圆点色一致;自带原色的品牌图会忽略该着色。
-/// Goose 根据当前明暗主题选择黑色或白色剪影。
-pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
-    match agent {
-        AgentKind::Claude => IconKind::Claude,
-        AgentKind::Codebuddy => IconKind::Codebuddy,
-        AgentKind::Opencode => IconKind::Opencode,
-        AgentKind::Aider => IconKind::Aider,
-        AgentKind::Codex => IconKind::Codex,
-        AgentKind::Goose => match byteui::theme::color::current_scheme() {
-            byteui::theme::color::ColorScheme::Light => IconKind::GooseLight,
-            byteui::theme::color::ColorScheme::Dark => IconKind::GooseDark,
-        },
-        // Qoder 同 Goose:自带固定色的明暗两版 logo,按当前主题选。
-        AgentKind::Qodercn => match byteui::theme::color::current_scheme() {
-            byteui::theme::color::ColorScheme::Light => IconKind::QoderLight,
-            byteui::theme::color::ColorScheme::Dark => IconKind::QoderDark,
-        },
-        // 暂无确认可用的品牌素材，回落通用图标（spec §8/§6 明确允许）。
-        AgentKind::V8agent | AgentKind::Unknown => IconKind::Bot,
-    }
 }
 
 /// 由(路径, 是否有选区, 0-indexed 光标位置, 0-indexed 选区范围, 当前时间)

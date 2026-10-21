@@ -37,19 +37,6 @@ pub enum Message {
     SessionExited(ProjectId, usize),
     /// attach 流转发来的 agent 状态变更（tab_id, 状态, 该会话最新 transcript 路径）。
     AgentStateChanged(ProjectId, usize, AgentKind, AgentState, Option<String>),
-    /// hook 事件驱动的 Agent 卡片元信息刷新结果(tab_id, LLM 型号,
-    /// permission mode,transcript 最后活动摘要(兜底"当前工作内容",见
-    /// `workspace::agent_card`),工作区分支/脏标覆盖)。`None` 字段表示
-    /// 这次没有新值,落地时不覆盖已有值(见
-    /// `workspace::apply_agent_card_refresh`)。
-    AgentCardRefreshed(
-        ProjectId,
-        usize,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<crate::workspace::WorkspaceGitInfo>,
-    ),
     /// 会话审阅:解析完成（来源, 追加标记, 条目 / 错误文案）。`append`
     /// 为 `true` 时新条目应追加进现有 `entries`(详情"加载更多"),`false`
     /// 时整段替换(首次打开/活会话刷新)。

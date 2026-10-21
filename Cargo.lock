@@ -2146,11 +2146,16 @@ dependencies = [
 name = "dozer-panel-agent"
 version = "0.1.0"
 dependencies = [
+ "bytegit",
  "byteui",
+ "dozer-i18n",
  "dozer-model",
  "dozer-panel-host",
  "dozer-panel-term",
  "dozer-services",
+ "iced_renderer",
+ "iced_widget",
+ "serde_json",
  "tokio",
  "tracing",
 ]

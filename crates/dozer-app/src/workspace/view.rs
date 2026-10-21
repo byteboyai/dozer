@@ -19,6 +19,10 @@ use iced_widget::{Scrollable, button, column, container, row, scrollable};
 
 use super::*;
 
+pub(crate) use dozer_panel_agent::adapter::TaskTitleSource;
+pub(crate) use dozer_panel_agent::card::{CardCtx, CardModel, card_model, card_title, work_line};
+pub(crate) use dozer_panel_agent::style::group_tabs_by_agent;
+
 /// 会话详情"加载更多"按钮(2026-08-27):居中的 `<summary>` 样式的图标按钮,
 /// hover 金边提示,点击追加下一页回合。`after_turn_index` 用 `entries.len()`
 /// 当锚点——`ReviewEntry` 不携带原始 turn index,详情页按整段摊平加载,取
@@ -56,128 +60,6 @@ pub(crate) fn load_more_button<'a>(
 /// (`extensions::conversations::CONVERSATION_PAGE_SIZE`,20)与详情页分页
 /// (这里,200)含义不同,不要混用。
 pub(crate) const CONVERSATION_DETAIL_PAGE_SIZE: u32 = 200;
-
-/// 按 `AgentKind` 把会话 tab 分组,固定顺序 Claude → Codebuddy → Opencode
-/// → Codex → Goose → Aider → V8agent → Qodercn → Unknown(与 `conversation_agents_present`
-/// 同一份顺序),只返回非空分组(没有该 agent 的会话就不出现,面板不留空
-/// 分组占位)。组内保持 `tabs` 原有顺序(tab 打开顺序)。返回下标而非
-/// 引用——渲染时既要下标发 `Message::SelectTab(idx)`,又要用下标回查
-/// `ws.tabs[idx]` 取展示字段,直接存下标比存 `&SessionTab` 省一次生命
-/// 周期纠缠。
-pub(crate) fn group_tabs_by_agent(tabs: &[SessionTab]) -> Vec<(AgentKind, Vec<usize>)> {
-    const ORDER: [AgentKind; 9] = [
-        AgentKind::Claude,
-        AgentKind::Codebuddy,
-        AgentKind::Opencode,
-        AgentKind::Codex,
-        AgentKind::Goose,
-        AgentKind::Aider,
-        AgentKind::V8agent,
-        AgentKind::Qodercn,
-        AgentKind::Unknown,
-    ];
-    ORDER
-        .into_iter()
-        .filter_map(|kind| {
-            let idxs: Vec<usize> = tabs
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| t.agent == kind)
-                .map(|(i, _)| i)
-                .collect();
-            (!idxs.is_empty()).then_some((kind, idxs))
-        })
-        .collect()
-}
-
-/// 卡片数据源:任务标题反查(S6c-2 抽出的可测接缝;产品实现见
-/// `host_adapters::agent_panel`)。
-pub(crate) trait TaskTitleSource {
-    fn task_title_for_session(&self, session_id: &str) -> Option<String>;
-}
-
-/// 卡片渲染上下文:除 tab 自身字段外,卡片文本只依赖这三项。
-pub(crate) struct CardCtx<'a> {
-    pub titles: &'a dyn TaskTitleSource,
-    pub project_branch: Option<&'a str>,
-    pub project_dirty: bool,
-}
-
-/// 卡片纯数据(可测):标题、工作行、状态文案、状态点颜色、是否选中。
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct CardModel {
-    pub title: String,
-    pub work_line: String,
-    pub status: String,
-    pub dot: Color,
-    pub active: bool,
-}
-
-/// 标题:`"{title} ({model}, {mode})"`(只有一项只带那一项,都无则无括号)。
-pub(crate) fn card_title(
-    agent: AgentKind,
-    cwd: Option<&std::path::Path>,
-    fallback: &str,
-    llm_model: Option<&str>,
-    permission_mode: Option<&str>,
-) -> String {
-    let model_label = llm_model.map(format_model_label);
-    let llm_mode_value = match (&model_label, permission_mode) {
-        (Some(m), Some(mo)) => Some(format!("{m}, {mo}")),
-        (Some(m), None) => Some(m.clone()),
-        (None, Some(mo)) => Some(mo.to_string()),
-        (None, None) => None,
-    };
-    let title = tab_title(agent, cwd, fallback);
-    match llm_mode_value {
-        Some(v) => format!("{title} ({v})"),
-        None => title,
-    }
-}
-
-/// 工作行:`"{work}  @{branch}"`;`work` 缺省只有 `@{branch}`;脏标后缀
-/// `(Uncommitted)`;无分支为 `—`。
-pub(crate) fn work_line(work: Option<&str>, branch: Option<&str>, dirty: bool) -> String {
-    let workspace_value = match branch {
-        Some(b) if dirty => format!("{b}(Uncommitted)"),
-        Some(b) => b.to_string(),
-        None => "—".to_string(),
-    };
-    match work {
-        Some(w) => format!("{w}  @{workspace_value}"),
-        None => format!("@{workspace_value}"),
-    }
-}
-
-/// 把 tab + 上下文组装成卡片纯数据。
-pub(crate) fn card_model(
-    tab: &SessionTab,
-    active: bool,
-    ctx: &CardCtx<'_>,
-    locale: &str,
-) -> CardModel {
-    let work = ctx
-        .titles
-        .task_title_for_session(&tab.info.id)
-        .or_else(|| tab.last_activity.clone());
-    let (branch, dirty) = match &tab.workspace_override {
-        Some(w) => (w.branch.as_deref(), w.dirty),
-        None => (ctx.project_branch, ctx.project_dirty),
-    };
-    CardModel {
-        title: card_title(
-            tab.agent,
-            tab.cwd.as_deref(),
-            &tab.info.name,
-            tab.llm_model.as_deref(),
-            tab.permission_mode.as_deref(),
-        ),
-        work_line: work_line(work.as_deref(), branch, dirty),
-        status: agent_state_label(tab.agent_state, locale),
-        dot: dot_color(tab.agent_state, tab.alive),
-        active,
-    }
-}
 
 /// Agent 列表面板(右面板区"Agent"视图的列表侧):按 `AgentKind` 分组展示
 /// 当前项目的会话,组内保留 tab 打开顺序;点击一行 = `Message::SelectTab`
@@ -258,8 +140,16 @@ pub(crate) fn agent_card<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tab = &ws.tabs[idx];
     let active = idx == ws.active;
+    struct TodoTitles<'a>(&'a crate::extensions::todo::WorkspaceState);
+    impl TaskTitleSource for TodoTitles<'_> {
+        fn task_title_for_session(&self, session_id: &str) -> Option<String> {
+            crate::extensions::todo::WorkspaceState::task_title_for_session(self.0, session_id)
+                .map(str::to_string)
+        }
+    }
+    let titles = TodoTitles(&ws.todo);
     let ctx = CardCtx {
-        titles: &ws.todo,
+        titles: &titles,
         project_branch: ws.project_panel.branch(),
         project_dirty: ws.project_panel.dirty(),
     };
@@ -402,33 +292,23 @@ pub(crate) fn branch_picker_items<Msg: Clone>(
 /// Agent 选择器菜单内容——native(`agent_picker_items`)和 iced fallback
 /// (`agent_picker_popup`)共用同一份数据，只在这里组装一次。
 pub(crate) fn agent_picker_spec() -> MenuSpec<Message> {
-    // 由 `AgentKind::known()` 派生:新增 agent 自动出现在菜单里;按展示名不分大小写排序。
-    let mut agents: Vec<(&'static str, PickerLaunch)> = AgentKind::known()
-        .map(|k| (k.display_label(), PickerLaunch::Agent(Some(k))))
-        .collect();
-    agents.sort_by_key(|(label, _)| label.to_lowercase());
-    let shells: [(&str, PickerLaunch); 2] = [
-        ("Git Shell", PickerLaunch::Git),
-        ("OS Shell", PickerLaunch::Agent(None)),
-    ];
-    let mk = |label: &str, launch: PickerLaunch| {
-        let (icon, icon_color) = match launch {
-            PickerLaunch::Agent(Some(kind)) => (agent_icon(kind), agent_dot_color(kind)),
-            PickerLaunch::Agent(None) => (
-                IconKind::SquareTerminal,
-                byteui::theme::color::current().body,
-            ),
-            PickerLaunch::Git => (IconKind::GitBranch, byteui::theme::color::current().body),
-        };
-        MenuSpecItem::entry_tinted(icon, icon_color, label, Message::AgentPickerSelect(launch))
-    };
-    let mut spec: MenuSpec<Message> = agents
+    dozer_panel_agent::picker::picker_entries()
         .into_iter()
-        .map(|(label, launch)| mk(label, launch))
-        .collect();
-    spec.push(MenuSpecItem::separator());
-    spec.extend(shells.into_iter().map(|(label, launch)| mk(label, launch)));
-    spec
+        .map(|entry| match entry {
+            dozer_panel_agent::picker::PickerEntry::Separator => MenuSpecItem::separator(),
+            dozer_panel_agent::picker::PickerEntry::Launch {
+                launch,
+                label,
+                icon,
+                icon_color,
+            } => MenuSpecItem::entry_tinted(
+                icon,
+                icon_color,
+                label,
+                Message::AgentPickerSelect(launch),
+            ),
+        })
+        .collect()
 }
 
 /// Agent 选择菜单浮层:固定挂在窗口右上角("＋"按钮下方——该按钮
@@ -991,12 +871,5 @@ mod tests {
             r.entries = Vec::new();
             assert_eq!(review_pane_state(Some(&r)), ReviewPaneState::Ready);
         }
-    }
-}
-
-impl TaskTitleSource for crate::extensions::todo::WorkspaceState {
-    fn task_title_for_session(&self, session_id: &str) -> Option<String> {
-        crate::extensions::todo::WorkspaceState::task_title_for_session(self, session_id)
-            .map(str::to_string)
     }
 }

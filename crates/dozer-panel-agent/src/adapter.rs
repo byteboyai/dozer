@@ -51,3 +51,8 @@ pub trait HookInstaller: Send + Sync {
     /// sibling `dozer-hook` 的绝对路径(Aider launcher 用)。
     fn hook_exe(&self) -> String;
 }
+
+/// 卡片"当前工作内容"的任务标题反查(产品实现:Doze 的 Todo 派发记录)。
+pub trait TaskTitleSource: Send + Sync {
+    fn task_title_for_session(&self, session_id: &str) -> Option<String>;
+}
