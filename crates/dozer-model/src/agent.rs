@@ -94,6 +94,22 @@ impl AgentKind {
     }
 }
 
+/// 会话 attach 流上的一条事件(原 `dozer_client::TermEvent`,S6c-1 搬入
+/// `dozer-model` 以便面板库与传输实现共用同一类型)。变体与载荷不变。
+#[derive(Debug)]
+pub enum SessionEvent {
+    Output(Vec<u8>),
+    Exited(Option<i32>),
+    Lagged,
+    Disconnected,
+    /// 本会话 agent 状态变更(hook 事件驱动,dozerd 广播)。
+    Agent {
+        agent: AgentKind,
+        state: AgentState,
+        transcript_path: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,

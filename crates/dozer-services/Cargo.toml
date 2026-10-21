@@ -3,9 +3,10 @@ name = "dozer-services"
 version = "0.1.0"
 edition.workspace = true
 
-# 面板服务 trait:只许依赖 dozer-model(spec 2026-10-09)。不要加 dozer-core / dozer-client / tokio。
+# 面板服务 trait:只许依赖 dozer-model(spec 2026-10-09)。不要加 dozer-core / dozer-client。
+# 例外:S6c-1 的 `SessionService::attach` 按计划返回 tokio mpsc 接收端,故引入 tokio。
 [dependencies]
 dozer-model = { path = "../dozer-model" }
+tokio = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }

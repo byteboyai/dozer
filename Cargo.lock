@@ -2051,6 +2051,7 @@ dependencies = [
  "bytehost-apps",
  "bytehost-client",
  "dozer-core",
+ "dozer-model",
  "dozer-services",
  "dozerd",
  "serde_json",

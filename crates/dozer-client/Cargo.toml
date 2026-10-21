@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 dozer-core = { path = "../dozer-core" }
+dozer-model = { path = "../dozer-model" }
 dozer-services = { path = "../dozer-services" }
 # 应用宿主的线上类型(默认 feature,只有 serde)
 bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.11" }

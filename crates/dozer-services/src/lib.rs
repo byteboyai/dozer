@@ -5,8 +5,8 @@ use dozer_model::{
     AgentKind, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
     CodeHealthReportInfo, ContextItemInfo, ConversationSummary, FileEditHistoryInfo,
     GroupCancelScope, GroupInfo, GroupMessageInfo, LocalePreference, LocaleSnapshot,
-    LocaleWriteOutcome, MemoryDetail, MemoryInfo, MutationOutcome, ProjectInfo, SessionInfo,
-    SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
+    LocaleWriteOutcome, MemoryDetail, MemoryInfo, MutationOutcome, ProjectInfo, SessionEvent,
+    SessionInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
 };
 use std::fmt;
 use std::future::Future;
@@ -343,6 +343,47 @@ pub trait LocaleService: Send + Sync {
     ) -> BoxFuture<'_, Result<LocaleWriteOutcome, ServiceError>>;
 }
 
+/// 新建一个 daemon 会话所需的全部参数。抽成具名字段结构体而不是一长串
+/// 位置参数(`create_for_agent` 原本 8 个参数,其中 `cols`/`rows` 相邻
+/// 同型、顺序传错编译器发现不了)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSpec {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub cwd: String,
+    pub cols: u16,
+    pub rows: u16,
+    pub project_id: i64,
+    pub agent: AgentKind,
+}
+
+/// Agent 面板访问守护进程会话的唯一接缝。生产实现是 `dozer-client::Client`
+/// (Doze 连 `dozerd`,Digger 连 `diggerd`,只是 socket 不同)。
+pub trait SessionService: Send + Sync {
+    fn list_sessions(&self) -> BoxFuture<'_, Result<Vec<SessionInfo>, ServiceError>>;
+    fn create(&self, spec: SessionSpec) -> BoxFuture<'_, Result<SessionInfo, ServiceError>>;
+    fn attach(
+        &self,
+        id: String,
+        from_offset: u64,
+    ) -> BoxFuture<
+        '_,
+        Result<
+            (
+                Vec<u8>,
+                u64,
+                tokio::sync::mpsc::UnboundedReceiver<SessionEvent>,
+            ),
+            ServiceError,
+        >,
+    >;
+    fn write(&self, id: String, data: Vec<u8>) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn resize(&self, id: String, cols: u16, rows: u16) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn kill(&self, id: String) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn close_with_summary(&self, id: String) -> BoxFuture<'_, Result<(), ServiceError>>;
+}
+
 /// dozerd 自身的生命周期(设置 → 高级)。无参数,future 不借用调用方局部变量。
 /// `ensure_running`:daemon 已响应则直接成功,否则拉起并重试;拉起进程属宿主职责,
 /// 因此生产实现在 `dozer-app`,不在 `dozer-client`。
@@ -368,6 +409,7 @@ pub struct Services {
     pub bookmark: Arc<dyn BookmarkService>,
     pub locale: Arc<dyn LocaleService>,
     pub daemon: Arc<dyn DaemonService>,
+    pub session: Arc<dyn SessionService>,
 }
 
 #[cfg(test)]
@@ -438,6 +480,7 @@ mod tests {
                 stop: Ok(()),
                 ensure: Ok(()),
             }),
+            session: Arc::new(MemSession),
         };
         let t = s.clone();
         assert!(Arc::ptr_eq(&s.usage, &t.usage));
@@ -1208,6 +1251,54 @@ mod tests {
     }
 
     // ---- DaemonService 契约 ----
+
+    struct MemSession;
+
+    impl SessionService for MemSession {
+        fn list_sessions(&self) -> BoxFuture<'_, Result<Vec<SessionInfo>, ServiceError>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn create(&self, _spec: SessionSpec) -> BoxFuture<'_, Result<SessionInfo, ServiceError>> {
+            Box::pin(async { Err(ServiceError::new(ServiceErrorKind::Unavailable, "stub")) })
+        }
+        fn attach(
+            &self,
+            _id: String,
+            _from_offset: u64,
+        ) -> BoxFuture<
+            '_,
+            Result<
+                (
+                    Vec<u8>,
+                    u64,
+                    tokio::sync::mpsc::UnboundedReceiver<SessionEvent>,
+                ),
+                ServiceError,
+            >,
+        > {
+            Box::pin(async {
+                let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                Ok((Vec::new(), 0, rx))
+            })
+        }
+        fn write(&self, _id: String, _data: Vec<u8>) -> BoxFuture<'_, Result<(), ServiceError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn resize(
+            &self,
+            _id: String,
+            _cols: u16,
+            _rows: u16,
+        ) -> BoxFuture<'_, Result<(), ServiceError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn kill(&self, _id: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn close_with_summary(&self, _id: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
 
     struct MemDaemon {
         list: Result<Vec<SessionInfo>, ServiceError>,

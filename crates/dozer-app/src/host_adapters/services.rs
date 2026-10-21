@@ -25,6 +25,7 @@ pub(crate) fn services_for(client: &Client) -> Services {
         bookmark: Arc::new(client.clone()),
         locale: Arc::new(client.clone()),
         daemon: Arc::new(ClientDaemon(client.clone())),
+        session: Arc::new(client.clone()),
     }
 }
 

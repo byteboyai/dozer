@@ -6,10 +6,12 @@
 //! Project 面板从不调用它们)。不做 feature 开关:只有本库的 `#[cfg(test)]`
 //! 用到。
 
-use dozer_model::{AgentKind, MemoryDetail, MemoryInfo, ProjectInfo, SummaryBatchInfo};
+use dozer_model::{
+    AgentKind, MemoryDetail, MemoryInfo, ProjectInfo, SessionEvent, SessionInfo, SummaryBatchInfo,
+};
 use dozer_services::{
     BoxFuture, MemoryService, ProjectService, ServiceError, ServiceErrorKind, Services,
-    TranscriptService,
+    SessionService, SessionSpec, TranscriptService,
 };
 use std::sync::{Arc, Mutex};
 
@@ -687,5 +689,55 @@ pub(crate) fn base_services() -> Services {
         bookmark: Arc::new(NoopBookmark),
         locale: Arc::new(NoopLocale),
         daemon: Arc::new(NoopDaemon),
+        session: Arc::new(NoopSession),
+    }
+}
+
+/// Project 面板不碰会话;最小桩。
+struct NoopSession;
+
+impl SessionService for NoopSession {
+    fn list_sessions(&self) -> BoxFuture<'_, Result<Vec<SessionInfo>, ServiceError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn create(&self, _spec: SessionSpec) -> BoxFuture<'_, Result<SessionInfo, ServiceError>> {
+        Box::pin(async { Err(ServiceError::new(ServiceErrorKind::Unavailable, "stub")) })
+    }
+    fn attach(
+        &self,
+        _id: String,
+        _from_offset: u64,
+    ) -> BoxFuture<
+        '_,
+        Result<
+            (
+                Vec<u8>,
+                u64,
+                tokio::sync::mpsc::UnboundedReceiver<SessionEvent>,
+            ),
+            ServiceError,
+        >,
+    > {
+        Box::pin(async {
+            let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            Ok((Vec::new(), 0, rx))
+        })
+    }
+    fn write(&self, _id: String, _data: Vec<u8>) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn resize(
+        &self,
+        _id: String,
+        _cols: u16,
+        _rows: u16,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn kill(&self, _id: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn close_with_summary(&self, _id: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async { Ok(()) })
     }
 }

@@ -12,8 +12,8 @@ use dozer_core::protocol::{
 use dozer_services::{
     BookmarkService, BoxFuture, CodeHealthService, ContextService, ConversationRows,
     ConversationService, EditHistoryService, GroupChatService, LocaleService, MemoryService,
-    PreciseEdit, ProjectService, ServiceError, ServiceErrorKind, TodoService, TranscriptService,
-    UsageRows, UsageService,
+    PreciseEdit, ProjectService, ServiceError, ServiceErrorKind, SessionService, SessionSpec,
+    TodoService, TranscriptService, UsageRows, UsageService,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -21,19 +21,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 
-#[derive(Debug)]
-pub enum TermEvent {
-    Output(Vec<u8>),
-    Exited(Option<i32>),
-    Lagged,
-    Disconnected,
-    /// 本会话 agent 状态变更（hook 事件驱动，dozerd 广播）。
-    Agent {
-        agent: AgentKind,
-        state: AgentState,
-        transcript_path: Option<String>,
-    },
-}
+/// 会话 attach 流事件已搬到 `dozer-model`(S6c-1);这里保留旧名字作为
+/// 重新导出,既有 `dozer_client::TermEvent` 调用点不动。
+pub use dozer_model::SessionEvent as TermEvent;
 
 // 应用变更事件与失败类型统一来自 `bytehost-client`(与进程内实现共用一套语义)。
 pub use bytehost_client::{AppApiError, AppChange, AppHostApi};
@@ -1518,6 +1508,67 @@ impl Client {
             }
         });
         Ok((snapshot, next, rx))
+    }
+}
+
+impl SessionService for Client {
+    fn list_sessions(&self) -> BoxFuture<'_, Result<Vec<SessionInfo>, ServiceError>> {
+        Box::pin(async move { self.list().await.map_err(into_service_error) })
+    }
+
+    fn create(&self, spec: SessionSpec) -> BoxFuture<'_, Result<SessionInfo, ServiceError>> {
+        let SessionSpec {
+            name,
+            command,
+            args,
+            cwd,
+            cols,
+            rows,
+            project_id,
+            agent,
+        } = spec;
+        Box::pin(async move {
+            self.create_for_agent(&name, &command, &args, &cwd, cols, rows, project_id, agent)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+
+    fn attach(
+        &self,
+        id: String,
+        from_offset: u64,
+    ) -> BoxFuture<'_, Result<(Vec<u8>, u64, mpsc::UnboundedReceiver<TermEvent>), ServiceError>>
+    {
+        Box::pin(async move {
+            self.attach(&id, from_offset)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+
+    fn write(&self, id: String, data: Vec<u8>) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move { self.write(&id, &data).await.map_err(into_service_error) })
+    }
+
+    fn resize(&self, id: String, cols: u16, rows: u16) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            self.resize(&id, cols, rows)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+
+    fn kill(&self, id: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move { self.kill(&id).await.map_err(into_service_error) })
+    }
+
+    fn close_with_summary(&self, id: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            self.close_with_summary(&id)
+                .await
+                .map_err(into_service_error)
+        })
     }
 }
 
@@ -3336,6 +3387,262 @@ mod bookmark_service_tests {
         assert_eq!(
             (e.kind, e.message.as_str()),
             (ServiceErrorKind::Rejected, "daemon 错误: boom")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+}
+
+#[cfg(test)]
+mod session_protocol_golden {
+    //! S6c-1 协议编码黄金测试:会话相关请求/应答的 `encode_line` 输出必须与
+    //! 抽 `SessionService` 之前逐字一致。黄金串是在现状上跑出后写死的;
+    //! 改动协议形状会让这里失败,必须显式更新并说明兼容影响。
+
+    use super::*;
+
+    fn sample_session() -> SessionInfo {
+        SessionInfo {
+            id: "sess-42".into(),
+            name: "claude · demo".into(),
+            command: "claude".into(),
+            cwd: "/tmp/demo".into(),
+            alive: true,
+            created_ms: 1_700_000_000_000,
+            agent_state: AgentState::Running,
+            transcript_path: Some("/tmp/demo/t.jsonl".into()),
+            project_id: Some(7),
+            agent: AgentKind::Claude,
+        }
+    }
+
+    #[test]
+    fn session_protocol_encoding_golden() {
+        let samples: [(&str, String, &str); 7] = [
+            (
+                "create_session",
+                encode_line(&Request::CreateSession {
+                    name: "claude · demo".into(),
+                    command: "claude".into(),
+                    args: vec!["--foo".into(), "bar baz".into()],
+                    cwd: "/tmp/demo".into(),
+                    cols: 120,
+                    rows: 40,
+                    project_id: 7,
+                    agent: AgentKind::Claude,
+                }),
+                "{\"type\":\"create_session\",\"name\":\"claude · demo\",\"command\":\"claude\",\"args\":[\"--foo\",\"bar baz\"],\"cwd\":\"/tmp/demo\",\"cols\":120,\"rows\":40,\"project_id\":7,\"agent\":\"claude\"}\n",
+            ),
+            (
+                "attach",
+                encode_line(&Request::Attach {
+                    session_id: "sess-42".into(),
+                    from_offset: 4096,
+                }),
+                "{\"type\":\"attach\",\"session_id\":\"sess-42\",\"from_offset\":4096}\n",
+            ),
+            (
+                "write",
+                encode_line(&Request::Write {
+                    session_id: "sess-42".into(),
+                    data_b64: "aGVsbG8=".into(),
+                }),
+                "{\"type\":\"write\",\"session_id\":\"sess-42\",\"data_b64\":\"aGVsbG8=\"}\n",
+            ),
+            (
+                "resize",
+                encode_line(&Request::Resize {
+                    session_id: "sess-42".into(),
+                    cols: 132,
+                    rows: 43,
+                }),
+                "{\"type\":\"resize\",\"session_id\":\"sess-42\",\"cols\":132,\"rows\":43}\n",
+            ),
+            (
+                "kill",
+                encode_line(&Request::Kill {
+                    session_id: "sess-42".into(),
+                }),
+                "{\"type\":\"kill\",\"session_id\":\"sess-42\"}\n",
+            ),
+            (
+                "created",
+                encode_line(&Reply::Created {
+                    session: sample_session(),
+                }),
+                "{\"type\":\"created\",\"session\":{\"id\":\"sess-42\",\"name\":\"claude · demo\",\"command\":\"claude\",\"cwd\":\"/tmp/demo\",\"alive\":true,\"created_ms\":1700000000000,\"agent_state\":\"running\",\"transcript_path\":\"/tmp/demo/t.jsonl\",\"project_id\":7,\"agent\":\"claude\"}}\n",
+            ),
+            (
+                "attached",
+                encode_line(&Reply::Attached {
+                    session_id: "sess-42".into(),
+                    snapshot_b64: "G1szMW1yZWQ=".into(),
+                    next_offset: 8192,
+                }),
+                "{\"type\":\"attached\",\"session_id\":\"sess-42\",\"snapshot_b64\":\"G1szMW1yZWQ=\",\"next_offset\":8192}\n",
+            ),
+        ];
+        for (name, actual, expected) in samples {
+            assert_eq!(actual, expected, "会话协议编码变了: {name}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod session_service_tests {
+    use super::todo_service_tests::temp_sock;
+    use super::*;
+    use dozer_model::SessionEvent;
+    use dozer_services::{SessionService, SessionSpec};
+    use std::any::TypeId;
+
+    #[test]
+    fn session_event_is_the_same_type_as_term_event() {
+        assert_eq!(
+            TypeId::of::<TermEvent>(),
+            TypeId::of::<SessionEvent>(),
+            "TermEvent 必须是 dozer_model::SessionEvent 的重新导出"
+        );
+    }
+
+    fn sample_session() -> SessionInfo {
+        SessionInfo {
+            id: "sess-42".into(),
+            name: "claude".into(),
+            command: "claude".into(),
+            cwd: "/tmp/demo".into(),
+            alive: true,
+            created_ms: 1,
+            agent_state: AgentState::Idle,
+            transcript_path: None,
+            project_id: Some(7),
+            agent: AgentKind::Claude,
+        }
+    }
+
+    /// 假服务端:按请求类型应答,并把收到的业务请求回传给测试断言。
+    fn serve_session_end_to_end(tag: &str) -> (PathBuf, mpsc::UnboundedReceiver<Request>) {
+        let sock = temp_sock(tag);
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let (tx, rx) = mpsc::unbounded_channel::<Request>();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let (r, mut w) = stream.into_split();
+                    let mut lines = BufReader::new(r).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let req: Request = decode_line(&line).unwrap();
+                        if matches!(req, Request::Hello { .. }) {
+                            let _ = w
+                                .write_all(
+                                    encode_line(&Reply::Hello {
+                                        protocol: dozer_core::protocol::PROTOCOL_VERSION,
+                                        product: dozer_core::paths::product().name.to_string(),
+                                    })
+                                    .as_bytes(),
+                                )
+                                .await;
+                            continue;
+                        }
+                        let reply = match &req {
+                            Request::ListSessions => Reply::Sessions {
+                                sessions: vec![sample_session()],
+                            },
+                            Request::CreateSession { .. } => Reply::Created {
+                                session: sample_session(),
+                            },
+                            Request::Attach { .. } => Reply::Attached {
+                                session_id: "sess-42".into(),
+                                snapshot_b64: B64.encode(b"snap"),
+                                next_offset: 12,
+                            },
+                            _ => Reply::Ok,
+                        };
+                        let _ = tx.send(req);
+                        let _ = w.write_all(encode_line(&reply).as_bytes()).await;
+                    }
+                });
+            }
+        });
+        (sock, rx)
+    }
+
+    #[tokio::test]
+    async fn client_implements_session_service_end_to_end() {
+        let (sock, mut seen) = serve_session_end_to_end("sess-e2e");
+        let client = Client::new(sock.clone());
+        let svc: &dyn SessionService = &client;
+
+        let sessions = svc.list_sessions().await.unwrap();
+        assert_eq!(sessions.len(), 1);
+
+        let info = svc
+            .create(SessionSpec {
+                name: "claude".into(),
+                command: "claude".into(),
+                args: vec!["--foo".into()],
+                cwd: "/tmp/demo".into(),
+                cols: 120,
+                rows: 40,
+                project_id: 7,
+                agent: AgentKind::Claude,
+            })
+            .await
+            .unwrap();
+        assert_eq!(info.id, "sess-42");
+
+        let (snapshot, next, rx) = svc.attach("sess-42".into(), 0).await.unwrap();
+        assert_eq!((snapshot.as_slice(), next), (&b"snap"[..], 12));
+        drop(rx); // 关闭 attach 读任务
+
+        svc.write("sess-42".into(), b"hello".to_vec())
+            .await
+            .unwrap();
+        svc.resize("sess-42".into(), 132, 43).await.unwrap();
+        svc.kill("sess-42".into()).await.unwrap();
+        svc.close_with_summary("sess-42".into()).await.unwrap();
+
+        let mut requests = Vec::new();
+        while let Ok(req) = seen.try_recv() {
+            requests.push(req);
+        }
+        assert!(matches!(requests[0], Request::ListSessions), "{requests:?}");
+        assert!(
+            matches!(
+                &requests[1],
+                Request::CreateSession {
+                    name,
+                    command,
+                    args,
+                    cwd,
+                    cols: 120,
+                    rows: 40,
+                    project_id: 7,
+                    agent: AgentKind::Claude,
+                } if name == "claude" && command == "claude" && args == &vec!["--foo".to_string()]
+                    && cwd == "/tmp/demo"
+            ),
+            "{requests:?}"
+        );
+        assert!(
+            matches!(&requests[2], Request::Attach { session_id, from_offset: 0 } if session_id == "sess-42"),
+            "{requests:?}"
+        );
+        assert!(
+            matches!(&requests[3], Request::Write { session_id, data_b64 } if session_id == "sess-42" && data_b64 == "aGVsbG8="),
+            "{requests:?}"
+        );
+        assert!(
+            matches!(&requests[4], Request::Resize { session_id, cols: 132, rows: 43 } if session_id == "sess-42"),
+            "{requests:?}"
+        );
+        assert!(
+            matches!(&requests[5], Request::Kill { session_id } if session_id == "sess-42"),
+            "{requests:?}"
+        );
+        assert!(
+            matches!(&requests[6], Request::CloseWithSummary { session_id } if session_id == "sess-42"),
+            "{requests:?}"
         );
         let _ = std::fs::remove_file(&sock);
     }

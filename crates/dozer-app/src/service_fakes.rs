@@ -1,6 +1,6 @@
 //! 进程内服务假实现(只在测试里):不起 UDS,返回固定结果并记录调用。
 use dozer_model::{
-    AgentKind, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
+    AgentKind, AgentState, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
     CodeHealthReportInfo, ContextItemInfo, ConversationSummary, FileEditHistoryInfo, GroupAuthor,
     GroupCancelScope, GroupInfo, GroupMessageInfo, LocalePreference, LocaleSnapshot,
     LocaleWriteOutcome, MemoryDetail, MemoryInfo, MutationOutcome, ProjectInfo, SessionInfo,
@@ -10,7 +10,7 @@ use dozer_services::{
     BookmarkService, BoxFuture, CodeHealthService, ContextService, ConversationRows,
     ConversationService, DaemonService, EditHistoryService, GroupChatService, LocaleService,
     MemoryService, PostedMessages, PreciseEdit, ProjectService, ServiceError, ServiceErrorKind,
-    Services, TodoService, TranscriptService,
+    Services, SessionService, SessionSpec, TodoService, TranscriptService,
 };
 use std::sync::{Arc, Mutex};
 
@@ -197,6 +197,7 @@ pub(crate) fn base_services() -> Services {
         bookmark: Arc::new(FakeBookmark::default()),
         locale: Arc::new(FakeLocale::default()),
         daemon: Arc::new(FakeDaemon::default()),
+        session: Arc::new(FakeSession::default()),
     }
 }
 
@@ -1313,5 +1314,196 @@ impl bytehost_client::AppHostApi for FakeApps {
         bytehost_client::AppApiError,
     > {
         Err(bytehost_client::AppApiError::Transport("未预设".into()))
+    }
+}
+
+// ---- S6c-1: SessionService 测试替身 ----
+//
+// 记录调用、可预置 attach 的快照与事件序列、可注入各方法失败。Task 4 的
+// `AgentPanelState`/`update` 测试全部复用它。
+
+#[derive(Clone, Default)]
+pub(crate) struct FakeSession {
+    inner: Arc<Mutex<FakeSessionState>>,
+}
+
+#[derive(Default)]
+struct FakeSessionState {
+    calls: Vec<String>,
+    sessions: Vec<SessionInfo>,
+    create_error: Option<ServiceError>,
+    attach_error: Option<ServiceError>,
+    attach_snapshot: Vec<u8>,
+    attach_events: Vec<dozer_model::SessionEvent>,
+    write_error: Option<ServiceError>,
+    resize_error: Option<ServiceError>,
+    kill_error: Option<ServiceError>,
+    close_error: Option<ServiceError>,
+}
+
+impl FakeSession {
+    pub(crate) fn calls(&self) -> Vec<String> {
+        self.inner.lock().unwrap().calls.clone()
+    }
+
+    pub(crate) fn with_sessions(self, sessions: Vec<SessionInfo>) -> Self {
+        self.inner.lock().unwrap().sessions = sessions;
+        self
+    }
+
+    pub(crate) fn with_attach(
+        self,
+        snapshot: Vec<u8>,
+        events: Vec<dozer_model::SessionEvent>,
+    ) -> Self {
+        let mut s = self.inner.lock().unwrap();
+        s.attach_snapshot = snapshot;
+        s.attach_events = events;
+        drop(s);
+        self
+    }
+
+    pub(crate) fn with_create_error(self, e: ServiceError) -> Self {
+        self.inner.lock().unwrap().create_error = Some(e);
+        self
+    }
+
+    pub(crate) fn with_attach_error(self, e: ServiceError) -> Self {
+        self.inner.lock().unwrap().attach_error = Some(e);
+        self
+    }
+
+    pub(crate) fn with_write_error(self, e: ServiceError) -> Self {
+        self.inner.lock().unwrap().write_error = Some(e);
+        self
+    }
+
+    pub(crate) fn with_resize_error(self, e: ServiceError) -> Self {
+        self.inner.lock().unwrap().resize_error = Some(e);
+        self
+    }
+
+    pub(crate) fn with_kill_error(self, e: ServiceError) -> Self {
+        self.inner.lock().unwrap().kill_error = Some(e);
+        self
+    }
+
+    pub(crate) fn with_close_error(self, e: ServiceError) -> Self {
+        self.inner.lock().unwrap().close_error = Some(e);
+        self
+    }
+
+    pub(crate) fn into_services(self) -> Services {
+        Services {
+            session: Arc::new(self),
+            ..base_services()
+        }
+    }
+}
+
+fn fake_created(spec: &SessionSpec) -> SessionInfo {
+    SessionInfo {
+        id: "fake-session".into(),
+        name: spec.name.clone(),
+        command: spec.command.clone(),
+        cwd: spec.cwd.clone(),
+        alive: true,
+        created_ms: 0,
+        agent_state: AgentState::Idle,
+        transcript_path: None,
+        project_id: Some(spec.project_id),
+        agent: spec.agent,
+    }
+}
+
+impl SessionService for FakeSession {
+    fn list_sessions(&self) -> BoxFuture<'_, Result<Vec<SessionInfo>, ServiceError>> {
+        let mut s = self.inner.lock().unwrap();
+        s.calls.push("list_sessions".into());
+        let r = s.sessions.clone();
+        Box::pin(async move { Ok(r) })
+    }
+
+    fn create(&self, spec: SessionSpec) -> BoxFuture<'_, Result<SessionInfo, ServiceError>> {
+        let mut s = self.inner.lock().unwrap();
+        s.calls.push(format!("create({})", spec.name));
+        let r = match s.create_error.clone() {
+            Some(e) => Err(e),
+            None => Ok(fake_created(&spec)),
+        };
+        Box::pin(async move { r })
+    }
+
+    fn attach(
+        &self,
+        id: String,
+        from_offset: u64,
+    ) -> BoxFuture<
+        '_,
+        Result<
+            (
+                Vec<u8>,
+                u64,
+                tokio::sync::mpsc::UnboundedReceiver<dozer_model::SessionEvent>,
+            ),
+            ServiceError,
+        >,
+    > {
+        let mut s = self.inner.lock().unwrap();
+        s.calls.push(format!("attach({id},{from_offset})"));
+        let err = s.attach_error.clone();
+        let snapshot = std::mem::take(&mut s.attach_snapshot);
+        let events = std::mem::take(&mut s.attach_events);
+        let next = snapshot.len() as u64;
+        Box::pin(async move {
+            if let Some(e) = err {
+                return Err(e);
+            }
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            for ev in events {
+                let _ = tx.send(ev);
+            }
+            Ok((snapshot, next, rx))
+        })
+    }
+
+    fn write(&self, id: String, data: Vec<u8>) -> BoxFuture<'_, Result<(), ServiceError>> {
+        let mut s = self.inner.lock().unwrap();
+        s.calls.push(format!("write({id},{}B)", data.len()));
+        let r = match s.write_error.clone() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        };
+        Box::pin(async move { r })
+    }
+
+    fn resize(&self, id: String, cols: u16, rows: u16) -> BoxFuture<'_, Result<(), ServiceError>> {
+        let mut s = self.inner.lock().unwrap();
+        s.calls.push(format!("resize({id},{cols},{rows})"));
+        let r = match s.resize_error.clone() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        };
+        Box::pin(async move { r })
+    }
+
+    fn kill(&self, id: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+        let mut s = self.inner.lock().unwrap();
+        s.calls.push(format!("kill({id})"));
+        let r = match s.kill_error.clone() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        };
+        Box::pin(async move { r })
+    }
+
+    fn close_with_summary(&self, id: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+        let mut s = self.inner.lock().unwrap();
+        s.calls.push(format!("close_with_summary({id})"));
+        let r = match s.close_error.clone() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        };
+        Box::pin(async move { r })
     }
 }

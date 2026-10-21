@@ -1700,3 +1700,153 @@ fn per_pane_companion_slots_follow_the_same_selection() {
         Some("f")
     );
 }
+
+// ---- S6c-1 会话字节流黄金测试 ----
+//
+// 黄金文件在抽库**之前**生成一次(`UPDATE_GOLDEN=1 cargo test -p dozer-app
+// session_stream_golden`),之后搬迁过程中不得重新生成:快照 + 乱序分块 +
+// 退出标记喂进 `TerminalModel`/`OscScanner` 的最终结果必须逐字一致。
+const SESSION_STREAM_GOLDEN: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/session_stream_golden.txt"
+);
+
+fn session_golden_char_token(ch: char) -> String {
+    match ch {
+        ' ' => "\\u{20}".to_string(),
+        '!'..='~' if !matches!(ch, '/' | '|' | ',' | '\\') => ch.to_string(),
+        _ => format!("\\u{{{:X}}}", ch as u32),
+    }
+}
+
+fn session_golden_cell_token(cell: &dozer_panel_term::model::Cell) -> String {
+    let mut flags = String::new();
+    if cell.bold {
+        flags.push('b');
+    }
+    if cell.wide {
+        flags.push('w');
+    }
+    if cell.spacer {
+        flags.push('s');
+    }
+    if cell.selected {
+        flags.push('l');
+    }
+    if cell.inverse {
+        flags.push('i');
+    }
+    if flags.is_empty() {
+        flags.push('-');
+    }
+    let fg = format!("{:02x}{:02x}{:02x}", cell.fg.0, cell.fg.1, cell.fg.2);
+    let bg = cell
+        .bg
+        .map(|(r, g, b)| format!("{r:02x}{g:02x}{b:02x}"))
+        .unwrap_or_else(|| "-".to_string());
+    format!("{fg}/{bg}/{flags}/{}", session_golden_char_token(cell.ch))
+}
+
+fn render_session_stream(tab: &SessionTab) -> String {
+    use std::fmt::Write as _;
+    let mut text = String::new();
+    let (cols, rows) = tab.model.grid_dims();
+    let (cursor_col, cursor_row) = tab.model.cursor();
+    let _ = writeln!(
+        text,
+        "offset={} dims={cols}x{rows} cursor=({cursor_col},{cursor_row}) cwd={:?} \
+         last_exit={:?} alive={}",
+        tab.model.display_offset(),
+        tab.cwd,
+        tab.last_exit,
+        tab.alive
+    );
+    for (row, cells) in tab.model.visible_lines().iter().enumerate() {
+        let _ = write!(text, "R{row:02}");
+        for cell in cells {
+            text.push('|');
+            text.push_str(&session_golden_cell_token(cell));
+        }
+        text.push('\n');
+    }
+    text
+}
+
+#[test]
+fn session_stream_golden() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut ws = Workspace::empty_for_project_placeholder();
+    let tab_id = 7;
+    ws.pending.insert(tab_id, rt.spawn(async {}));
+
+    // 快照:sgr 颜色 + 光标移动 + OSC 7(cwd) + OSC 133;C(命令开始)。
+    let snapshot = b"\x1b[31mred\x1b[0m \x1b[1mbold\x1b[0m\r\n$ ls\x1b[2;5H!\x1b]7;file://localhost/tmp/demo\x07\x1b]133;C\x07".to_vec();
+    ws.on_tab_attached(TabAttachedArgs {
+        cols: 40,
+        rows: 8,
+        tab_id,
+        info: SessionInfo {
+            id: "sess-golden".into(),
+            name: "claude · demo".into(),
+            command: "claude".into(),
+            cwd: "/tmp/demo".into(),
+            alive: true,
+            created_ms: 1_700_000_000_000,
+            agent_state: AgentState::Running,
+            transcript_path: Some("/tmp/demo/t.jsonl".into()),
+            project_id: Some(7),
+            agent: AgentKind::Claude,
+        },
+        snapshot,
+        picked_agent: Some(AgentKind::Claude),
+        term_tab_bar_avail_px: 400.0,
+    });
+
+    // 20 个乱序大小的分块(含 SGR、清行、光标移动、CJK/emoji/组合符、
+    // OSC 7 换目录与 OSC 133;D 退出码)。
+    let mut payload = Vec::new();
+    // 先跳到末行再写:早期输出(含 attach 快照)会滚进历史,由下面的
+    // "history top" 视口一并固定进黄金文件。
+    payload.extend_from_slice(b"\x1b[8;1Hl00\r\nl01\x1b[1;5HX\x1b[2K\x1b[32mgreen\x1b[0m\r\n");
+    payload.extend_from_slice(b"\x1b]7;file://localhost/tmp/demo/sub\x07");
+    payload.extend_from_slice(b"\x1b]133;D;3\x07");
+    payload.extend_from_slice("你好 😀 e\u{0301}\r\n".as_bytes());
+    payload.extend_from_slice(b"tail-padding-xyz");
+    payload.truncate(115);
+    while payload.len() < 115 {
+        payload.push(b'.');
+    }
+    let sizes = [
+        1usize, 7, 3, 11, 2, 5, 13, 4, 9, 2, 6, 1, 8, 3, 12, 5, 2, 7, 4, 10,
+    ];
+    assert_eq!(sizes.iter().sum::<usize>(), payload.len());
+    let tab = ws.tab_by_id_mut(tab_id).expect("attach 后应有 tab");
+    let mut pos = 0;
+    for size in sizes {
+        let chunk = &payload[pos..pos + size];
+        tab.ingest_osc(chunk);
+        let _ = tab.model.feed(chunk);
+        pos += size;
+    }
+
+    // 退出:alive=false + 本地标记行(与 `SessionExited` 处理一致)。
+    tab.alive = false;
+    let _ = tab.model.feed(&exited_marker());
+
+    // 底部视口 + 滚到历史顶部的视口:后者把 attach 快照与早期输出也固定
+    // 进黄金文件(只看底部时它们可能已经滚出视口)。
+    let mut actual = String::from("== bottom ==\n");
+    actual.push_str(&render_session_stream(tab));
+    tab.model.scroll_display(1000);
+    actual.push_str("== history top ==\n");
+    actual.push_str(&render_session_stream(tab));
+    tab.model.scroll_to_bottom();
+
+    if std::env::var_os("UPDATE_GOLDEN").is_some() {
+        std::fs::write(SESSION_STREAM_GOLDEN, &actual).expect("写会话字节流黄金文件");
+        return;
+    }
+    let expected = std::fs::read_to_string(SESSION_STREAM_GOLDEN)
+        .expect("缺少会话字节流黄金文件:先用 UPDATE_GOLDEN=1 生成并提交");
+    assert!(actual == expected, "会话字节流与黄金不一致(抽库不得改变它)");
+}
