@@ -1,0 +1,43 @@
+== after install ==
+{
+  "mcpServers": {
+    "dozer": {
+      "args": [
+        "serve"
+      ],
+      "command": "/opt/dozer/dozer-mcp",
+      "env": {},
+      "type": "stdio"
+    },
+    "other": {
+      "command": "foo"
+    }
+  },
+  "numStartups": 7
+}
+== after reinstall ==
+{
+  "mcpServers": {
+    "dozer": {
+      "args": [
+        "serve"
+      ],
+      "command": "/opt/dozer/dozer-mcp",
+      "env": {},
+      "type": "stdio"
+    },
+    "other": {
+      "command": "foo"
+    }
+  },
+  "numStartups": 7
+}
+== after uninstall ==
+{
+  "mcpServers": {
+    "other": {
+      "command": "foo"
+    }
+  },
+  "numStartups": 7
+}

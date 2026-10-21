@@ -1,0 +1,1 @@
+缺少 DOZER_SESSION_ID：dozer-mcp 只能在 dozer 拉起的会话里跑

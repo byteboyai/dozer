@@ -98,7 +98,7 @@ pub struct PreviewNavigateParams {
     pub end_column: Option<u32>,
 }
 
-#[tool_router(server_handler)]
+#[tool_router(server_handler, vis = "pub")]
 impl DozerMcpServer {
     pub fn new(client: Client, session_id: String) -> Self {
         Self { client, session_id }

@@ -1,0 +1,43 @@
+== after install ==
+{
+  "mcp": {
+    "dozer": {
+      "command": [
+        "/opt/dozer/dozer-mcp",
+        "serve"
+      ],
+      "enabled": true,
+      "type": "local"
+    },
+    "other": {
+      "type": "local"
+    }
+  },
+  "theme": "dark"
+}
+== after reinstall ==
+{
+  "mcp": {
+    "dozer": {
+      "command": [
+        "/opt/dozer/dozer-mcp",
+        "serve"
+      ],
+      "enabled": true,
+      "type": "local"
+    },
+    "other": {
+      "type": "local"
+    }
+  },
+  "theme": "dark"
+}
+== after uninstall ==
+{
+  "mcp": {
+    "other": {
+      "type": "local"
+    }
+  },
+  "theme": "dark"
+}

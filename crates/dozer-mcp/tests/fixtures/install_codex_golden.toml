@@ -1,0 +1,26 @@
+== after install ==
+# keep me
+model = "o3"
+
+[mcp_servers.other]
+command = "foo"
+
+[mcp_servers.dozer]
+command = "/opt/dozer/dozer-mcp"
+args = ["serve"]
+== after reinstall ==
+# keep me
+model = "o3"
+
+[mcp_servers.other]
+command = "foo"
+
+[mcp_servers.dozer]
+command = "/opt/dozer/dozer-mcp"
+args = ["serve"]
+== after uninstall ==
+# keep me
+model = "o3"
+
+[mcp_servers.other]
+command = "foo"

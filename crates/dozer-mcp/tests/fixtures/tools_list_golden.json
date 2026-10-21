@@ -1,0 +1,266 @@
+[
+  {
+    "name": "add_todo",
+    "description": "新增一条任务,置顶到列表最前。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "apply_precise_edit",
+    "description": "精确替换项目内某文本文件 [start_line,start_col]~[end_line,end_col] 区间(1-based,含端点)的内容。expected_text 必须是这段区间当前的原样内容(用 locate_in_file 拿到坐标后紧跟着读到的那段文字),不一致会返回 conflict 并附带磁盘上的真实内容,不会写入;整篇重写就把区间设成整个文件。summary 必填,一句话说明这次改了什么。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "end_col": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "end_line": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "expected_text": {
+          "type": "string"
+        },
+        "new_text": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "start_col": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start_line": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "start_line",
+        "start_col",
+        "end_line",
+        "end_col",
+        "expected_text",
+        "new_text",
+        "summary"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "edit_todo_text",
+    "description": "修改一条任务的文字内容。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "id": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_memory",
+    "description": "查一条共享记忆的完整正文。title_or_id 可以传标题(和 list_memories 里看到的一致)或数字 id;传标题时会先内部查一遍 list_memories 做匹配。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "title_or_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title_or_id"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_preview_context",
+    "description": "返回用户当前在 Dozer 预览面板里看的文件路径和光标/选中范围;想知道用户正在看哪段代码时调用。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_memories",
+    "description": "列出当前项目的共享记忆(标题/分类/摘要/最后更新方,不含正文)。读记忆前先调这个,别猜有没有同名条目。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_todos",
+    "description": "列出当前项目的任务列表(id/文字/是否完成)。想知道当前有哪些待办任务时调用。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object"
+    }
+  },
+  {
+    "name": "locate_in_file",
+    "description": "在项目内某个文本文件里搜索一段文字,返回精确坐标(1-based 行列)。唯一匹配才算定位成功;多处匹配会把候选全部列出,重新传更长/更具体的 query 缩小范围。调用 apply_precise_edit 前应该先用这个工具拿到准确坐标,不要自己数行号。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "query"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "preview_navigate",
+    "description": "让 Dozer 预览滚动/选中到指定文件的某段代码(只读导航,不写入)。line/column 为 1-based;再给 end_line/end_column 则选中范围。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "column": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "end_column": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "end_line": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "line": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "line",
+        "column"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "submit_session_summary",
+    "description": "提交本次会话的总结:一个简短标题和不超过 200 字的摘要；涉及多个事件时使用编号分项列出，语言保持简练明确。仅在被要求总结当前会话时调用一次,不要在其他场景主动调用。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "summary"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "toggle_todo",
+    "description": "勾选或取消勾选一条任务的完成状态。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "done": {
+          "type": "boolean"
+        },
+        "id": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "done"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "write_memory",
+    "description": "记忆优先读写这里,不要用你自己本地的记忆机制。按标题在项目内 upsert:标题已存在就更新,不存在就新建。写入前建议先调 list_memories 看看有没有同名条目可以更新,避免重复记忆。kind 建议用 user/feedback/project/reference 之一,但不强制。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "body",
+        "kind",
+        "description"
+      ],
+      "type": "object"
+    }
+  }
+]
