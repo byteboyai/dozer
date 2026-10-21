@@ -57,9 +57,15 @@ fn quiet_mode_initializes_and_lists_no_tools() {
     let (responses, stderr, code) = run(&[("DIGGER_SESSION_ID", "abc")], home.path());
     assert_eq!(code, 0, "stderr={stderr}");
     assert!(stderr.is_empty(), "安静模式不得写 stderr: {stderr}");
-    assert!(responses.iter().any(|v| v["id"] == 1 && v["result"].is_object()));
+    assert!(
+        responses
+            .iter()
+            .any(|v| v["id"] == 1 && v["result"].is_object())
+    );
     assert_eq!(tool_count(&responses), 0);
-    let socket = home.path().join("Library/Application Support/ai.byteboy.dozer/dozerd.sock");
+    let socket = home
+        .path()
+        .join("Library/Application Support/ai.byteboy.dozer/dozerd.sock");
     assert!(!socket.exists(), "安静模式不应创建/连接 socket");
 }
 
@@ -69,7 +75,8 @@ fn quiet_mode_is_not_entered_when_no_known_session_env_exists() {
     let (_responses, stderr, code) = run(&[], home.path());
     assert_ne!(code, 0);
     let golden = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/serve_error_golden.txt"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/serve_error_golden.txt"),
     )
     .unwrap();
     assert_eq!(stderr, golden);

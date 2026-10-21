@@ -24,12 +24,38 @@ fn compare_or_update(name: &str, actual: &str) {
     assert_eq!(actual, expected, "{name} 与黄金不一致");
 }
 
+/// JSON 对象键序受 serde_json 的 `preserve_order` feature 影响(不同构建
+/// 方式会得到不同字节序)。按值比较,既排除键序噪音,又保留内容严格性。
+fn canonical_json(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let mut out = serde_json::Map::new();
+            for k in keys {
+                out.insert(k.clone(), canonical_json(&map[k]));
+            }
+            Value::Object(out)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonical_json).collect()),
+        other => other.clone(),
+    }
+}
+
 #[test]
 fn tools_list_matches_the_golden() {
     let mut tools = DozerMcpServer::tool_router().list_all();
     tools.sort_by(|a, b| a.name.cmp(&b.name));
     let text = serde_json::to_string_pretty(&tools).expect("serialize tools") + "\n";
-    compare_or_update("tools_list_golden.json", &text);
+    if std::env::var_os("UPDATE_GOLDEN").is_some() {
+        std::fs::write(fixture("tools_list_golden.json"), &text).expect("write golden");
+        return;
+    }
+    let actual: Value = serde_json::from_str(&text).unwrap();
+    let expected: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("tools_list_golden.json")).unwrap())
+            .unwrap();
+    assert_eq!(canonical_json(&actual), canonical_json(&expected));
 }
 
 /// 读一行/若干行 stdout,直到看到指定 id 的应答或 EOF。
@@ -82,12 +108,17 @@ fn initialize_matches_the_golden() {
     // 版本号随 rmcp crate 变化,归一化后再比;其余字段逐字比较。
     let mut init = init;
     init["result"]["serverInfo"]["version"] = Value::String("<version>".into());
-    let normalized = serde_json::to_string_pretty(&init).unwrap() + "\n";
-    compare_or_update("initialize_golden.json", &normalized);
+    let expected: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("initialize_golden.json")).unwrap())
+            .unwrap();
+    assert_eq!(canonical_json(&init), canonical_json(&expected));
 
     let list_line = lines.next().expect("tools/list response");
     let list: Value = serde_json::from_str(list_line).expect("tools json");
-    let mut tools = list["result"]["tools"].as_array().cloned().unwrap_or_default();
+    let mut tools = list["result"]["tools"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     tools.sort_by(|a, b| {
         a["name"]
             .as_str()

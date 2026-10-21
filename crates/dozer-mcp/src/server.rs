@@ -7,10 +7,10 @@ use dozer_client::Client;
 use dozer_core::protocol::{
     PreviewCommand, PreviewCommandAction, PreviewCommandTarget, PreviewContext,
 };
+use rmcp::handler::server::ServerHandler;
+use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
-use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::handler::server::ServerHandler;
 use rmcp::{ErrorData as McpError, ServiceExt, tool, tool_handler, tool_router, transport::stdio};
 use serde_json::json;
 
@@ -121,8 +121,7 @@ impl DozerMcpServer {
         server_name: String,
     ) -> Self {
         let mut tool_router = Self::tool_router();
-        let enabled: std::collections::HashSet<&str> =
-            features.tool_names().into_iter().collect();
+        let enabled: std::collections::HashSet<&str> = features.tool_names().into_iter().collect();
         for tool in Self::tool_router().list_all() {
             if !enabled.contains(tool.name.as_ref()) {
                 tool_router.remove_route(tool.name.as_ref());
@@ -653,10 +652,10 @@ pub async fn run_for(
     let (session_id, features) = match own {
         Some(id) => (Some(id), features),
         None => {
-            let other = dozer_core::paths::other_known_session_env_present(
-                product.session_env,
-                &|name| std::env::var(name).ok(),
-            );
+            let other =
+                dozer_core::paths::other_known_session_env_present(product.session_env, &|name| {
+                    std::env::var(name).ok()
+                });
             if other {
                 (None, McpFeatures::none())
             } else {

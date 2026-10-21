@@ -41,8 +41,14 @@ fn each_feature_group_removes_exactly_its_tools() {
     let groups: [(&str, &[&str]); 5] = [
         ("memory", &["write_memory", "list_memories", "get_memory"]),
         ("summary", &["submit_session_summary"]),
-        ("todos", &["list_todos", "add_todo", "toggle_todo", "edit_todo_text"]),
-        ("preview", &["get_preview_context", "preview_navigate", "locate_in_file"]),
+        (
+            "todos",
+            &["list_todos", "add_todo", "toggle_todo", "edit_todo_text"],
+        ),
+        (
+            "preview",
+            &["get_preview_context", "preview_navigate", "locate_in_file"],
+        ),
         ("file_edit", &["apply_precise_edit"]),
     ];
     for (group, removed) in groups {
@@ -91,15 +97,14 @@ fn calling_a_disabled_tool_by_name_is_unknown_tool_not_execution() {
 #[test]
 fn get_info_uses_the_given_server_name() {
     let client = Client::new(PathBuf::from("/nonexistent/dozerd.sock"));
-    let default = DozerMcpServer::new(Client::new(PathBuf::from("/nonexistent/dozerd.sock")), "x".into());
+    let default = DozerMcpServer::new(
+        Client::new(PathBuf::from("/nonexistent/dozerd.sock")),
+        "x".into(),
+    );
     assert_eq!(default.get_info().server_info.name, "rmcp");
 
-    let custom = DozerMcpServer::with_options(
-        client,
-        None,
-        McpFeatures::none(),
-        "digger-mcp".into(),
-    );
+    let custom =
+        DozerMcpServer::with_options(client, None, McpFeatures::none(), "digger-mcp".into());
     let info = custom.get_info();
     assert_eq!(info.server_info.name, "digger-mcp");
     assert!(info.capabilities.tools.is_some());

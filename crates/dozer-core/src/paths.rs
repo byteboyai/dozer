@@ -130,10 +130,7 @@ pub const KNOWN_SESSION_ENVS: &[&str] = &["DOZER_SESSION_ID", "DIGGER_SESSION_ID
 
 /// 是否存在**别的**已知产品的会话变量,且值非空。`own` 是当前产品的
 /// 会话变量名(不参与判断)。
-pub fn other_known_session_env_present(
-    own: &str,
-    env: &dyn Fn(&str) -> Option<String>,
-) -> bool {
+pub fn other_known_session_env_present(own: &str, env: &dyn Fn(&str) -> Option<String>) -> bool {
     KNOWN_SESSION_ENVS
         .iter()
         .filter(|name| **name != own)
@@ -328,9 +325,8 @@ mod tests {
         assert!(other_known_session_env_present("DOZER_SESSION_ID", &env));
         assert!(other_known_session_env_present("DIGGER_SESSION_ID", &env));
 
-        let empty = |name: &str| -> Option<String> {
-            (name == "DIGGER_SESSION_ID").then(String::new)
-        };
+        let empty =
+            |name: &str| -> Option<String> { (name == "DIGGER_SESSION_ID").then(String::new) };
         assert!(!other_known_session_env_present("DOZER_SESSION_ID", &empty));
 
         let none = |_name: &str| -> Option<String> { None };
