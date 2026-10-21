@@ -14,53 +14,14 @@ use tokio::sync::mpsc;
 
 use super::*;
 
+pub(crate) use dozer_panel_agent::launch::{
+    attached_agent, picker_launch_command, should_answer_dynamic_color,
+};
+pub(crate) use dozer_panel_agent::tabs::{
+    should_summarize_on_close, tab_display_width, tab_title, text_width_units,
+};
+
 dozer_core::scope!(LOG, module, "shell");
-
-/// 关闭 tab 时是否应该走"总结后关闭"而不是直接 `Kill`——仅对话摄取管线
-/// 已覆盖、且当前存活、且走 daemon 后端的四家 agent(spec
-/// 2026-08-27)。
-pub(crate) fn should_summarize_on_close(
-    agent: AgentKind,
-    alive: bool,
-    backend: &TabBackend,
-) -> bool {
-    alive
-        && matches!(backend, TabBackend::Daemon)
-        && matches!(
-            agent,
-            AgentKind::Claude
-                | AgentKind::Codebuddy
-                | AgentKind::Opencode
-                | AgentKind::V8agent
-                | AgentKind::Goose
-                | AgentKind::Aider
-                | AgentKind::Codex
-        )
-}
-
-/// `on_tab_attached` 里决定要不要回应 OSC 10/11 终端探测查询——`info.agent`
-/// 在新建会话这一刻几乎总还是 daemon 侧的默认值,真实 agent 要靠 hook 事后
-/// 上报,而那必然晚于 agent CLI 进程启动瞬间就发出的查询;picker 选中的
-/// `picked_agent` 才是这一刻唯一"确定即将变成谁"的信号,`info.agent` 仅在
-/// picker 未给出提示(如 SSH attach、或重连时 hook 已先一步上报过)时兜底。
-pub(crate) fn should_answer_dynamic_color(
-    picked_agent: Option<AgentKind>,
-    info_agent: AgentKind,
-) -> bool {
-    picked_agent == Some(AgentKind::Opencode) || info_agent == AgentKind::Opencode
-}
-
-/// 新建 tab attach 时的初始 agent。daemon 里已有的识别结果优先；若首个
-/// hook 尚未到达、`SessionInfo.agent` 仍为 `Unknown`，则使用 picker 已经
-/// 明确选中的目标 agent。否则 Codex 等启动后不会立刻发 hook 的 CLI 会在
-/// 首次事件前把 tab 标题错误地回退成项目目录名。
-pub(crate) fn attached_agent(picked_agent: Option<AgentKind>, info_agent: AgentKind) -> AgentKind {
-    if info_agent != AgentKind::Unknown {
-        info_agent
-    } else {
-        picked_agent.unwrap_or(AgentKind::Unknown)
-    }
-}
 
 /// 已接入 `dozer-hook` 安装器的 agent 集合。刻意穷尽 match 而不是拿
 /// `agent.label()` 当 catch-all 参数：`install::settings_path_for` 对未识别
@@ -172,50 +133,6 @@ pub(crate) fn ensure_mcp_installed(agent: AgentKind) {
             .unwrap_or_else(|| PathBuf::from("dozer-mcp"));
     let exe = exe.to_string_lossy();
     let _ = dozer_mcp::install::run_at_with_exe(&path, agent.label(), true, &exe);
-}
-
-/// picker 选择项 → attach 成功后自动键入 PTY 的初始命令。`Agent(Some(a))`
-/// 复用 `agent_launch_command`(键入 agent CLI;Aider 需要 `hook_exe` 绝对路径
-/// 拼出 launcher 命令);`Agent(None)` 不键入(纯 Shell);`Git` 键入
-/// `git status`——新开的 shell 已在项目根,直接看仓库状态。抽成纯函数是为了
-/// 能 headless 单测(同 `agent_launch_command` 的惯例)。
-pub(crate) fn picker_launch_command(launch: PickerLaunch, hook_exe: &str) -> Option<String> {
-    match launch {
-        PickerLaunch::Agent(Some(agent)) => agent_launch_command(agent, hook_exe),
-        PickerLaunch::Agent(None) => None,
-        PickerLaunch::Git => Some("git status".to_string()),
-    }
-}
-
-/// tab 标题：已识别出 agent（hook 上报）则显 agent 名（如 "claude"）；
-/// 否则回落到 OSC 7 的 cwd basename，再无 cwd 才回落会话名。
-pub(crate) fn tab_title(agent: AgentKind, cwd: Option<&Path>, fallback: &str) -> String {
-    if agent != AgentKind::Unknown {
-        return agent.label().to_string();
-    }
-    match cwd {
-        Some(p) => p
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| p.to_string_lossy().into_owned()),
-        None => fallback.to_string(),
-    }
-}
-
-/// 文本显示宽度的基础单元和：CJK 字符按全宽计 2，其余按半宽计 1。
-/// `tab_display_width`/`preview_tab_display_width` 共用。
-pub(crate) fn text_width_units(s: &str) -> f32 {
-    s.chars()
-        .map(|c| if (c as u32) > 0x2E80 { 2.0 } else { 1.0 })
-        .sum()
-}
-
-/// 终端 tab 估算显示宽（逻辑像素）：状态点+名称+关闭×+pill padding 的粗估。
-/// 不追求精确——估偏几像素只会让翻页边界差一个 tab。宽度随标题实际长度
-/// 增长(无上限),渲染侧亦有对应 `panel_tab` 的按内容伸缩。
-pub(crate) fn tab_display_width(title: &str) -> f32 {
-    // 状态点●+spacing ≈ 18, 名称 ≈ units * 半宽 8.0(14px), 关闭× ≈ 18, pill padding ≈ 12
-    18.0 + text_width_units(title) * 8.0 + 18.0 + 12.0
 }
 
 /// 预览 tab 估算显示宽：同 `tab_display_width` 但无状态点。同按标题实际长度

@@ -55,6 +55,8 @@ SRC_ROOTS = [
     "crates/dozer-panel-usage/web",
     "crates/dozer-panel-todo/src",
     "crates/dozer-panel-project/src",
+    # 共享 Agent 面板库(S6c):会话/页签状态与更新。
+    "crates/dozer-panel-agent/src",
     "crates/dozer-panel-todo/web",
     # 共享终端控件库(S6b):当前没有可本地化文案,登记进来是为了让日后
     # 新增的 UI 文案仍被扫描到(见 OWNER_RULES)。
@@ -80,6 +82,8 @@ OWNER_RULES = [
     ("crates/dozer-panel-usage/", "dozer.usage"),
     ("crates/dozer-panel-todo/", "dozer.todo"),
     ("crates/dozer-panel-project/", "dozer.project"),
+    # S6c:Agent 面板库与宿主侧 agent_context 共用 dozer.agent owner。
+    ("crates/dozer-panel-agent/", "dozer.agent"),
     # 终端控件由 Agent 面板(与 SSH 面板)共用;库自身暂无文案。
     ("crates/dozer-panel-term/", "dozer.agent"),
     ("crates/dozer-preview-core/", "dozer.preview"),

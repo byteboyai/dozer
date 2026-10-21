@@ -36,6 +36,8 @@ dozer-panel-host = { path = "../dozer-panel-host" }
 dozer-panel-todo = { path = "../dozer-panel-todo" }
 # 同源终端控件库(S6b):终端模型(VTE/网格)与 iced 自绘视图。
 dozer-panel-term = { path = "../dozer-panel-term" }
+# 同源 Agent 面板库(S6c):会话/页签状态、消息与更新。
+dozer-panel-agent = { path = "../dozer-panel-agent" }
 # 同源 Project 面板库(S5a):纯逻辑/状态/视图在库,dozer-app 只做重导出与注册包装。
 dozer-panel-project = { path = "../dozer-panel-project" }
 # 同源 Files 面板库(S5b-1):文件树状态/更新/视图在库,dozer-app 只做重导出与注册包装。

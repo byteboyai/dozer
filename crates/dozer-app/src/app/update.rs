@@ -3607,7 +3607,7 @@ impl App {
                         }
                     });
                 }
-                TabBackend::Ssh { out } => {
+                TabBackend::Custom(out) => {
                     let _ = out.send(SshOut::Data(responses));
                 }
             }

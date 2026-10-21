@@ -867,34 +867,7 @@ pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64, locale: &str) ->
     }
 }
 
-/// 把一段(可能是绝对路径、可能带空格/单引号)安全地包进 `sh -c` 的单引号。
-/// 供 Aider launcher 命令使用——app bundle 路径 `/Applications/Dozer AI
-/// Coder.app/...` 含空格,不转义会断词。
-pub(crate) fn sh_single_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-/// agent 选择菜单选中的 agent → 要自动键入 PTY 的 CLI 命令。`Unknown`
-/// 不该从选择菜单产生(选项是各家 agent + 纯 Shell/Git Shell,纯 Shell 走
-/// `launch: None`,不经过这个函数),但函数保持穷尽 match,防止未来枚举
-/// 新增变体时静默漏写。**不能**一律取 `AgentKind::label()`:
-/// - Goose 的交互命令需要子命令(`goose session`,见 spec D1)。
-/// - Aider 走 `dozer-hook launch aider`(launcher bridge,见 spec D1)——命令
-///   里必须带 sibling `dozer-hook` 的绝对路径,所以本函数返回 `Option<String>`
-///   而不是静态 `&str`,`hook_exe` 由调用方(有 `current_exe()` 的上下文)传入。
-pub(crate) fn agent_launch_command(agent: AgentKind, hook_exe: &str) -> Option<String> {
-    match agent {
-        AgentKind::Unknown => None,
-        AgentKind::Claude => Some("claude".into()),
-        AgentKind::Codebuddy => Some("codebuddy".into()),
-        AgentKind::Opencode => Some("opencode".into()),
-        AgentKind::Codex => Some("codex".into()),
-        AgentKind::Goose => Some("goose session".into()),
-        AgentKind::Aider => Some(format!("{} launch aider", sh_single_quote(hook_exe))),
-        AgentKind::V8agent => Some("v8agent".into()),
-        AgentKind::Qodercn => Some("qodercn".into()),
-    }
-}
+pub(crate) use dozer_panel_agent::launch::{agent_launch_command, sh_single_quote};
 
 #[cfg(test)]
 mod tests {

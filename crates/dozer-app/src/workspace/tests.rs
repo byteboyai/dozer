@@ -490,52 +490,6 @@ fn effective_cwd_prefers_osc_over_spawn() {
 }
 
 #[test]
-fn tab_title_prefers_cwd_basename() {
-    use std::path::Path;
-    assert_eq!(
-        tab_title(
-            AgentKind::Unknown,
-            Some(Path::new("/Users/c/proj")),
-            "shell"
-        ),
-        "proj"
-    );
-    assert_eq!(
-        tab_title(AgentKind::Unknown, Some(Path::new("/")), "shell"),
-        "/"
-    );
-    assert_eq!(tab_title(AgentKind::Unknown, None, "shell"), "shell");
-}
-
-#[test]
-fn tab_title_prefers_agent_name_once_known() {
-    use std::path::Path;
-    assert_eq!(
-        tab_title(AgentKind::Claude, Some(Path::new("/Users/c/proj")), "shell"),
-        "claude"
-    );
-    assert_eq!(tab_title(AgentKind::Claude, None, "shell"), "claude");
-}
-
-#[test]
-fn attached_agent_uses_picker_until_daemon_has_identified_session() {
-    assert_eq!(
-        attached_agent(Some(AgentKind::Codex), AgentKind::Unknown),
-        AgentKind::Codex
-    );
-    assert_eq!(
-        attached_agent(Some(AgentKind::Codex), AgentKind::Claude),
-        AgentKind::Claude
-    );
-    assert_eq!(attached_agent(None, AgentKind::Unknown), AgentKind::Unknown);
-}
-
-#[test]
-fn tab_display_width_cjk_wider_than_ascii() {
-    assert!(tab_display_width("中文会话") > tab_display_width("sh"));
-}
-
-#[test]
 fn preview_tab_display_width_narrower_than_term_no_dot() {
     // 同标题下预览版无状态点,应恒窄于终端版。
     assert!(preview_tab_display_width("a.rs") < tab_display_width("a.rs"));
@@ -644,84 +598,11 @@ fn new_session_tab_fields_default_to_none() {
 }
 
 #[test]
-fn should_summarize_on_close_true_for_four_supported_agents() {
-    for agent in [
-        AgentKind::Claude,
-        AgentKind::Codebuddy,
-        AgentKind::Opencode,
-        AgentKind::V8agent,
-    ] {
-        assert!(
-            should_summarize_on_close(agent, true, &TabBackend::Daemon),
-            "{agent:?} 应该走总结后关闭"
-        );
-    }
-}
-
-#[test]
-fn should_summarize_on_close_false_for_unsupported_agents_or_dead_or_ssh() {
-    assert!(should_summarize_on_close(
-        AgentKind::Codex,
-        true,
-        &TabBackend::Daemon
-    ));
-    assert!(!should_summarize_on_close(
-        AgentKind::Unknown,
-        true,
-        &TabBackend::Daemon
-    ));
-    // qodercn 没有 headless 适配器(L1):关闭时不能走"总结后关闭"。
-    assert!(!should_summarize_on_close(
-        AgentKind::Qodercn,
-        true,
-        &TabBackend::Daemon
-    ));
-    assert!(!should_summarize_on_close(
-        AgentKind::Claude,
-        false,
-        &TabBackend::Daemon
-    ));
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    assert!(!should_summarize_on_close(
-        AgentKind::Claude,
-        true,
-        &TabBackend::Ssh { out: tx }
-    ));
-}
-
-/// 回归测试:此前只看 `info.agent`(daemon 默认值,真实 agent 靠 hook
-/// 事后上报),导致 picker 新建的 opencode 会话在 `on_tab_attached` 这一
-/// 刻永远判定成"非 opencode"——回应 OSC 10/11 的开关从未真正打开过。
-#[test]
-fn should_answer_dynamic_color_true_when_picker_targets_opencode_even_if_info_agent_lags() {
-    assert!(should_answer_dynamic_color(
-        Some(AgentKind::Opencode),
-        AgentKind::Unknown, // daemon 侧此刻还没收到 hook 上报
-    ));
-}
-
-#[test]
-fn should_answer_dynamic_color_true_when_info_agent_already_known_opencode() {
-    // SSH attach、或重连时 hook 已先上报过的兜底路径:picker 没有提示。
-    assert!(should_answer_dynamic_color(None, AgentKind::Opencode));
-}
-
-#[test]
-fn should_answer_dynamic_color_false_for_other_agents() {
-    assert!(!should_answer_dynamic_color(
-        Some(AgentKind::Claude),
-        AgentKind::Unknown
-    ));
-    assert!(!should_answer_dynamic_color(None, AgentKind::Unknown));
-    assert!(!should_answer_dynamic_color(None, AgentKind::Claude));
-}
-
-#[test]
 fn close_tab_skips_daemon_kill_for_ssh_backend() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let mut tab = make_test_tab(&rt, "ssh:h1", dozer_core::protocol::AgentKind::Unknown);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    tab.backend = TabBackend::Ssh { out: tx };
+    tab.backend = TabBackend::Custom(tx);
     tab.alive = true;
     // `close_tab` 里 `client.kill` 那一步只在
     // `matches!(tab.backend, TabBackend::Daemon)` 时才走——单测环境没
@@ -739,7 +620,7 @@ fn resize_one_resizes_ssh_tab_model() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let mut tab = make_test_tab(&rt, "ssh:h1", dozer_core::protocol::AgentKind::Unknown);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    tab.backend = TabBackend::Ssh { out: tx };
+    tab.backend = TabBackend::Custom(tx);
     let before = tab.model.grid_dims();
     let client = dozer_client::Client::new(std::path::PathBuf::from(
         "/tmp/dozer-resize-test-nonexistent.sock",
@@ -945,109 +826,12 @@ fn agent_icon_maps_each_kind_to_brand_icon() {
 }
 
 #[test]
-fn agent_launch_command_maps_known_agents_and_none_for_unknown() {
-    let hook_exe = "/Applications/Dozer AI Coder.app/Contents/MacOS/dozer-hook";
-    assert_eq!(
-        agent_launch_command(AgentKind::Claude, hook_exe),
-        Some("claude".into())
-    );
-    assert_eq!(
-        agent_launch_command(AgentKind::Codebuddy, hook_exe),
-        Some("codebuddy".into())
-    );
-    assert_eq!(
-        agent_launch_command(AgentKind::Opencode, hook_exe),
-        Some("opencode".into())
-    );
-    assert_eq!(
-        agent_launch_command(AgentKind::Codex, hook_exe),
-        Some("codex".into())
-    );
-    assert_eq!(
-        agent_launch_command(AgentKind::Goose, hook_exe),
-        Some("goose session".into())
-    );
-    assert_eq!(
-        agent_launch_command(AgentKind::V8agent, hook_exe),
-        Some("v8agent".into())
-    );
-    assert_eq!(
-        agent_launch_command(AgentKind::Qodercn, hook_exe),
-        Some("qodercn".into())
-    );
-    assert_eq!(agent_launch_command(AgentKind::Unknown, hook_exe), None);
-}
-
-#[test]
 fn agent_launch_command_aider_uses_quoted_hook_path_and_launch_subcommand() {
     // app bundle 路径含空格,必须用 POSIX 单引号包起来,否则 sh 会断词。
     let hook_exe = "/Applications/Dozer AI Coder.app/Contents/MacOS/dozer-hook";
     assert_eq!(
         agent_launch_command(AgentKind::Aider, hook_exe),
         Some("'/Applications/Dozer AI Coder.app/Contents/MacOS/dozer-hook' launch aider".into())
-    );
-}
-
-#[test]
-fn agent_launch_command_aider_escapes_single_quotes_in_path() {
-    // 路径含单引号时也要转义,避免提前结束引号。
-    let hook_exe = "/opt/weird'path/dozer-hook";
-    let cmd = agent_launch_command(AgentKind::Aider, hook_exe).unwrap();
-    assert_eq!(cmd, "'/opt/weird'\\''path/dozer-hook' launch aider");
-}
-
-#[test]
-fn picker_launch_command_maps_selection_to_initial_command() {
-    // 已知 agent → 其 CLI 名(复用 agent_launch_command)。
-    assert_eq!(
-        picker_launch_command(
-            PickerLaunch::Agent(Some(AgentKind::Claude)),
-            "/x/dozer-hook"
-        ),
-        Some("claude".to_string())
-    );
-    assert_eq!(
-        picker_launch_command(
-            PickerLaunch::Agent(Some(AgentKind::Codebuddy)),
-            "/x/dozer-hook"
-        ),
-        Some("codebuddy".to_string())
-    );
-    assert_eq!(
-        picker_launch_command(
-            PickerLaunch::Agent(Some(AgentKind::Opencode)),
-            "/x/dozer-hook"
-        ),
-        Some("opencode".to_string())
-    );
-    assert_eq!(
-        picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Codex)), "/x/dozer-hook"),
-        Some("codex".to_string())
-    );
-    assert_eq!(
-        picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Goose)), "/x/dozer-hook"),
-        Some("goose session".to_string())
-    );
-    assert_eq!(
-        picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Aider)), "/x/dozer-hook"),
-        Some("'/x/dozer-hook' launch aider".to_string())
-    );
-    assert_eq!(
-        picker_launch_command(
-            PickerLaunch::Agent(Some(AgentKind::V8agent)),
-            "/x/dozer-hook"
-        ),
-        Some("v8agent".to_string())
-    );
-    // 纯 Shell → 不键入任何初始命令。
-    assert_eq!(
-        picker_launch_command(PickerLaunch::Agent(None), "/x/dozer-hook"),
-        None
-    );
-    // Git Shell → 项目根开 shell 后自动跑 git status。
-    assert_eq!(
-        picker_launch_command(PickerLaunch::Git, "/x/dozer-hook"),
-        Some("git status".to_string())
     );
 }
 

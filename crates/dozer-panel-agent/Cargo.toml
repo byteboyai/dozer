@@ -1,0 +1,15 @@
+[package]
+name = "dozer-panel-agent"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# 共享 Agent 面板库(S6c):会话/页签状态、消息与更新,以及会话服务接缝。
+# 依赖闭包刻意**不含** dozer-app / dozer-client / dozer-core / dozerd / wry /
+# winit / portable-pty / russh(Global Constraints)。
+[dependencies]
+dozer-model = { path = "../dozer-model" }
+dozer-services = { path = "../dozer-services" }
+dozer-panel-host = { path = "../dozer-panel-host" }
+dozer-panel-term = { path = "../dozer-panel-term" }
+tokio.workspace = true

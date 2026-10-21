@@ -71,6 +71,7 @@ FILE_TASK = [
     # Remaining official panels + aux
     ("crates/dozer-app/src/extensions/files/", "10"),
     ("crates/dozer-panel-project/", "10"),
+    ("crates/dozer-panel-agent/", "10"),
     ("crates/dozer-app/src/extensions/project.rs", "10"),
     ("crates/dozer-app/src/extensions/project/", "10"),
     ("crates/dozer-app/src/extensions/database/", "10"),

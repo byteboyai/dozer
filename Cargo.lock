@@ -1991,6 +1991,7 @@ dependencies = [
  "dozer-i18n",
  "dozer-mcp",
  "dozer-model",
+ "dozer-panel-agent",
  "dozer-panel-files",
  "dozer-panel-host",
  "dozer-panel-preview",
@@ -2139,6 +2140,17 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "dozer-panel-agent"
+version = "0.1.0"
+dependencies = [
+ "dozer-model",
+ "dozer-panel-host",
+ "dozer-panel-term",
+ "dozer-services",
+ "tokio",
 ]
 
 [[package]]

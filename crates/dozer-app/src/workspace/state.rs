@@ -123,14 +123,7 @@ impl std::fmt::Debug for RestorePayload {
     }
 }
 
-/// Agent 面板"＋"弹出菜单选择项的语义。`Agent` 复用原 `Option<AgentKind>`
-/// 语义(`None` = 纯 Shell);`Git` 在项目根开一个 shell 并自动跑 `git status`
-/// 看仓库状态。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum PickerLaunch {
-    Agent(Option<AgentKind>),
-    Git,
-}
+pub(crate) use dozer_panel_agent::launch::PickerLaunch;
 
 /// 审阅内容的来源（P1j）：活会话 tab（回合结束刷新）或对话面板的
 /// session 详情(2026-08-27，整段摊平加载)。原 `ReviewSource::FileRange`
@@ -199,19 +192,9 @@ pub struct ReviewView {
     pub loaded_nonce: Option<u64>,
 }
 
+pub use dozer_panel_agent::tabs::{TabBackend, TabOut};
 /// UI → SSH 泵任务的写指令(`Workspace::spawn_ssh_tab` 消费)。
-pub enum SshOut {
-    Data(Vec<u8>),
-    Resize { cols: u16, rows: u16 },
-}
-
-/// 一个终端 tab 的字节流去向。
-pub enum TabBackend {
-    /// dozerd 托管的本地 PTY(现状所有 tab)。
-    Daemon,
-    /// SSH channel,UI 侧写操作经 `out` 送进泵任务。
-    Ssh { out: mpsc::UnboundedSender<SshOut> },
-}
+pub type SshOut = TabOut;
 
 /// 单个会话的工作区展示态,来自 bytegit 的 `Repo::head`(分支)与 `Repo::is_dirty`。
 #[derive(Debug, Clone, PartialEq)]
@@ -390,11 +373,11 @@ pub struct Workspace {
     /// `Message::TabAttached` 到达时取出、装进新建的 `SessionTab`。
     pub(crate) pending: HashMap<usize, tokio::task::JoinHandle<()>>,
     /// SSH tab 创建期间的写指令发送端暂存区,语义同 `pending`——
-    /// `on_tab_attached` 时取出,取得到就是 SSH tab(`backend = Ssh {
+    /// `on_tab_attached` 时取出,取得到就是 SSH tab(`backend = Custom(
     /// out }`),取不到就是本地 tab(`backend = Daemon`)。
     pub(crate) ssh_out_pending: HashMap<usize, mpsc::UnboundedSender<SshOut>>,
     /// SSH 面板自己的 tab 集合(阶段 4)——与 `tabs`/`active`(右侧共享
-    /// agent/本地终端条)完全独立。目前只装 `TabBackend::Ssh` 的
+    /// agent/本地终端条)完全独立。目前只装 `TabBackend::Custom` 的
     /// `SessionTab`(种类=`SshTabKind::Terminal`);阶段 3 起 SFTP 种类
     /// 的 tab 走另一个集合(`sftp_tabs`,内容不是 `SessionTab`,见阶段 3
     /// 计划),不混进这里。
@@ -814,7 +797,7 @@ impl Workspace {
                     }
                 });
             }
-            TabBackend::Ssh { out } => {
+            TabBackend::Custom(out) => {
                 let _ = out.send(SshOut::Data(bytes));
             }
         }
@@ -834,7 +817,7 @@ impl Workspace {
     /// 把字节写进 SSH 面板当前显示的 tab。镜像 `send_input`,操作对象
     /// 换成 `ssh_tabs`/`ssh_active`。
     pub(crate) fn ssh_send_input(&self, io: &ShellIo, bytes: Vec<u8>) {
-        let _ = io; // ssh_tabs 里只会是 TabBackend::Ssh,不需要 io.client/handle,
+        let _ = io; // ssh_tabs 里只会是 TabBackend::Custom,不需要 io.client/handle,
         // 保留参数是为了和 send_input 签名对齐、调用方不用分叉判断
         let Some((host_id, _kind)) = self.ssh_active.as_ref() else {
             return;
@@ -853,7 +836,7 @@ impl Workspace {
             TabBackend::Daemon => {
                 debug_assert!(false, "ssh_tabs 里不应该出现 TabBackend::Daemon");
             }
-            TabBackend::Ssh { out } => {
+            TabBackend::Custom(out) => {
                 let _ = out.send(SshOut::Data(bytes));
             }
         }
@@ -1185,7 +1168,7 @@ impl Workspace {
         tab.forwarder.abort();
         // SSH 后端不需要 kill——drop `out`(tx)后 spawn_ssh_tab 的泵循环
         // `rx_out.recv() => None` 分支自然退出,同 close_tab 现有对
-        // TabBackend::Ssh 的既有处理口径(见 close_tab_skips_daemon_
+        // TabBackend::Custom 的既有处理口径(见 close_tab_skips_daemon_
         // kill_for_ssh_backend 测试)。
         let _ = io;
         if self.ssh_active.as_ref().map(|(h, k)| (h.as_str(), *k)) == Some((host_id, kind)) {
@@ -1847,7 +1830,7 @@ text: dozer_model::LocalizedText::keyed(
             last_activity: None,
             workspace_override: None,
             backend: match ssh_backend {
-                Some(out) => TabBackend::Ssh { out },
+                Some(out) => TabBackend::Custom(out),
                 None => TabBackend::Daemon,
             },
         };
@@ -1938,7 +1921,7 @@ text: dozer_model::LocalizedText::keyed(
                     }
                 });
             }
-            TabBackend::Ssh { out } => {
+            TabBackend::Custom(out) => {
                 let _ = out.send(SshOut::Resize { cols, rows });
             }
         }
@@ -2486,19 +2469,7 @@ pub(crate) fn spawn_disk_usage_refresh(project_id: i64, repo_path: PathBuf, io: 
     });
 }
 
-/// `[会话已结束]` 尾行标记：CREAM 字 / CARD 底。颜色值直接镜像
-/// `byteui::theme::color::current().cream` / `byteui::theme::color::current().card`——`TerminalModel` 只吃 ANSI truecolor
-/// 转义序列，认不出 `iced::Color`，这里手工写死 RGB 常量；本任务范围
-/// 不含 `theme.rs`，若那边颜色改动，这两个常量需要手动同步。
-pub(crate) fn exited_marker() -> Vec<u8> {
-    const FG: (u8, u8, u8) = (0xFF, 0xE5, 0xB4); // CREAM
-    const BG: (u8, u8, u8) = (0x12, 0x20, 0x2a); // CARD
-    format!(
-        "\r\n\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m[会话已结束]\x1b[0m\r\n",
-        FG.0, FG.1, FG.2, BG.0, BG.1, BG.2
-    )
-    .into_bytes()
-}
+pub(crate) use dozer_panel_agent::tabs::exited_marker;
 
 /// 验收 tab 内容（spec P1f D8）:目标 + 标准勾选 + 变更文件 + 意见 + 双动作。
 /// iced 直绘（验收 tab 激活时 webview 全隐藏，不抢层）。
