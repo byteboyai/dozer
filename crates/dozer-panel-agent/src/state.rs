@@ -1,8 +1,13 @@
 //! Agent 面板状态:会话/页签集合 + 交互态 + 发件箱(S6c-1)。
 
 use crate::adapter::{AgentHostEvent, AgentRequest};
-use crate::tabs::SessionTab;
+use crate::restore::RestoredSession;
+use crate::tabs::{SessionTab, TabBackend};
+use crate::update::{Message, forward_events};
+use dozer_model::AgentKind;
 use dozer_panel_host::{Notice, NoticeOutbox};
+use dozer_panel_term::model::TerminalModel;
+use dozer_panel_term::osc::OscScanner;
 use std::collections::HashMap;
 
 /// 从 `Workspace` 搬出的 Agent 面板自有状态。
@@ -79,10 +84,138 @@ impl AgentPanelState {
             .get(self.active)
             .and_then(|t| t.model.selection_text())
     }
+
+    /// 在 UI 线程把已 attach 的恢复素材装配成页签，并开始转发后续事件。
+    pub fn adopt_restored(
+        &mut self,
+        sessions: Vec<RestoredSession>,
+        handle: &tokio::runtime::Handle,
+        emit: impl Fn(Message) + Clone + Send + 'static,
+    ) {
+        for RestoredSession {
+            info,
+            snapshot,
+            events,
+        } in sessions
+        {
+            let tab_id = self.next_tab_id;
+            self.next_tab_id += 1;
+            let mut model = TerminalModel::new(80, 24);
+            model.set_answer_dynamic_color(info.agent == AgentKind::Opencode);
+            let _ = model.feed(&snapshot);
+            let forwarder = handle.spawn(forward_events(tab_id, events, emit.clone()));
+            let mut tab = SessionTab {
+                agent_state: info.agent_state,
+                agent: info.agent,
+                transcript_path: info.transcript_path.clone(),
+                info,
+                model,
+                alive: true,
+                tab_id,
+                forwarder,
+                osc: OscScanner::new(),
+                cwd: None,
+                last_exit: None,
+                llm_model: None,
+                permission_mode: None,
+                last_activity: None,
+                workspace_override: None,
+                backend: TabBackend::Daemon,
+            };
+            tab.ingest_osc(&snapshot);
+            self.tabs.push(tab);
+        }
+    }
 }
 
 impl Default for AgentPanelState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dozer_model::{AgentState, SessionEvent, SessionInfo};
+
+    fn restored(
+        id: &str,
+        snapshot: &[u8],
+    ) -> (
+        RestoredSession,
+        tokio::sync::mpsc::UnboundedSender<SessionEvent>,
+    ) {
+        let (events_tx, events) = tokio::sync::mpsc::unbounded_channel();
+        (
+            RestoredSession {
+                info: SessionInfo {
+                    id: id.into(),
+                    name: id.into(),
+                    command: "sh".into(),
+                    cwd: "/tmp".into(),
+                    alive: true,
+                    created_ms: 0,
+                    agent_state: AgentState::Idle,
+                    transcript_path: None,
+                    project_id: Some(7),
+                    agent: AgentKind::Unknown,
+                },
+                snapshot: snapshot.to_vec(),
+                events,
+            },
+            events_tx,
+        )
+    }
+
+    #[tokio::test]
+    async fn adopt_restored_builds_one_tab_per_session_with_distinct_ids_and_the_snapshot_fed() {
+        let (one, _) = restored("one", b"hello");
+        let (two, _) = restored("two", b"world");
+        let mut state = AgentPanelState::new();
+        state.adopt_restored(vec![one, two], &tokio::runtime::Handle::current(), |_| {});
+        assert_eq!(state.tabs.len(), 2);
+        assert_eq!(
+            (
+                state.tabs[0].tab_id,
+                state.tabs[1].tab_id,
+                state.next_tab_id
+            ),
+            (0, 1, 2)
+        );
+        assert_eq!(state.tabs[0].model.visible_lines()[0][0].ch, 'h');
+        assert_eq!(state.tabs[1].model.visible_lines()[0][0].ch, 'w');
+    }
+
+    #[tokio::test]
+    async fn adopt_restored_forwards_later_events_to_the_right_tab() {
+        let (session, events) = restored("one", b"");
+        let messages = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let received = std::sync::Arc::clone(&messages);
+        let mut state = AgentPanelState::new();
+        state.adopt_restored(
+            vec![session],
+            &tokio::runtime::Handle::current(),
+            move |message| received.lock().unwrap().push(message),
+        );
+        events
+            .send(SessionEvent::Output(b"later".to_vec()))
+            .unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(
+            messages.lock().unwrap().as_slice(),
+            &[Message::Output {
+                tab_id: 0,
+                bytes: b"later".to_vec()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn adopt_restored_with_no_sessions_leaves_the_state_empty() {
+        let mut state = AgentPanelState::new();
+        state.adopt_restored(Vec::new(), &tokio::runtime::Handle::current(), |_| {});
+        assert!(state.tabs.is_empty());
+        assert_eq!(state.next_tab_id, 0);
     }
 }

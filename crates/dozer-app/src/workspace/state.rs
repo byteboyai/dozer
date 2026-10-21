@@ -2,9 +2,7 @@
 //! TabBackend/SessionTab/ShellIo/`struct Workspace` + `impl Workspace`,以及
 //! 项目恢复、agent 卡片刷新、git/磁盘用量轮询、review 内容等辅助函数。
 
-use crate::app::{
-    DEFAULT_COLS, DEFAULT_ROWS, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind, ProjectId,
-};
+use crate::app::{Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind, ProjectId};
 use crate::extensions::browser;
 use crate::extensions::codehealth;
 use crate::extensions::conversations;
@@ -22,7 +20,7 @@ use crate::term::term_model::TerminalModel;
 use crate::transcript::ReviewEntry;
 use crate::ui_text::text;
 use byteui::interaction::tab_strip::tab_window_reveal;
-use dozer_client::{Client, TermEvent};
+use dozer_client::Client;
 use dozer_core::protocol::{AgentKind, ProjectInfo, SessionInfo};
 
 dozer_core::scope!(LOG, module, "shell");
@@ -80,13 +78,8 @@ pub struct ProjectRestore {
     pub(crate) project: ProjectInfo,
     /// 最近项目列表(顺带取回,省一次往返)。
     pub(crate) recent_projects: Vec<ProjectInfo>,
-    /// 已 attach 上的存活会话:(会话信息, 起始快照, 事件流)。
-    #[allow(clippy::type_complexity)]
-    pub(crate) sessions: Vec<(
-        SessionInfo,
-        Vec<u8>,
-        tokio::sync::mpsc::UnboundedReceiver<TermEvent>,
-    )>,
+    /// 已 attach 上的存活会话。
+    pub(crate) sessions: Vec<dozer_panel_agent::restore::RestoredSession>,
 }
 
 /// `Message::ProjectSlotLoaded` 的载荷:一份**一次性**的 [`ProjectRestore`]
@@ -491,39 +484,11 @@ impl Workspace {
             sessions,
         } = restore;
         let project_id = project.id;
-        let mut tabs = Vec::new();
-        let mut next_tab_id = 0usize;
-        for (info, snapshot, rx) in sessions {
-            let tab_id = next_tab_id;
-            next_tab_id += 1;
-            let mut model = TerminalModel::new(DEFAULT_COLS, DEFAULT_ROWS);
-            model.set_answer_dynamic_color(info.agent == AgentKind::Opencode);
-            let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
-            let forwarder =
-                io.handle
-                    .spawn(forward_events(project_id, tab_id, rx, io.proxy.clone()));
-            tabs.push(SessionTab {
-                agent_state: info.agent_state,
-                agent: info.agent,
-                transcript_path: info.transcript_path.clone(),
-                info,
-                model,
-                alive: true,
-                tab_id,
-                forwarder,
-                osc: OscScanner::new(),
-                cwd: None,
-                last_exit: None,
-                llm_model: None,
-                permission_mode: None,
-                last_activity: None,
-                workspace_override: None,
-                backend: TabBackend::Daemon,
-            });
-            if let Some(t) = tabs.last_mut() {
-                t.ingest_osc(&snapshot);
-            }
-        }
+        let mut agent = AgentPanelState::new();
+        let proxy = io.proxy.clone();
+        agent.adopt_restored(sessions, &io.handle, move |message| {
+            let _ = proxy.send_event(Message::Agent(project_id, message));
+        });
 
         let files = files::WorkspaceState::new(FileTree::new(PathBuf::from(&project.path)));
         let repo_path = PathBuf::from(&project.path);
@@ -533,11 +498,7 @@ impl Workspace {
         );
 
         let mut ws = Self {
-            agent: AgentPanelState {
-                tabs,
-                next_tab_id,
-                ..AgentPanelState::new()
-            },
+            agent,
             project: Some(project),
             files,
             project_panel,

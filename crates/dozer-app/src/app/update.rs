@@ -383,16 +383,6 @@ impl App {
                     }
                 });
             }
-            Message::AgentStateChanged(project_id, tab_id, agent, state, transcript_path) => self
-                .agent_panel_message(
-                    project_id,
-                    dozer_panel_agent::update::Message::AgentState {
-                        tab_id,
-                        agent,
-                        state,
-                        transcript_path,
-                    },
-                ),
             Message::ReviewLoaded(project_id, source, append, result) => {
                 self.with_project(project_id, |ws, _io| {
                     if result.is_ok() {
@@ -1089,14 +1079,17 @@ impl App {
             }
             Message::Noop => {}
             Message::TermScroll(target, delta) => {
+                if target == terminal::TermTarget::Shared {
+                    if let Some(project_id) = self.active_project_id() {
+                        self.agent_panel_message(
+                            project_id,
+                            dozer_panel_agent::update::Message::Scroll(delta),
+                        );
+                    }
+                    return;
+                }
                 self.with_focused_project(|ws, _io| {
-                    let tab = match target {
-                        terminal::TermTarget::Shared => {
-                            let active = ws.active;
-                            ws.tabs.get_mut(active)
-                        }
-                        terminal::TermTarget::SshPanel => ws.ssh_active_tab_mut(),
-                    };
+                    let tab = ws.ssh_active_tab_mut();
                     if let Some(tab) = tab {
                         tab.model.scroll_display(delta);
                     }
@@ -1113,14 +1106,17 @@ impl App {
                 row,
                 right,
             } => {
+                if target == terminal::TermTarget::Shared {
+                    if let Some(project_id) = self.active_project_id() {
+                        self.agent_panel_message(
+                            project_id,
+                            dozer_panel_agent::update::Message::SelStart { col, row, right },
+                        );
+                    }
+                    return;
+                }
                 self.with_focused_project(|ws, _io| {
-                    let tab = match target {
-                        terminal::TermTarget::Shared => {
-                            let active = ws.active;
-                            ws.tabs.get_mut(active)
-                        }
-                        terminal::TermTarget::SshPanel => ws.ssh_active_tab_mut(),
-                    };
+                    let tab = ws.ssh_active_tab_mut();
                     if let Some(tab) = tab {
                         tab.model.selection_start(col, row, right);
                     }
@@ -1132,14 +1128,17 @@ impl App {
                 row,
                 right,
             } => {
+                if target == terminal::TermTarget::Shared {
+                    if let Some(project_id) = self.active_project_id() {
+                        self.agent_panel_message(
+                            project_id,
+                            dozer_panel_agent::update::Message::SelUpdate { col, row, right },
+                        );
+                    }
+                    return;
+                }
                 self.with_focused_project(|ws, _io| {
-                    let tab = match target {
-                        terminal::TermTarget::Shared => {
-                            let active = ws.active;
-                            ws.tabs.get_mut(active)
-                        }
-                        terminal::TermTarget::SshPanel => ws.ssh_active_tab_mut(),
-                    };
+                    let tab = ws.ssh_active_tab_mut();
                     if let Some(tab) = tab {
                         tab.model.selection_update(col, row, right);
                     }
@@ -2675,7 +2674,7 @@ impl App {
             let ids: Vec<String> = restore
                 .sessions
                 .iter()
-                .map(|(info, _, _)| info.id.clone())
+                .map(|session| session.info.id.clone())
                 .collect();
             let task = self.handle.spawn(async move {
                 for sid in ids {

@@ -26,6 +26,25 @@ pub enum Message {
     Input(Vec<u8>),
     /// 粘贴文本(按 bracketed paste 模式包裹)。
     Paste(String),
+    /// 终端滚轮，仅作用于活动页签。
+    Scroll(i32),
+    /// 开始更新活动页签的鼠标选区。
+    SelStart {
+        col: usize,
+        row: usize,
+        right: bool,
+    },
+    /// 继续更新活动页签的鼠标选区。
+    SelUpdate {
+        col: usize,
+        row: usize,
+        right: bool,
+    },
+    /// 同步所有存活页签的终端网格尺寸。
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
     Output {
         tab_id: usize,
         bytes: Vec<u8>,
@@ -134,6 +153,26 @@ pub fn update(
                 text.into_bytes()
             };
             send_to_tab(tab, ctx.svc, ctx.handle, bytes);
+        }
+        Message::Scroll(delta) => {
+            if let Some(tab) = state.tabs.get_mut(state.active) {
+                tab.model.scroll_display(delta);
+            }
+        }
+        Message::SelStart { col, row, right } => {
+            if let Some(tab) = state.tabs.get_mut(state.active) {
+                tab.model.selection_start(col, row, right);
+            }
+        }
+        Message::SelUpdate { col, row, right } => {
+            if let Some(tab) = state.tabs.get_mut(state.active) {
+                tab.model.selection_update(col, row, right);
+            }
+        }
+        Message::Resize { cols, rows } => {
+            for tab in &mut state.tabs {
+                crate::tabs::resize_tab(tab, ctx.svc, ctx.handle, cols, rows);
+            }
         }
         Message::Output { tab_id, bytes } => {
             let Some(tab) = state.tab_by_id_mut(tab_id) else {
@@ -728,6 +767,119 @@ mod tests {
             forwarder: rt.spawn(async {}),
             backend: TabBackend::Daemon,
         }
+    }
+
+    #[tokio::test]
+    async fn scroll_moves_the_display_of_the_active_tab_only() {
+        let harness = Harness::new();
+        let svc = harness.svc();
+        let handle = tokio::runtime::Handle::current();
+        let tracked = |_| {};
+        let ctx = harness.ctx(&svc, &handle, &tracked);
+        let mut state = AgentPanelState::new();
+        let mut first = make_tab(&handle, 0, AgentKind::Unknown);
+        let mut second = make_tab(&handle, 1, AgentKind::Unknown);
+        let _ = first.model.feed(b"one\ntwo\nthree\nfour\nfive\n");
+        let _ = second.model.feed(b"one\ntwo\nthree\nfour\nfive\n");
+        state.tabs = vec![first, second];
+        state.active = 1;
+        update(&mut state, Message::Scroll(2), &ctx, |_| {});
+        assert_eq!(state.tabs[0].model.display_offset(), 0);
+        assert!(state.tabs[1].model.display_offset() > 0);
+    }
+
+    #[tokio::test]
+    async fn selection_start_and_update_apply_to_the_active_tab_only() {
+        let harness = Harness::new();
+        let svc = harness.svc();
+        let handle = tokio::runtime::Handle::current();
+        let tracked = |_| {};
+        let ctx = harness.ctx(&svc, &handle, &tracked);
+        let mut state = AgentPanelState::new();
+        let mut first = make_tab(&handle, 0, AgentKind::Unknown);
+        let mut second = make_tab(&handle, 1, AgentKind::Unknown);
+        let _ = first.model.feed(b"first");
+        let _ = second.model.feed(b"second");
+        state.tabs = vec![first, second];
+        state.active = 1;
+        update(
+            &mut state,
+            Message::SelStart {
+                col: 0,
+                row: 0,
+                right: false,
+            },
+            &ctx,
+            |_| {},
+        );
+        update(
+            &mut state,
+            Message::SelUpdate {
+                col: 2,
+                row: 0,
+                right: true,
+            },
+            &ctx,
+            |_| {},
+        );
+        assert_eq!(state.tabs[0].model.selection_text(), None);
+        assert_eq!(state.active_selection_text().as_deref(), Some("sec"));
+    }
+
+    #[tokio::test]
+    async fn scroll_and_selection_without_an_active_tab_are_ignored() {
+        let harness = Harness::new();
+        let svc = harness.svc();
+        let handle = tokio::runtime::Handle::current();
+        let tracked = |_| {};
+        let ctx = harness.ctx(&svc, &handle, &tracked);
+        let mut state = AgentPanelState::new();
+        update(&mut state, Message::Scroll(1), &ctx, |_| {});
+        update(
+            &mut state,
+            Message::SelStart {
+                col: 0,
+                row: 0,
+                right: false,
+            },
+            &ctx,
+            |_| {},
+        );
+        update(
+            &mut state,
+            Message::SelUpdate {
+                col: 1,
+                row: 0,
+                right: false,
+            },
+            &ctx,
+            |_| {},
+        );
+        assert!(state.tabs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resize_message_resizes_every_live_tab_and_skips_exited_ones() {
+        let harness = Harness::new();
+        let svc = harness.svc();
+        let handle = tokio::runtime::Handle::current();
+        let tracked = |_| {};
+        let ctx = harness.ctx(&svc, &handle, &tracked);
+        let mut state = AgentPanelState::new();
+        let live = make_tab(&handle, 0, AgentKind::Unknown);
+        let mut exited = make_tab(&handle, 1, AgentKind::Unknown);
+        exited.alive = false;
+        state.tabs = vec![live, exited];
+        update(
+            &mut state,
+            Message::Resize { cols: 33, rows: 9 },
+            &ctx,
+            |_| {},
+        );
+        assert_eq!(state.tabs[0].model.grid_dims(), (33, 9));
+        assert_eq!(state.tabs[1].model.grid_dims(), (33, 9));
+        tokio::task::yield_now().await;
+        assert_eq!(harness.svc.calls(), vec!["resize(s0,33,9)"]);
     }
 
     struct Harness {

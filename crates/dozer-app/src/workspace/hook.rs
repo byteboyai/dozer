@@ -1,14 +1,10 @@
 //! Workspace 的 hook 安装与杂项辅助:`should_summarize_on_close`/
 //! `ensure_hook_installed`/`ensure_mcp_installed`/`preview_context_from_editor_state`,
-//! 以及 `tab_title`/`dot_color`/`agent_icon` 等纯函数与 `fetch_project_restore`/
-//! `forward_events` 异步桥。
+//! 以及 `tab_title`/`dot_color`/`agent_icon` 等纯函数与 `fetch_project_restore`。
 
-use crate::app::{Message, ProjectId};
-use dozer_client::{Client, TermEvent};
+use dozer_client::Client;
 use dozer_core::protocol::{AgentKind, ProjectInfo};
-use iced_winit::winit::event_loop::EventLoopProxy;
 use std::path::{Path, PathBuf};
-use tokio::sync::mpsc;
 
 use super::*;
 
@@ -239,34 +235,7 @@ pub(crate) fn mode_token(mode: crate::preview::PreviewMode) -> &'static str {
 /// 最近项目列表打包成 [`ProjectRestore`]。整段只碰 `Client`,不碰任何 GUI
 /// 类型,所以可以在 tokio 线程池上跑(`App::ensure_loaded` 正是这么用的)。
 pub(crate) async fn fetch_project_restore(client: &Client, project: ProjectInfo) -> ProjectRestore {
-    let mut sessions = Vec::new();
-    match client.list().await {
-        Ok(list) => {
-            // 只认归属本项目的会话:daemon 现在按 `project_id` 给会话分家
-            // (P2a Task 1-3),并行打开的别的项目的终端不该跑到这一份
-            // `Workspace` 的 tab 栏里来。
-            //
-            // 迁移期孤儿会话——Task 1-3 落地**之前**建的、`project_id`
-            // 为 `None` 的存活会话——会被这条 filter 一并排除,从此不出现
-            // 在任何项目的 tab 栏里,直到 dozerd 重启把它们清掉为止(在此
-            // 期间它们仍占着 PTY)。这是**有意为之**,不是漏判:规格把
-            // "迁移期孤儿会话怎么处理"显式挂起、留给实现计划阶段决定,
-            // 本期不做孤儿会话的找回入口。日后有人发现"重启 daemon 前
-            // 有几个会话凭空消失了",答案就在这一行。
-            for info in list
-                .into_iter()
-                .filter(|s| s.alive && s.project_id == Some(project.id))
-            {
-                match client.attach(&info.id, 0).await {
-                    Ok((snapshot, _next_offset, rx)) => sessions.push((info, snapshot, rx)),
-                    Err(e) => {
-                        dozer_core::log_warn!(LOG, session = %info.id, "attach 失败，跳过该会话恢复: {e}")
-                    }
-                }
-            }
-        }
-        Err(e) => dozer_core::log_warn!(LOG, "list 失败，跳过启动恢复: {e}"),
-    }
+    let sessions = dozer_panel_agent::restore::fetch_restored(client, project.id).await;
     // 最近项目列表（git 分支/脏在窗口起来后异步补）。"当前项目"不再
     // 向 daemon 打听——daemon 侧的"活跃项目"概念已随 P2a Task 1-3 删除
     // （多项目并行下没有唯一活跃项目），改由调用方(`App`)指定。
@@ -275,46 +244,5 @@ pub(crate) async fn fetch_project_restore(client: &Client, project: ProjectInfo)
         project,
         recent_projects,
         sessions,
-    }
-}
-
-/// 单个 attach 数据流的转发循环：持有 `rx`（唯一持有者），逐条转发到
-/// UI 线程（经 `EventLoopProxy`）。tab 关闭时 `JoinHandle::abort` 打断
-/// 这个循环，`rx` 随任务栈一起析构——这就是 detach 的物理落点。
-///
-/// `project_id` 是这条流归属的项目:`tab_id` 只在单个 `Workspace` 内唯一,
-/// 每个项目都从 0 起编,所以转发出去的消息必须自带项目归属,否则后台项目的
-/// 输出会被喂进前台项目同号的 tab(见 [`ProjectId`])。
-pub(crate) async fn forward_events(
-    project_id: ProjectId,
-    tab_id: usize,
-    mut rx: mpsc::UnboundedReceiver<TermEvent>,
-    proxy: EventLoopProxy<Message>,
-) {
-    while let Some(event) = rx.recv().await {
-        let message = match event {
-            TermEvent::Output(bytes) => Message::TermOutput(project_id, tab_id, bytes),
-            TermEvent::Exited(_code) => {
-                let _ = proxy.send_event(Message::SessionExited(project_id, tab_id));
-                return;
-            }
-            TermEvent::Disconnected => {
-                let _ = proxy.send_event(Message::SessionExited(project_id, tab_id));
-                return;
-            }
-            TermEvent::Lagged => {
-                dozer_core::log_warn!(LOG, tab_id, "终端事件滞后（lagged），可能丢失部分历史输出");
-                continue;
-            }
-            TermEvent::Agent {
-                agent,
-                state,
-                transcript_path,
-            } => Message::AgentStateChanged(project_id, tab_id, agent, state, transcript_path),
-        };
-        if proxy.send_event(message).is_err() {
-            // UI 线程（EventLoop）已经关闭，没有必要继续转发。
-            return;
-        }
     }
 }

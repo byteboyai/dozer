@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
+use dozer_core::protocol::{AgentKind, ProjectInfo, SessionInfo};
 
 use crate::chrome::homespace::{self, HomeRecentConversation, HomeRecentFile};
 use crate::extensions::{
@@ -35,8 +35,6 @@ pub enum Message {
     TermOutput(ProjectId, usize, Vec<u8>),
     /// 对应 tab 的会话已退出（PTY 子进程退出或 daemon 断连）。
     SessionExited(ProjectId, usize),
-    /// attach 流转发来的 agent 状态变更（tab_id, 状态, 该会话最新 transcript 路径）。
-    AgentStateChanged(ProjectId, usize, AgentKind, AgentState, Option<String>),
     /// 会话审阅:解析完成（来源, 追加标记, 条目 / 错误文案）。`append`
     /// 为 `true` 时新条目应追加进现有 `entries`(详情"加载更多"),`false`
     /// 时整段替换(首次打开/活会话刷新)。
