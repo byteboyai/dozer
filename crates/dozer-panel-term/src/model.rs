@@ -1280,4 +1280,160 @@ mod tests {
                 ))
         );
     }
+
+    // ---- 退化尺寸与脏输入钉死测试(S6b Task 2) ----
+    //
+    // 这些测试把**现状行为**固定下来。若发现既有缺陷,按现状保留并写进
+    // S6b 报告交用户裁决,不在抽库时顺手改模型。
+
+    #[test]
+    fn one_by_one_grid_does_not_panic() {
+        let mut t = TerminalModel::new(1, 1);
+        let _ = t.feed(b"hello\r\nworld\x1b[31m!");
+        let _ = t.visible_lines();
+        let _ = t.cursor();
+        assert_eq!(t.grid_dims(), (1, 1));
+        let _ = t.history_len();
+        let _ = t.selection_text();
+        t.selection_start(0, 0, false);
+        t.selection_update(5, 5, true);
+        let _ = t.selection_text();
+        t.selection_clear();
+        t.resize(1, 1);
+        let _ = t.feed(b"y");
+        let _ = t.visible_lines();
+        let _ = t.cursor();
+    }
+
+    /// **既有缺陷(按现状保持,见 S6b 报告)**:`alacritty_terminal` 的网格
+    /// 不支持 0 行/0 列。
+    /// - `rows == 0`:`new(0,0)` / `new(1,0)` 的快照能读,但 `feed` 在
+    ///   `grid/storage.rs` 的 `compute_index` 断言处 panic;
+    /// - `cols == 0`:`new(0,1)` 与 `resize(0,*)` 之后连 `visible_lines()`
+    ///   都会 panic(末列索引下溢)。
+    ///
+    /// 本测试原样钉住"零尺寸不应 panic"的期望,现状不满足,故 `#[ignore]`;
+    /// 将来修好模型后去掉 ignore 即可作为回归测试。
+    #[test]
+    #[ignore = "既有缺陷,按现状保持,见 S6b 报告"]
+    fn new_and_resize_to_zero_or_one_cell_do_not_panic() {
+        for (cols, rows) in [(0, 0), (0, 1), (1, 0)] {
+            let mut t = TerminalModel::new(cols, rows);
+            let _ = t.feed(b"hello\r\nworld\x1b[31m!");
+            let _ = t.visible_lines();
+            let _ = t.cursor();
+            let _ = t.grid_dims();
+            let _ = t.history_len();
+            let _ = t.selection_text();
+            t.selection_start(0, 0, false);
+            t.selection_update(5, 5, true);
+            let _ = t.selection_text();
+            t.selection_clear();
+            t.resize(0, 0);
+            let _ = t.feed(b"x");
+            let _ = t.visible_lines();
+        }
+    }
+
+    #[test]
+    fn feeding_truncated_and_invalid_sequences_does_not_panic() {
+        let mut t = TerminalModel::new(20, 5);
+        // 截断的 CSI、无结束符的 OSC、孤立的 UTF-8 续字节、非法起始字节、
+        // 以及跨 feed 边界被劈开的 CSI。
+        for chunk in [
+            &b"\x1b["[..],
+            &b"\x1b]0;"[..],
+            &b"\x80\xbf"[..],
+            &b"\xff\xfe"[..],
+            &b"\x1b[38;2;"[..],
+            &b"\x1b["[..],
+            &b"3"[..],
+            &b"1mtext"[..],
+        ] {
+            let _ = t.feed(chunk);
+        }
+        // 超长 CSI 参数:不 panic、后续输出仍能落格。
+        let long_csi = format!("\x1b[{}m", "9".repeat(100_000));
+        let _ = t.feed(long_csi.as_bytes());
+        let _ = t.feed(b"done");
+        assert!(
+            t.visible_lines().iter().flatten().any(|c| c.ch == 'd'),
+            "脏输入之后合法文本仍应写入网格"
+        );
+        // 孤立的 0xFF/0xFE 与截断序列之后,光标与快照仍可安全读取。
+        let _ = t.cursor();
+        let _ = t.grid_dims();
+        let _ = t.history_len();
+    }
+
+    #[test]
+    fn very_long_single_line_does_not_grow_unbounded() {
+        // 10 万字节无换行:按 80 列折行,历史行数应远低于 scrollback 上限,
+        // 视口行数恒等于网格行数。
+        let mut t = TerminalModel::new(80, 24);
+        let _ = t.feed(&vec![b'x'; 100_000]);
+        assert_eq!(t.grid_dims(), (80, 24));
+        assert_eq!(t.visible_lines().len(), 24);
+        assert!(
+            t.history_len() <= 10_000,
+            "history_len={} 超出默认 scrollback 上限",
+            t.history_len()
+        );
+    }
+
+    #[test]
+    fn scrollback_is_bounded() {
+        // alacritty_terminal `Config::default().scrolling_history` 的现状值
+        // 是 10000(见 `TerminalModel::new` 用的 `Config::default()`)。
+        let mut t = TerminalModel::new(10, 4);
+        for _ in 0..200_000 {
+            let _ = t.feed(b"x\r\n");
+        }
+        assert!(
+            t.history_len() <= 10_000,
+            "history_len={} 超出配置上限 10000",
+            t.history_len()
+        );
+    }
+
+    #[test]
+    fn selection_dragged_outside_the_grid_is_clamped() {
+        let mut t = TerminalModel::new(10, 3);
+        let _ = t.feed(b"abc\r\ndef");
+        t.selection_start(0, 0, false);
+        t.selection_update(1000, 1000, true);
+        let text = t.selection_text().expect("拖出网格仍应得到选区文本");
+        let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+        assert_eq!(lines.first().copied(), Some("abc"));
+        assert_eq!(lines.last().copied(), Some("def"));
+        for line in &lines {
+            assert!(line.chars().count() <= 10, "选区越出网格: {line:?}");
+        }
+
+        // 起点也在网格外:钳到边缘,不 panic。
+        t.selection_start(1000, 1000, false);
+        t.selection_update(0, 0, false);
+        let _ = t.selection_text();
+    }
+
+    #[test]
+    fn resize_smaller_after_selecting_keeps_selection_in_bounds() {
+        let mut t = TerminalModel::new(20, 6);
+        let _ = t.feed(b"abcdef\r\nghijkl");
+        t.selection_start(0, 0, false);
+        t.selection_update(5, 1, true);
+        assert!(t.selection_text().is_some());
+
+        t.resize(5, 2);
+        if let Some(text) = t.selection_text() {
+            for line in text.lines() {
+                assert!(line.chars().count() <= 5, "缩小网格后选区越界: {line:?}");
+            }
+        }
+        // 缩到 1x1 也不能 panic。
+        t.resize(1, 1);
+        let _ = t.selection_text();
+        let _ = t.visible_lines();
+    }
 }
+
