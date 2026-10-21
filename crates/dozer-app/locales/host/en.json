@@ -129,8 +129,6 @@
   "preview.resource_budget_insufficient": "Insufficient preview resource budget (close other large files and retry)",
   "common.cancel": "Cancel",
   "common.close": "Close",
-  "agent.close_tab_title": "Close the \"{agent}\" Agent?",
-  "agent.close_tab_description": "The \"{agent}\" Agent is currently active. Closing it ends the session and clears its context.",
   "settings.apps.pick_dir_title": "Choose an app directory (must contain manifest.toml)",
   "settings.apps.pick_archive_title": "Choose an app archive",
   "settings.apps.archive_filter": "Archive",
@@ -275,10 +273,6 @@
   "error.open_with_default_failed": "Could not open {file} with the system default app: {reason}",
   "preview.file_missing_locate": "The file no longer exists; cannot locate: {path}",
   "review.no_conversation": "No conversation",
-  "agent.state_running": "Running",
-  "agent.state_awaiting_input": "Awaiting input",
-  "agent.state_turn_ended": "Turn ended",
-  "agent.state_idle": "Idle",
   "term.no_sessions": "No sessions yet — click “+” in the Agent panel",
   "file_history.load_failed": "Failed to load: {error}",
   "todo.process_failed": "Failed to process task: {e}",
@@ -296,8 +290,6 @@
   "conversations.generating": "Generating…",
   "conversations.generate_summary": "Generate Summary",
   "conversations.no_review_content": "No review content—click a conversation in the list on the left to start reviewing",
-  "agent.new_session": "New agent session",
-  "agent.no_conversations": "No conversations",
   "files.no_project": "No project open",
   "file_history.project_outside_repo": "{project} is not inside the repository work tree"
 }

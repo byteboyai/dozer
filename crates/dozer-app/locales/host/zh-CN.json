@@ -129,8 +129,6 @@
   "preview.resource_budget_insufficient": "预览资源预算不足(可关闭其它大文件后重试)",
   "common.cancel": "取消",
   "common.close": "关闭",
-  "agent.close_tab_title": "关闭\"{agent}\" Agent吗？",
-  "agent.close_tab_description": "\"{agent}\" Agent 当前正处于活动状态，关闭后会结束会话，并清空会话上下文。",
   "settings.apps.pick_dir_title": "选择应用目录(目录里要有 manifest.toml)",
   "settings.apps.pick_archive_title": "选择应用压缩包",
   "settings.apps.archive_filter": "压缩包",
@@ -275,10 +273,6 @@
   "error.open_with_default_failed": "无法用系统默认应用打开 {file}：{reason}",
   "preview.file_missing_locate": "文件已不存在,无法定位: {path}",
   "review.no_conversation": "暂无对话",
-  "agent.state_running": "运行中",
-  "agent.state_awaiting_input": "待输入",
-  "agent.state_turn_ended": "回合毕",
-  "agent.state_idle": "空闲",
   "term.no_sessions": "暂无会话——到 Agent 面板点「＋」",
   "file_history.load_failed": "加载失败: {error}",
   "todo.process_failed": "处理任务失败: {e}",
@@ -296,8 +290,6 @@
   "conversations.generating": "生成中…",
   "conversations.generate_summary": "生成总结",
   "conversations.no_review_content": "暂无审阅内容——点击左侧对话列表中的对话开始审阅",
-  "agent.new_session": "新建 Agent 会话",
-  "agent.no_conversations": "暂无会话",
   "files.no_project": "未打开项目",
   "file_history.project_outside_repo": "{project} 不在仓库工作区内"
 }
