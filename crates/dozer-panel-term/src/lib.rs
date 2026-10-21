@@ -8,6 +8,8 @@
 //!
 //! 本库不含 PTY(在守护进程里),也不内嵌字体(调用方注册并传入)。
 
+pub mod input;
 pub mod model;
+pub mod osc;
 pub mod style;
 pub mod view;
