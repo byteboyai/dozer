@@ -145,3 +145,50 @@ fn inline_mcp_servers_parent_is_preserved_for_codex() {
     );
     assert!(text.contains("dozer"), "{text}");
 }
+
+#[test]
+fn reinstalling_either_is_idempotent_and_does_not_touch_the_other() {
+    for (agent, suffix, preset) in [
+        (
+            "claude",
+            "c.json",
+            r#"{"mcpServers":{"other":{"command":"foo"}}}"#,
+        ),
+        (
+            "opencode",
+            "o.json",
+            r#"{"mcp":{"other":{"type":"local"}}}"#,
+        ),
+        (
+            "codex",
+            "c.toml",
+            "[mcp_servers.other]\ncommand = \"foo\"\n",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(suffix);
+        std::fs::write(&path, preset).unwrap();
+        let other_entry = entry_snapshot(&path, agent, "other");
+        install(&path, &dozer(), agent, true, "/x/dozer-mcp");
+        install(&path, &digger(), agent, true, "/x/digger-mcp");
+        let dozer_entry = entry_snapshot(&path, agent, "dozer");
+        let digger_entry = entry_snapshot(&path, agent, "digger");
+        install(&path, &dozer(), agent, true, "/x/dozer-mcp");
+        install(&path, &digger(), agent, true, "/x/digger-mcp");
+        assert_eq!(
+            entry_snapshot(&path, agent, "dozer"),
+            dozer_entry,
+            "{agent}"
+        );
+        assert_eq!(
+            entry_snapshot(&path, agent, "digger"),
+            digger_entry,
+            "{agent}"
+        );
+        assert_eq!(
+            entry_snapshot(&path, agent, "other"),
+            other_entry,
+            "{agent}"
+        );
+    }
+}

@@ -123,3 +123,26 @@ fn serve_error_message_is_parameterized_by_the_product() {
         "缺少 DIGGER_SESSION_ID：digger-mcp 只能在 digger 拉起的会话里跑"
     );
 }
+
+#[test]
+fn empty_own_session_variable_is_treated_as_missing() {
+    let home = tempfile::tempdir().unwrap();
+    // 自己的变量为空、没有别家变量 → 与"缺失"相同:报错。
+    let (_responses, stderr, code) = run(&[("DOZER_SESSION_ID", "")], home.path());
+    assert_ne!(code, 0);
+    let golden = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/serve_error_golden.txt"),
+    )
+    .unwrap();
+    assert_eq!(stderr, golden);
+
+    // 自己的变量为空、别家变量在 → 安静模式(而不是拿空串当自己的 id)。
+    let (responses, stderr, code) = run(
+        &[("DOZER_SESSION_ID", ""), ("DIGGER_SESSION_ID", "abc")],
+        home.path(),
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(stderr.is_empty());
+    assert_eq!(tool_count(&responses), 0);
+}

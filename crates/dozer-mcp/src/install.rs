@@ -205,32 +205,10 @@ fn run_at_opencode_entry(path: &Path, install: bool, exe: &str, entry: &str) -> 
 }
 
 fn write_json(path: &Path, value: &serde_json::Value) -> i32 {
-    // 对象键按字典序输出:serde_json 的 Map 在启用 `preserve_order` 的构建里
-    // 会保留插入顺序,而不同构建方式的 feature 统一结果可能不同。排序后
-    // 产物与抽库前(默认 BTreeMap)逐字一致。
-    let sorted = sorted_json(value);
     write_text(
         path,
-        &(serde_json::to_string_pretty(&sorted).expect("json serializes") + "\n"),
+        &(serde_json::to_string_pretty(value).expect("json serializes") + "\n"),
     )
-}
-
-fn sorted_json(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            let mut out = serde_json::Map::new();
-            for k in keys {
-                out.insert(k.clone(), sorted_json(&map[k]));
-            }
-            serde_json::Value::Object(out)
-        }
-        serde_json::Value::Array(items) => {
-            serde_json::Value::Array(items.iter().map(sorted_json).collect())
-        }
-        other => other.clone(),
-    }
 }
 
 fn write_text(path: &Path, text: &str) -> i32 {
@@ -719,7 +697,7 @@ mod tests {
     }
 
     #[test]
-    fn a_user_written_entry_with_the_same_name_is_not_overwritten() {
+    fn a_user_written_entry_with_the_same_name_is_not_overwritten_and_returns_3() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("c.json");
         let original = r#"{"mcpServers":{"dozer":{"command":"my-own-doer"}}}"#;
@@ -766,5 +744,86 @@ mod tests {
             );
             assert_eq!(std::fs::read_to_string(&path).unwrap(), preset);
         }
+    }
+    fn preserve_order_enabled() -> bool {
+        serde_json::to_string(&serde_json::json!({"b": 1, "a": 2})).unwrap() == r#"{"b":1,"a":2}"#
+    }
+
+    #[test]
+    fn install_does_not_reorder_unrelated_keys() {
+        if !preserve_order_enabled() {
+            eprintln!("skip: 本构建的 serde_json 未启用 preserve_order,无法观察键序(发布构建启用)");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c.json");
+        std::fs::write(&path, r#"{"zeta":1,"alpha":{"y":1,"b":2},"mcpServers":{}}"#).unwrap();
+        assert_eq!(run_at_with_exe(&path, "claude", true, "/x/dozer-mcp"), 0);
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let keys: Vec<&str> = root
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, vec!["zeta", "alpha", "mcpServers"], "顶层键序被改动");
+        let inner: Vec<&str> = root["alpha"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(inner, vec!["y", "b"], "嵌套键序被改动");
+    }
+
+    #[test]
+    fn uninstall_refuses_to_remove_a_foreign_same_named_entry() {
+        for (agent, file, preset, key_path) in [
+            (
+                "claude",
+                "c.json",
+                r#"{"mcpServers":{"dozer":{"command":"other-app"}}}"#,
+                "mcpServers",
+            ),
+            (
+                "opencode",
+                "o.json",
+                r#"{"mcp":{"dozer":{"type":"local","command":["other-app","serve"]}}}"#,
+                "mcp",
+            ),
+            (
+                "codex",
+                "c.toml",
+                "[mcp_servers.dozer]\ncommand = \"other-app\"\n",
+                "mcp_servers",
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(file);
+            std::fs::write(&path, preset).unwrap();
+            assert_eq!(run_at_with_exe(&path, agent, false, "/x/dozer-mcp"), 3);
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(text, preset, "{agent}: 拒绝卸载时不应改文件");
+            let _ = key_path;
+        }
+    }
+
+    #[test]
+    fn missing_empty_and_corrupt_files_behave_as_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.json");
+        assert_eq!(run_at_with_exe(&missing, "claude", true, "/x/dozer-mcp"), 0);
+        assert!(std::fs::read_to_string(&missing).unwrap().contains("dozer"));
+
+        let empty = dir.path().join("empty.json");
+        std::fs::write(&empty, "").unwrap();
+        assert_eq!(run_at_with_exe(&empty, "claude", true, "/x/dozer-mcp"), 1);
+        assert_eq!(std::fs::read_to_string(&empty).unwrap(), "");
+
+        let corrupt = dir.path().join("corrupt.json");
+        std::fs::write(&corrupt, "{not json").unwrap();
+        assert_eq!(run_at_with_exe(&corrupt, "claude", true, "/x/dozer-mcp"), 1);
+        assert_eq!(std::fs::read_to_string(&corrupt).unwrap(), "{not json");
     }
 }

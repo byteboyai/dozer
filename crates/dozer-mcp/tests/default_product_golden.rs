@@ -136,7 +136,40 @@ fn run_install(path: &Path, agent: &str, install: bool) {
     assert_eq!(code, 0, "{agent} install={install}");
 }
 
-fn install_sequence(name: &str, preset: &str, agent: &str) {
+/// 安装产物的黄金只钉内容,不钉键序:`serde_json` 的 `preserve_order`
+/// feature 由构建里的其它依赖决定(`cargo test -p dozer-mcp` 与
+/// `cargo test --workspace` 会得到不同键序),而两种构建在抽库前就不同。
+fn normalize_install(text: &str, json: bool) -> String {
+    let mut out = String::new();
+    let mut body = String::new();
+    let flush = |out: &mut String, body: &mut String| {
+        if body.is_empty() {
+            return;
+        }
+        if json {
+            let value: Value = serde_json::from_str(body).expect("install json body");
+            out.push_str(&serde_json::to_string_pretty(&canonical_json(&value)).unwrap());
+            out.push('\n');
+        } else {
+            out.push_str(body);
+        }
+        body.clear();
+    };
+    for line in text.lines() {
+        if line.starts_with("== ") {
+            flush(&mut out, &mut body);
+            out.push_str(line);
+            out.push('\n');
+        } else {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    flush(&mut out, &mut body);
+    out
+}
+
+fn install_sequence(name: &str, preset: &str, agent: &str, json: bool) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config");
     std::fs::write(&path, preset).unwrap();
@@ -149,7 +182,16 @@ fn install_sequence(name: &str, preset: &str, agent: &str) {
     text.push_str("== after uninstall ==\n");
     run_install(&path, agent, false);
     text.push_str(&std::fs::read_to_string(&path).unwrap());
-    compare_or_update(name, &text);
+    if std::env::var_os("UPDATE_GOLDEN").is_some() {
+        std::fs::write(fixture(name), &text).expect("write golden");
+        return;
+    }
+    let expected = std::fs::read_to_string(fixture(name)).expect("golden fixture missing");
+    assert_eq!(
+        normalize_install(&text, json),
+        normalize_install(&expected, json),
+        "{name} 与黄金内容不一致"
+    );
 }
 
 #[test]
@@ -158,16 +200,19 @@ fn install_outputs_match_the_golden() {
         "install_claude_golden.json",
         "{\n  \"numStartups\": 7,\n  \"mcpServers\": {\n    \"other\": {\n      \"command\": \"foo\"\n    }\n  }\n}\n",
         "claude",
+        true,
     );
     install_sequence(
         "install_codex_golden.toml",
         "# keep me\nmodel = \"o3\"\n\n[mcp_servers.other]\ncommand = \"foo\"\n",
         "codex",
+        false,
     );
     install_sequence(
         "install_opencode_golden.json",
         "{\n  \"theme\": \"dark\",\n  \"mcp\": {\n    \"other\": {\n      \"type\": \"local\"\n    }\n  }\n}\n",
         "opencode",
+        true,
     );
 }
 
