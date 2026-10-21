@@ -38,9 +38,9 @@ Dozer 侧 S6b 完成：终端模型与 iced 自绘视图搬进共享库 `crates/
 - `dozer-panel-term` 依赖：`alacritty_terminal`（workspace）、`byteui`（tag `v0.4.5`）、`unicode-width 0.2`、`iced_widget 0.14`（canvas）、`iced_renderer 0.14`。
 - 已按 `dozer-panel-todo` / `dozer-panel-usage` 的方式登记新库：
   - `scripts/i18n/scan_sources.py`：加入 `crates/dozer-panel-term/src` 扫描根，owner 暂归 `dozer.agent`；
-  - `scripts/i18n/build_inventory.py`：文件任务归到 09；
+  - `scripts/i18n/build_inventory.py`：文件任务归到 09；**并把 `crates/dozer-panel-term/src/model.rs` 加进 `EXCLUDED_FILES`**（审核 B1：旧路径 `term_model.rs` 本来就在排除表里，搬家后新路径没跟上，`#[must_use]` 提示被扫成未分类 UI 候选）；
   - `scripts/i18n/check_migration.py`：加入默认源根。
-  - 库当前**没有可本地化文案**，因此没有 `locales/`、也没有造空文案；`python3 scripts/i18n/check_migration.py` 仍为 `unresolved=0`。
+  - 库当前**没有可本地化文案**，因此没有 `locales/`、也没有造空文案。**更正：** 本报告初稿写的"`check_migration.py` 仍为 `unresolved=0`"在 B1 修复之前不成立（当时是 `unresolved=1`，退出码 1）；修复之后实测 `python3 scripts/i18n/check_migration.py` 退出码 0、`inventory: total=2677 unresolved=0`。`check_migration.py` 是重跑 `build_inventory.build()` 判断的，**不读**已提交的 `docs/dozer-v2/i18n/inventory.json`，该文件含后续迁移任务写回的记录，**不要用 `build_inventory.py` 覆盖式重新生成它**（实测会产生 2.3 万行无关 diff 并清零 `migrated`）。
 - `python3 scripts/audit/check_panel_boundary.py`：ok（`dozer-app` 内引用数未上升）。
 
 ## 测试总数与黄金测试

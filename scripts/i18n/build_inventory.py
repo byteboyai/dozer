@@ -108,6 +108,9 @@ EXCLUDED_FILES = [
     "crates/dozer-app/src/usage_probe/host.rs",
     "crates/dozer-app/src/service_fakes.rs",
     "crates/dozer-app/src/term/term_model.rs",
+    # S6b:终端模型搬进共享库后的新位置;里面只有 `#[must_use]` 提示与测试语料,
+    # 都不是面向用户的文案(与上一行旧路径同一判断)。
+    "crates/dozer-panel-term/src/model.rs",
     "crates/dozer-core/src/log.rs",
     # WebView 侧共享 i18n 运行时的 `I18nError` 异常文案:开发者诊断(模板/资源
     # 非法时抛出),不面向最终用户;页面文案由各 surface 自己的资源与任务负责。
