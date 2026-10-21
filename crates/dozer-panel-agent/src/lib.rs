@@ -7,6 +7,9 @@
 //! `wry` / `winit` / `portable-pty` / `russh`:所有产品专属语义(守护进程
 //! 客户端、hook 安装器、原生菜单、退出前等待)都经注入的 trait / 闭包提供。
 
+pub mod adapter;
 pub mod i18n;
 pub mod launch;
+pub mod state;
 pub mod tabs;
+pub mod update;

@@ -15,7 +15,7 @@ use crate::extensions::search;
 use crate::extensions::ssh;
 use crate::extensions::todo;
 use crate::extensions::usage;
-use crate::osc::{OscEvent, OscScanner};
+use crate::osc::OscScanner;
 use crate::preview::{PreviewPane, TabKind};
 use crate::project::FileTree;
 use crate::term::term_model::TerminalModel;
@@ -23,7 +23,7 @@ use crate::transcript::{self, ReviewEntry};
 use crate::ui_text::text;
 use byteui::interaction::tab_strip::tab_window_reveal;
 use dozer_client::{Client, TermEvent};
-use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
+use dozer_core::protocol::{AgentKind, ProjectInfo, SessionInfo};
 
 dozer_core::scope!(LOG, module, "shell");
 
@@ -192,92 +192,12 @@ pub struct ReviewView {
     pub loaded_nonce: Option<u64>,
 }
 
-pub use dozer_panel_agent::tabs::{TabBackend, TabOut};
+pub use dozer_panel_agent::state::AgentPanelState;
+pub use dozer_panel_agent::tabs::{SessionTab, TabBackend, TabOut, WorkspaceGitInfo};
+use dozer_services::SessionService;
+use std::sync::Arc as StdArc;
 /// UI → SSH 泵任务的写指令(`Workspace::spawn_ssh_tab` 消费)。
 pub type SshOut = TabOut;
-
-/// 单个会话的工作区展示态,来自 bytegit 的 `Repo::head`(分支)与 `Repo::is_dirty`。
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct WorkspaceGitInfo {
-    pub branch: Option<String>,
-    pub dirty: bool,
-}
-
-/// 一个 tab 对应一个 daemon 会话。
-pub struct SessionTab {
-    pub info: SessionInfo,
-    pub model: TerminalModel,
-    pub alive: bool,
-    /// 会话内 agent 的最新状态（hook 事件驱动；初值来自
-    /// `SessionInfo.agent_state`，晚 attach 也能恢复现状）。
-    pub agent_state: AgentState,
-    /// 会话归属的 agent（P2b；初值来自 `SessionInfo.agent`，随
-    /// `AgentStateChanged` 更新）。
-    pub agent: AgentKind,
-    /// 该会话的 transcript 路径（有则终端 tab 显"审阅"入口；P1i）。
-    pub transcript_path: Option<String>,
-    /// OSC 扫描器（每 tab 独立，序列可跨 chunk）。
-    pub(crate) osc: OscScanner,
-    /// OSC 7 上报的当前目录；tab 标题优先显示其 basename。
-    pub cwd: Option<PathBuf>,
-    /// OSC 133;D 上报的最近命令退出码；非零时终端栏红字提示；
-    /// 下一条命令开始（133;C）时清除。
-    pub last_exit: Option<i32>,
-    /// 最近一次 hook 事件后从 transcript 尾部提取的模型 id(原始,未美化;
-    /// 渲染时经 `format_model_label`)。仅 `agent == AgentKind::Claude` 会
-    /// 被填充,其余 agent 恒 `None`。不叫 `model`——上面已有一个
-    /// `model: TerminalModel` 字段是终端显示缓冲区,同名会编译报错。
-    pub llm_model: Option<String>,
-    /// 同上,来自 transcript 顶层 `permissionMode`(如 `auto`/`plan`)。
-    pub permission_mode: Option<String>,
-    /// 同上,从 transcript 尾部提取的最后一句人类发言/AI 回复摘要(截到
-    /// 60 字符)。Agent 卡片"当前工作内容"的兜底数据源——优先用 Todo
-    /// 派发记录的任务标题(`todo::WorkspaceState::task_title_for_session`),
-    /// 拿不到才落到这个字段(见 `agent_card`)。
-    pub last_activity: Option<String>,
-    /// 工作区分支/脏标覆盖:仅当这个会话的 `effective_cwd()` 偏离项目根
-    /// 目录时才会被填充;为 `None` 时渲染层直接读 `ws.project_panel` 的
-    /// 项目级缓存(见 `Workspace::spawn_agent_card_refresh`)。
-    pub workspace_override: Option<WorkspaceGitInfo>,
-    /// 稳定 id，`Message::TermOutput`/`SessionExited` 用它路由，不受
-    /// tab 增删导致的 vec 位置变化影响。
-    pub(crate) tab_id: usize,
-    /// attach 数据流的转发任务句柄。`CloseTab` 时 `abort()` 掉它——
-    /// 这个任务是 `mpsc::UnboundedReceiver<TermEvent>` 的唯一持有者，
-    /// 任务被中断即意味着 receiver 被 drop（detach）。app 整体退出时
-    /// 只发生 detach（会话存活）；显式关 tab 则再补一次 kill。
-    pub(crate) forwarder: tokio::task::JoinHandle<()>,
-    /// 字节流去向(本地 PTY 还是 SSH channel;阶段 2)。
-    pub(crate) backend: TabBackend,
-}
-
-/// 会话当前有效工作目录：OSC 7 跟踪的实时 cwd 优先，回落到会话
-/// 启动目录。交付检测必须认实时 cwd——用户 `cd` 进项目仓库后，
-/// 启动目录（多为 `$HOME`）不是那个仓库（spec P1f D1）。
-pub(crate) fn effective_cwd(osc_cwd: Option<&Path>, spawn_cwd: &str) -> PathBuf {
-    match osc_cwd {
-        Some(p) => p.to_path_buf(),
-        None => PathBuf::from(spawn_cwd),
-    }
-}
-
-impl SessionTab {
-    /// 交付检测/验收装载用的当前工作目录（OSC 7 优先）。
-    pub(crate) fn effective_cwd(&self) -> PathBuf {
-        effective_cwd(self.cwd.as_deref(), &self.info.cwd)
-    }
-
-    /// 把一段会话输出送进 OSC 扫描器并落地状态（观察式，不改写字节）。
-    pub(crate) fn ingest_osc(&mut self, bytes: &[u8]) {
-        for ev in self.osc.feed(bytes) {
-            match ev {
-                OscEvent::Cwd(p) => self.cwd = Some(p),
-                OscEvent::CmdStart => self.last_exit = None,
-                OscEvent::CmdExit(code) => self.last_exit = Some(code),
-            }
-        }
-    }
-}
 
 /// 外壳侧共享句柄的一次性快照。项目态(`Workspace`)的方法要发起异步 IO
 /// 时需要 daemon 客户端 / tokio 句柄 / 事件回灌通道,但这三样东西整个程序
@@ -365,13 +285,9 @@ impl ShellIo {
 }
 
 pub struct Workspace {
-    pub(crate) tabs: Vec<SessionTab>,
-    /// 当前显示的 tab 在 `tabs` 中的位置（不是 `tab_id`）。
-    pub(crate) active: usize,
-    pub(crate) next_tab_id: usize,
-    /// 发起新建会话(create+attach)期间的转发任务句柄暂存区，
-    /// `Message::TabAttached` 到达时取出、装进新建的 `SessionTab`。
-    pub(crate) pending: HashMap<usize, tokio::task::JoinHandle<()>>,
+    /// Agent 面板自有状态(会话/页签/交互态/发件箱)。`Workspace` 通过
+    /// `Deref` 暴露其字段,让既有 `ws.tabs` / `ws.active` 等访问保持可读。
+    pub(crate) agent: AgentPanelState,
     /// SSH tab 创建期间的写指令发送端暂存区,语义同 `pending`——
     /// `on_tab_attached` 时取出,取得到就是 SSH tab(`backend = Custom(
     /// out }`),取不到就是本地 tab(`backend = Daemon`)。
@@ -458,13 +374,6 @@ pub struct Workspace {
     pub(crate) git_watch: Option<bytegit::WatchHandle>,
     /// Project 信息面板 per-project 状态——见 `extensions::project::WorkspaceState`。
     pub(crate) project_panel: project::WorkspaceState,
-    /// 终端 tab 栏当前最左可见 tab 序号（箭头翻页用；P1L T5）。溢出改 V
-    /// 下拉后该字段仍保留(仅被 `tab_window_reveal` 驱动,不再有手动翻页)。
-    pub(crate) term_tab_first: usize,
-    /// 终端 tab 栏溢出下拉的悬浮锚点：`None`=下拉关闭，`Some(x,y)`=打开且
-    /// 记录了点 V 按钮那一刻的 `App::last_cursor` 快照（逻辑坐标），同
-    /// `project_add_menu_anchor` 手法。
-    pub(crate) term_tab_overflow_anchor: Option<(f32, f32)>,
     /// 预览 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
     pub(crate) preview_tab_first: usize,
     /// Project 面板右配对预览 tab 栏当前最左可见 tab 序号,语义同
@@ -478,7 +387,6 @@ pub struct Workspace {
     pub(crate) files: files::WorkspaceState,
     /// Agent 面板"＋"按钮弹出的"新建"菜单当前是否打开。不需要坐标——面板顶部固定
     /// 位置的下拉,不像项目树右键菜单需要跟随点击坐标。
-    pub(crate) agent_picker_open: bool,
     /// 关 Agent 面板 tab 前的待确认状态:目标会话处于 Running/AwaitingInput
     /// 时,先把要关的会话存这里并弹确认框,确认后才真正 `close_tab`。存
     /// `SessionInfo.id`(稳定标识)而不是当时的下标——这个确认框迁到独立
@@ -487,7 +395,6 @@ pub struct Workspace {
     /// `Message::TermTabCloseConfirm` 落地时要按这个 id 现查当前下标,
     /// 不能直接复用打开确认框那一刻的下标,否则可能关掉“确认框标题里
     /// 写的那个会话”以外的另一个会话。
-    pub(crate) pending_close_tab: Option<String>,
     /// 消息驱动(非鼠标点击)把焦点拨离预览编辑器时置位——官方 `text_editor`
     /// 的焦点是真实 iced 焦点树的一部分,不能像 vendored `iced-code-editor`
     /// 那样直接对某个实例调 `lose_focus()`,改成一次性位,main.rs 下一帧用
@@ -527,6 +434,19 @@ pub(crate) struct TabAttachedArgs {
     pub(crate) picked_agent: Option<AgentKind>,
     /// `App::terminal_tab_bar_avail_px()` 的算好值——见其文档。
     pub(crate) term_tab_bar_avail_px: f32,
+}
+
+impl std::ops::Deref for Workspace {
+    type Target = AgentPanelState;
+    fn deref(&self) -> &Self::Target {
+        &self.agent
+    }
+}
+
+impl std::ops::DerefMut for Workspace {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.agent
+    }
 }
 
 impl Workspace {
@@ -607,10 +527,11 @@ impl Workspace {
         );
 
         let mut ws = Self {
-            tabs,
-            active: 0,
-            next_tab_id,
-            pending: HashMap::new(),
+            agent: AgentPanelState {
+                tabs,
+                next_tab_id,
+                ..AgentPanelState::new()
+            },
             project: Some(project),
             files,
             project_panel,
@@ -690,10 +611,7 @@ impl Workspace {
     /// 还没加载完"。
     pub(crate) fn empty_for_project_placeholder() -> Self {
         Self {
-            tabs: Vec::new(),
-            active: 0,
-            next_tab_id: 0,
-            pending: HashMap::new(),
+            agent: AgentPanelState::new(),
             ssh_out_pending: HashMap::new(),
             ssh_tabs: Vec::new(),
             ssh_active: None,
@@ -718,15 +636,11 @@ impl Workspace {
             project_panel: project::WorkspaceState::default(),
             recent_projects: Vec::new(),
             git_watch: None,
-            term_tab_first: 0,
-            term_tab_overflow_anchor: None,
             preview_tab_first: 0,
             preview_tab_overflow_anchor: None,
             project_preview_tab_first: 0,
             project_preview_tab_overflow_anchor: None,
             files: files::WorkspaceState::default(),
-            agent_picker_open: false,
-            pending_close_tab: None,
             pending_editor_unfocus: false,
             todo: todo::WorkspaceState::default(),
             group_chat: crate::extensions::group_chat::WorkspaceState::default(),
@@ -772,10 +686,10 @@ impl Workspace {
     }
 
     pub(crate) fn tab_by_id_mut(&mut self, tab_id: usize) -> Option<&mut SessionTab> {
-        self.tabs
-            .iter_mut()
-            .find(|t| t.tab_id == tab_id)
-            .or_else(|| self.ssh_tabs.iter_mut().find(|t| t.tab_id == tab_id))
+        if let Some(tab) = self.agent.tabs.iter_mut().find(|t| t.tab_id == tab_id) {
+            return Some(tab);
+        }
+        self.ssh_tabs.iter_mut().find(|t| t.tab_id == tab_id)
     }
 
     /// 把键盘/IME 字节直接写给当前激活 tab 对应的 daemon 会话。异步写
@@ -784,23 +698,8 @@ impl Workspace {
         let Some(tab) = self.tabs.get(self.active) else {
             return;
         };
-        if !tab.alive {
-            return;
-        }
-        match &tab.backend {
-            TabBackend::Daemon => {
-                let client = io.client.clone();
-                let id = tab.info.id.clone();
-                io.handle.spawn(async move {
-                    if let Err(e) = client.write(&id, &bytes).await {
-                        dozer_core::log_warn!(LOG, "写入终端失败: {e}");
-                    }
-                });
-            }
-            TabBackend::Custom(out) => {
-                let _ = out.send(SshOut::Data(bytes));
-            }
-        }
+        let svc: StdArc<dyn SessionService> = StdArc::new(io.client.clone());
+        dozer_panel_agent::tabs::send_to_tab(tab, &svc, &io.handle, bytes);
     }
 
     /// SSH 面板当前显示的 tab(`ssh_active` 指向的那个),可变引用。
@@ -829,17 +728,8 @@ impl Workspace {
         else {
             return;
         };
-        if !tab.alive {
-            return;
-        }
-        match &tab.backend {
-            TabBackend::Daemon => {
-                debug_assert!(false, "ssh_tabs 里不应该出现 TabBackend::Daemon");
-            }
-            TabBackend::Custom(out) => {
-                let _ = out.send(SshOut::Data(bytes));
-            }
-        }
+        let svc: StdArc<dyn SessionService> = StdArc::new(io.client.clone());
+        dozer_panel_agent::tabs::send_to_tab(tab, &svc, &io.handle, bytes);
     }
 
     /// 加载(或刷新)当前项目的会话列表(联查总结，标题+摘要预览)
@@ -1122,35 +1012,25 @@ impl Workspace {
     /// daemon 侧会话——否则 bootstrap 会把它当存活会话再恢复出来
     /// （P1e 验收反馈）。死会话（已 exited）无需再 kill。
     pub(crate) fn close_tab(&mut self, io: &ShellIo, idx: usize) {
-        if idx >= self.tabs.len() {
+        let Some(project) = self.project.clone() else {
             return;
-        }
-        let tab = self.tabs.remove(idx);
-        tab.forwarder.abort();
-        let client = io.client.clone();
-        let id = tab.info.id.clone();
-        if should_summarize_on_close(tab.agent, tab.alive, &tab.backend) {
-            let task = io.handle.spawn(async move {
-                if let Err(e) = client.close_with_summary(&id).await {
-                    dozer_core::log_warn!(LOG, "关闭 tab 时触发总结失败: {e}");
-                }
-            });
-            io.track_exit_critical(task);
-        } else if tab.alive && matches!(tab.backend, TabBackend::Daemon) {
-            let task = io.handle.spawn(async move {
-                if let Err(e) = client.kill(&id).await {
-                    dozer_core::log_warn!(LOG, "关闭 tab 时结束会话失败: {e}");
-                }
-            });
-            io.track_exit_critical(task);
-        }
-        if self.active >= self.tabs.len() {
-            self.active = self.tabs.len().saturating_sub(1);
-        } else if idx < self.active {
-            self.active -= 1;
-        }
-        // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
-        self.term_tab_first = 0;
+        };
+        let hooks: StdArc<dyn dozer_panel_agent::adapter::HookInstaller> =
+            StdArc::new(crate::host_adapters::agent_panel::DozerHooks);
+        let services = crate::host_adapters::services::services_for(&io.client);
+        let ctx = dozer_panel_agent::update::UpdateCtx {
+            project: &project,
+            svc: &services.session,
+            handle: &io.handle,
+            cols: io.cols,
+            rows: io.rows,
+            term_tab_bar_avail_px: 0.0,
+            caps: dozer_panel_agent::adapter::AgentCapabilities::all(),
+            hooks: &hooks,
+            locale: "",
+            track_exit_critical: &|task| io.track_exit_critical(task),
+        };
+        dozer_panel_agent::update::close_tab(&mut self.agent, &ctx, idx);
     }
 
     /// 关闭 SSH 面板某个 tab(镜像 `close_tab` 的中断转发任务/kill 逻辑,
@@ -1344,145 +1224,32 @@ impl Workspace {
         launch: PickerLaunch,
         follow_up: Option<String>,
     ) -> Option<usize> {
-        // 促成中的"加载中"占位不建会话:这份 `Workspace` 马上会被
-        // `Message::ProjectSlotLoaded` 整份换掉,此刻建出来的会话会连同占位
-        // 一起被丢弃,却仍在 daemon 上占着 PTY(见 `loading` 字段)。
+        // 促成中的"加载中"占位不建会话(见 `loading` 字段)。
         if self.loading {
             return None;
         }
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        // 重锚:新终端 tab 开在当前项目根。会话必须归属一个项目(daemon 侧
-        // `create` 要 project_id,P2a Task 3),而一个活着的 `Workspace` 之所以
-        // 存在于 `App.projects` 里,前提就是它已知自己归属哪个项目——这里
-        // 的 expect 失败只可能是上游逻辑错了(比如给还没促成的占位
-        // `Workspace` 发了新建会话消息),该让它响亮地 panic,而不是静默落到
-        // $HOME 建一个无归属的野会话。
-        let project = self.project.as_ref().expect("Workspace 存在即已知归属项目");
-        let cwd = project.path.clone();
+        let project = self.project.clone()?;
         let project_id = project.id;
-        let (cols, rows) = (io.cols, io.rows);
-        let tab_id = self.next_tab_id;
-        self.next_tab_id += 1;
-
-        let client = io.client.clone();
-        let proxy = io.proxy.clone();
-        let hook_agent = match launch {
-            PickerLaunch::Agent(Some(agent)) => Some(agent),
-            _ => None,
+        let hooks: StdArc<dyn dozer_panel_agent::adapter::HookInstaller> =
+            StdArc::new(crate::host_adapters::agent_panel::DozerHooks);
+        let services = crate::host_adapters::services::services_for(&io.client);
+        let ctx = dozer_panel_agent::update::UpdateCtx {
+            project: &project,
+            svc: &services.session,
+            handle: &io.handle,
+            cols: io.cols,
+            rows: io.rows,
+            term_tab_bar_avail_px: 0.0,
+            caps: dozer_panel_agent::adapter::AgentCapabilities::all(),
+            hooks: &hooks,
+            locale: "",
+            track_exit_critical: &|task| io.track_exit_critical(task),
         };
-
-        let jh = io.handle.spawn(async move {
-            if let Some(agent) = hook_agent {
-                let _ = tokio::task::spawn_blocking(move || ensure_hook_installed(agent)).await;
-                let _ = tokio::task::spawn_blocking(move || ensure_mcp_installed(agent)).await;
-            }
-            let info = match client
-                .create_for_agent(
-                    "shell",
-                    &shell,
-                    &[],
-                    &cwd,
-                    cols,
-                    rows,
-                    project_id,
-                    hook_agent.unwrap_or(AgentKind::Unknown),
-                )
-                .await
-            {
-                Ok(info) => info,
-                Err(e) => {
-                    // 一次性事件(不是"daemon 不可用"这个持久状态):走 Toast。
-                    let _ =
-                        proxy.send_event(Message::Toast(crate::extensions::toast::Message::Push {
-                            scope: LOG,
-                            level: crate::extensions::toast::Level::Error,
-                            text: dozer_model::LocalizedText::keyed(
-                                crate::i18n::HOST_OWNER,
-                                "error.new_session_failed",
-                                "Could not create a new session: {error}",
-                            )
-                            .with_arg("error", e.to_string()),
-                            key: Some("new-session-failed".to_string()),
-                        }));
-                    return;
-                }
-            };
-            match client.attach(&info.id, 0).await {
-                Ok((snapshot, _next_offset, rx)) => {
-                    let session_id = info.id.clone();
-                    if proxy
-                        .send_event(Message::TabAttached(
-                            project_id, tab_id, info, snapshot, hook_agent,
-                        ))
-                        .is_err()
-                    {
-                        return;
-                    }
-                    let hook_exe = dozer_hook_binary_path(
-                        &std::env::current_exe()
-                            .unwrap_or_else(|_| std::path::PathBuf::from("dozer")),
-                    )
-                    .to_string_lossy()
-                    .into_owned();
-                    if let Some(cmd) = picker_launch_command(launch, &hook_exe) {
-                        let bytes = format!("{cmd}\n").into_bytes();
-                        if let Err(e) = client.write(&session_id, &bytes).await {
-                            // 一次性的启动写(不是逐击键路径),失败用户会看到 agent 没起来
-                            // 却不知道为什么;`Message::Toast` 分支会写日志(scope=shell)。
-                            let _ = proxy.send_event(Message::Toast(
-                                crate::extensions::toast::Message::Push {
-                                    scope: LOG,
-                                    level: crate::extensions::toast::Level::Error,
-text: dozer_model::LocalizedText::keyed(
-                                crate::i18n::HOST_OWNER,
-                                "error.term_initial_write_failed",
-                                "Could not write the launch command to the terminal: {error}",
-                            )
-                            .with_arg("error", e.to_string()),
-                                    key: Some("term-initial-write".to_string()),
-                                },
-                            ));
-                        }
-                    }
-                    if let Some(text) = follow_up {
-                        let bytes = format!("{text}\n").into_bytes();
-                        if let Err(e) = client.write(&session_id, &bytes).await {
-                            let _ = proxy.send_event(Message::Toast(
-                                crate::extensions::toast::Message::Push {
-                                    scope: LOG,
-                                    level: crate::extensions::toast::Level::Error,
-                                    text: dozer_model::LocalizedText::keyed(
-                                        crate::i18n::HOST_OWNER,
-                                        "error.term_dispatch_write_failed",
-                                        "Could not write the task text to the terminal: {error}",
-                                    )
-                                    .with_arg("error", e.to_string()),
-                                    key: Some("term-dispatch-write".to_string()),
-                                },
-                            ));
-                        }
-                    }
-                    forward_events(project_id, tab_id, rx, proxy).await;
-                }
-                Err(e) => {
-                    let _ =
-                        proxy.send_event(Message::Toast(crate::extensions::toast::Message::Push {
-                            scope: LOG,
-                            level: crate::extensions::toast::Level::Error,
-                            text: dozer_model::LocalizedText::keyed(
-                                crate::i18n::HOST_OWNER,
-                                "error.attach_session_failed",
-                                "Could not attach the new session: {error}",
-                            )
-                            .with_arg("error", e.to_string()),
-                            key: Some("attach-session-failed".to_string()),
-                        }));
-                }
-            }
-        });
-
-        self.pending.insert(tab_id, jh);
-        Some(tab_id)
+        let proxy = io.proxy.clone();
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::Agent(project_id, m));
+        };
+        dozer_panel_agent::update::spawn_new_tab(&mut self.agent, &ctx, emit, launch, follow_up)
     }
 
     /// SSH 版 `spawn_new_tab`:握手 + host key 校验 + 认证 + 开 channel +
@@ -1907,24 +1674,8 @@ text: dozer_model::LocalizedText::keyed(
         cols: u16,
         rows: u16,
     ) {
-        tab.model.resize(cols, rows);
-        if !tab.alive {
-            return;
-        }
-        match &tab.backend {
-            TabBackend::Daemon => {
-                let client = client.clone();
-                let id = tab.info.id.clone();
-                handle.spawn(async move {
-                    if let Err(e) = client.resize(&id, cols, rows).await {
-                        dozer_core::log_warn!(LOG, "同步终端尺寸到 daemon 失败: {e}");
-                    }
-                });
-            }
-            TabBackend::Custom(out) => {
-                let _ = out.send(SshOut::Resize { cols, rows });
-            }
-        }
+        let svc: StdArc<dyn SessionService> = StdArc::new(client.clone());
+        dozer_panel_agent::tabs::resize_tab(tab, &svc, handle, cols, rows);
     }
 
     /// 浏览器地址栏是否持有 iced 真实焦点(main.rs 据此路由键盘:真 →

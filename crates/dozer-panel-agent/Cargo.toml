@@ -12,4 +12,6 @@ dozer-model = { path = "../dozer-model" }
 dozer-services = { path = "../dozer-services" }
 dozer-panel-host = { path = "../dozer-panel-host" }
 dozer-panel-term = { path = "../dozer-panel-term" }
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.5" }
 tokio.workspace = true
+tracing.workspace = true

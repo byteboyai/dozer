@@ -23,6 +23,8 @@ pub enum Message {
     /// 当前激活 tab 对应的 daemon 会话（`client.write`）——不再本地
     /// echo，回显完全走 PTY 真实回路（daemon → attach 流 → `TermOutput`）。
     TermInput(terminal::TermTarget, Vec<u8>),
+    /// Agent 面板库的异步回灌消息(attach/失败等),按项目路由。
+    Agent(ProjectId, dozer_panel_agent::update::Message),
     /// IME 组字预览(未提交):`None` 表示组字结束/取消,清空预览。不发字节
     /// 给 PTY——只是渲染层叠加,`term_view` 画在光标位置(见其 `draw`)。
     TermImePreedit(terminal::TermTarget, Option<String>),

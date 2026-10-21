@@ -6,6 +6,7 @@ use crate::term::term_model::TerminalModel;
 use crate::transcript::ReviewEntry;
 use byteui::interaction::icons::IconKind;
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
+use dozer_panel_agent::tabs::effective_cwd;
 use std::path::{Path, PathBuf};
 
 #[test]

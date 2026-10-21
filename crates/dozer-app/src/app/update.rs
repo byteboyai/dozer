@@ -362,6 +362,9 @@ impl App {
                     }
                 });
             }
+            Message::Agent(project_id, msg) => {
+                self.agent_panel_message(project_id, msg);
+            }
             Message::TermInput(target, bytes) => self.term_input(target, bytes),
             Message::TermImePreedit(target, text) => {
                 if target == self.keyboard_term_target() {
@@ -1148,7 +1151,10 @@ impl App {
             Message::TermScroll(target, delta) => {
                 self.with_focused_project(|ws, _io| {
                     let tab = match target {
-                        terminal::TermTarget::Shared => ws.tabs.get_mut(ws.active),
+                        terminal::TermTarget::Shared => {
+                            let active = ws.active;
+                            ws.tabs.get_mut(active)
+                        }
                         terminal::TermTarget::SshPanel => ws.ssh_active_tab_mut(),
                     };
                     if let Some(tab) = tab {
@@ -1207,7 +1213,10 @@ impl App {
             } => {
                 self.with_focused_project(|ws, _io| {
                     let tab = match target {
-                        terminal::TermTarget::Shared => ws.tabs.get_mut(ws.active),
+                        terminal::TermTarget::Shared => {
+                            let active = ws.active;
+                            ws.tabs.get_mut(active)
+                        }
                         terminal::TermTarget::SshPanel => ws.ssh_active_tab_mut(),
                     };
                     if let Some(tab) = tab {
@@ -1223,7 +1232,10 @@ impl App {
             } => {
                 self.with_focused_project(|ws, _io| {
                     let tab = match target {
-                        terminal::TermTarget::Shared => ws.tabs.get_mut(ws.active),
+                        terminal::TermTarget::Shared => {
+                            let active = ws.active;
+                            ws.tabs.get_mut(active)
+                        }
                         terminal::TermTarget::SshPanel => ws.ssh_active_tab_mut(),
                     };
                     if let Some(tab) = tab {
@@ -3568,7 +3580,8 @@ impl App {
                 terminal::TermTarget::Shared => {
                     // 键入即回底 + 清选区：正在回看历史时一敲键盘，视口跳回
                     // 实时输出（常规终端语义），再把字节写给 daemon。
-                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                    let active = ws.active;
+                    if let Some(tab) = ws.tabs.get_mut(active) {
                         tab.model.scroll_to_bottom();
                         tab.model.selection_clear();
                     }
@@ -3645,7 +3658,8 @@ impl App {
             };
             match target {
                 terminal::TermTarget::Shared => {
-                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                    let active = ws.active;
+                    if let Some(tab) = ws.tabs.get_mut(active) {
                         tab.model.scroll_to_bottom();
                     }
                 }
@@ -4548,6 +4562,92 @@ impl App {
             return;
         };
         self.project_preview_open_path(readme);
+    }
+
+    /// 处理 `dozer-panel-agent` 的异步回灌消息:输出/attach/失败走库
+    /// `update`;agent 状态与退出沿用 Dozer 既有的跨面板联动。
+    fn agent_panel_message(
+        &mut self,
+        project_id: ProjectId,
+        msg: dozer_panel_agent::update::Message,
+    ) {
+        use dozer_panel_agent::update::Message as AgentMsg;
+        match msg {
+            AgentMsg::AgentState {
+                tab_id,
+                agent,
+                state,
+                transcript_path,
+            } => self.agent_state_changed(project_id, tab_id, agent, state, transcript_path),
+            AgentMsg::Exited { tab_id } => {
+                self.with_project(project_id, |ws, _io| {
+                    if let Some(tab) = ws.tab_by_id_mut(tab_id) {
+                        tab.alive = false;
+                        let _ = tab.model.feed(&exited_marker());
+                    }
+                });
+            }
+            other => {
+                let avail_px = self.terminal_tab_bar_avail_px();
+                let mut notices = Vec::new();
+                let mut requests = Vec::new();
+                let mut host_events = Vec::new();
+                self.with_project(project_id, |ws, io| {
+                    let Some(project) = ws.project.clone() else {
+                        return;
+                    };
+                    let hooks: std::sync::Arc<dyn dozer_panel_agent::adapter::HookInstaller> =
+                        std::sync::Arc::new(crate::host_adapters::agent_panel::DozerHooks);
+                    let services = crate::host_adapters::services::services_for(&io.client);
+                    let ctx = dozer_panel_agent::update::UpdateCtx {
+                        project: &project,
+                        svc: &services.session,
+                        handle: &io.handle,
+                        cols: io.cols,
+                        rows: io.rows,
+                        term_tab_bar_avail_px: avail_px,
+                        caps: dozer_panel_agent::adapter::AgentCapabilities::all(),
+                        hooks: &hooks,
+                        locale: "en",
+                        track_exit_critical: &|task| io.track_exit_critical(task),
+                    };
+                    let proxy = io.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Agent(project_id, m));
+                    };
+                    dozer_panel_agent::update::update(&mut ws.agent, other, &ctx, emit);
+                    notices = ws.agent.take_outbox();
+                    requests = ws.agent.take_requests();
+                    host_events = ws.agent.take_host_events();
+                });
+                for n in notices {
+                    let level = match n.level {
+                        dozer_panel_host::NoticeLevel::Info => toast::Level::Info,
+                        dozer_panel_host::NoticeLevel::Success => toast::Level::Success,
+                        dozer_panel_host::NoticeLevel::Warning => toast::Level::Warning,
+                        dozer_panel_host::NoticeLevel::Error => toast::Level::Error,
+                    };
+                    match n.key {
+                        Some(key) => self.push_toast_keyed(LOG, level, n.text, &key),
+                        None => self.push_toast(LOG, level, n.text),
+                    }
+                }
+                if !requests.is_empty() {
+                    let _ = self.proxy.send_event(Message::AgentPickerToggle);
+                }
+                for ev in host_events {
+                    if let dozer_panel_agent::adapter::AgentHostEvent::StateChanged {
+                        tab_id,
+                        agent,
+                        state,
+                        transcript_path,
+                    } = ev
+                    {
+                        self.agent_state_changed(project_id, tab_id, agent, state, transcript_path);
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) fn agent_state_changed(
