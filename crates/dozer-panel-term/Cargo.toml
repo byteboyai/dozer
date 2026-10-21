@@ -1,0 +1,19 @@
+[package]
+name = "dozer-panel-term"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# 共享终端控件库(S6b):Dozer 与 Digger 共用的终端模型(VTE/网格)与 iced
+# 自绘视图。不含 PTY(PTY 在守护进程里)。依赖闭包刻意**不含** dozer-app /
+# dozer-client / dozer-core / dozerd / wry / portable-pty。
+[dependencies]
+alacritty_terminal.workspace = true
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.5" }
+unicode-width = "0.2"
+iced_widget = { version = "0.14", features = ["canvas"] }
+iced_renderer = "0.14"
+
+[dev-dependencies]
+# 只在测试构建里启用:默认 `iced_renderer` feature 下 `Renderer` 走 null 文本后端。
+iced_widget = { version = "0.14", features = ["wgpu", "canvas"] }

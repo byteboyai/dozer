@@ -1995,6 +1995,7 @@ dependencies = [
  "dozer-panel-host",
  "dozer-panel-preview",
  "dozer-panel-project",
+ "dozer-panel-term",
  "dozer-panel-todo",
  "dozer-panel-usage",
  "dozer-preview-core",
@@ -2210,6 +2211,17 @@ dependencies = [
  "tokio",
  "tracing",
  "trash",
+]
+
+[[package]]
+name = "dozer-panel-term"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "byteui",
+ "iced_renderer",
+ "iced_widget",
+ "unicode-width",
 ]
 
 [[package]]
