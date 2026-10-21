@@ -889,22 +889,26 @@ mod tests {
         "\x1b[104mc\x1b[105md\x1b[106me\x1b[107mf",
     ];
 
+    type GoldenChunks = Vec<Vec<u8>>;
+    /// `(名字, cols, rows, 喂入字节块, 可选 scroll_display 增量)`。
+    type GoldenScenario = (&'static str, u16, u16, GoldenChunks, Option<i32>);
+
     /// 覆盖面(Review Focus 1、2):SGR 前景/背景/反相/粗体/下划线、256 色与
     /// 真彩色、光标移动、清屏、备用屏、滚动区域、制表符、反相空格假光标、
     /// CJK、emoji、组合附加符、行尾折行处的双宽字符。每段 `(名字, cols,
     /// rows, 喂入字节块, 可选 scroll_display 增量)`。
-    fn golden_corpus() -> Vec<(&'static str, u16, u16, Vec<Vec<u8>>, Option<i32>)> {
-        let mut out: Vec<(&'static str, u16, u16, Vec<Vec<u8>>, Option<i32>)> = vec![
+    fn golden_corpus() -> Vec<GoldenScenario> {
+        let mut out: Vec<GoldenScenario> = vec![
             ("empty", 10, 3, vec![], None),
             ("plain_text", 40, 6, vec![b"hello dozer".to_vec()], None),
+            ("line_wrap", 10, 4, vec![b"0123456789ABCDEF".to_vec()], None),
             (
-                "line_wrap",
+                "newline_cr",
                 10,
-                4,
-                vec![b"0123456789ABCDEF".to_vec()],
+                5,
+                vec![b"one\r\ntwo\r\nthree".to_vec()],
                 None,
             ),
-            ("newline_cr", 10, 5, vec![b"one\r\ntwo\r\nthree".to_vec()], None),
             ("cr_overwrite", 20, 4, vec![b"hello\rbye".to_vec()], None),
             ("backspace", 20, 4, vec![b"abc\x08\x08X".to_vec()], None),
             ("tabs", 30, 4, vec![b"a\tb\tc\td".to_vec()], None),
@@ -915,7 +919,13 @@ mod tests {
                 vec![b"a\tb\x1b[3g\x1b[5Gc\td".to_vec()],
                 None,
             ),
-            ("clear_screen", 20, 5, vec![b"abc\x1b[2J\x1b[Hxyz".to_vec()], None),
+            (
+                "clear_screen",
+                20,
+                5,
+                vec![b"abc\x1b[2J\x1b[Hxyz".to_vec()],
+                None,
+            ),
             (
                 "erase_line",
                 20,
@@ -1028,13 +1038,7 @@ mod tests {
                 vec![b"\x1b[38;5;196mR\x1b[38;5;46mG\x1b[48;5;21mB\x1b[0m".to_vec()],
                 None,
             ),
-            (
-                "cjk",
-                40,
-                6,
-                vec!["你好世界".as_bytes().to_vec()],
-                None,
-            ),
+            ("cjk", 40, 6, vec!["你好世界".as_bytes().to_vec()], None),
             (
                 "cjk_wraps_at_edge",
                 6,
@@ -1057,13 +1061,7 @@ mod tests {
                 None,
             ),
             ("emoji", 40, 6, vec!["😀🎉🚀".as_bytes().to_vec()], None),
-            (
-                "emoji_zwj",
-                40,
-                6,
-                vec!["👨‍👩‍👧".as_bytes().to_vec()],
-                None,
-            ),
+            ("emoji_zwj", 40, 6, vec!["👨‍👩‍👧".as_bytes().to_vec()], None),
             (
                 "combining_marks",
                 40,
@@ -1113,13 +1111,7 @@ mod tests {
                 vec![b"\x1b[?25lhi".to_vec()],
                 None,
             ),
-            (
-                "app_cursor_mode",
-                20,
-                4,
-                vec![b"\x1b[?1hhi".to_vec()],
-                None,
-            ),
+            ("app_cursor_mode", 20, 4, vec![b"\x1b[?1hhi".to_vec()], None),
             (
                 "bracketed_paste",
                 20,
@@ -1436,4 +1428,3 @@ mod tests {
         let _ = t.visible_lines();
     }
 }
-
