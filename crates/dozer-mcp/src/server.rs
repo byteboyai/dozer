@@ -2,19 +2,26 @@
 //! 现连 `dozerd`(daemon 可能重启,本进程是长驻的,不维护长连接;见设计
 //! 文档"session → project 解析"一节)。
 
+use crate::features::McpFeatures;
 use dozer_client::Client;
 use dozer_core::protocol::{
     PreviewCommand, PreviewCommandAction, PreviewCommandTarget, PreviewContext,
 };
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
-use rmcp::{ErrorData as McpError, ServiceExt, tool, tool_router, transport::stdio};
+use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::ServerHandler;
+use rmcp::{ErrorData as McpError, ServiceExt, tool, tool_handler, tool_router, transport::stdio};
 use serde_json::json;
 
 #[derive(Clone)]
 pub struct DozerMcpServer {
     client: Client,
-    session_id: String,
+    session_id: Option<String>,
+    #[allow(dead_code)]
+    features: McpFeatures,
+    tool_router: ToolRouter<Self>,
+    server_name: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -98,10 +105,53 @@ pub struct PreviewNavigateParams {
     pub end_column: Option<u32>,
 }
 
-#[tool_router(server_handler, vis = "pub")]
+#[tool_router(vis = "pub")]
 impl DozerMcpServer {
+    /// 兼容旧调用点:全部工具、默认服务器名(`rmcp`,与抽库前 initialize
+    /// 应答逐字一致)。
     pub fn new(client: Client, session_id: String) -> Self {
-        Self { client, session_id }
+        Self::with_options(client, Some(session_id), McpFeatures::all(), "rmcp".into())
+    }
+
+    /// 按特性裁剪路由;`server_name` 只影响 `initialize` 的 serverInfo.name。
+    pub fn with_options(
+        client: Client,
+        session_id: Option<String>,
+        features: McpFeatures,
+        server_name: String,
+    ) -> Self {
+        let mut tool_router = Self::tool_router();
+        let enabled: std::collections::HashSet<&str> =
+            features.tool_names().into_iter().collect();
+        for tool in Self::tool_router().list_all() {
+            if !enabled.contains(tool.name.as_ref()) {
+                tool_router.remove_route(tool.name.as_ref());
+            }
+        }
+        Self {
+            client,
+            session_id,
+            features,
+            tool_router,
+            server_name,
+        }
+    }
+
+    /// 测试/进程内查询:给定特性下是否注册了某个工具。
+    pub fn has_tool(features: McpFeatures, name: &str) -> bool {
+        let server = Self::with_options(
+            Client::new(std::path::PathBuf::from("/nonexistent/dozerd.sock")),
+            None,
+            features,
+            "rmcp".into(),
+        );
+        server.tool_router.get(name).is_some()
+    }
+
+    fn session_id(&self) -> Result<&str, McpError> {
+        self.session_id.as_deref().ok_or_else(|| {
+            McpError::internal_error("当前会话没有 session id(安静模式不应调用工具)", None)
+        })
     }
 
     #[tool(
@@ -221,8 +271,9 @@ impl DozerMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let title = truncate_chars(title, SUMMARY_TITLE_MAX_CHARS);
         let summary = truncate_chars(summary, SUMMARY_TEXT_MAX_CHARS);
+        let session_id = self.session_id()?;
         self.client
-            .record_session_summary(&self.session_id, &title, &summary)
+            .record_session_summary(session_id, &title, &summary)
             .await
             .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
         Ok(CallToolResult::structured(json!({ "recorded": true })))
@@ -481,7 +532,7 @@ impl DozerMcpServer {
                 &new_text,
                 &summary,
                 agent.label(),
-                &self.session_id,
+                self.session_id()?,
             )
             .await
             .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
@@ -517,10 +568,27 @@ impl DozerMcpServer {
     }
 }
 
+#[tool_handler(router = self.tool_router)]
+impl ServerHandler for DozerMcpServer {
+    fn get_info(&self) -> rmcp::model::ServerConfig {
+        let mut info = rmcp::model::ServerConfig::new(
+            rmcp::model::ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+        );
+        info.server_info.name = self.server_name.clone();
+        info
+    }
+}
+
 impl DozerMcpServer {
     /// 会话/项目解析 + 查询预览上下文的裸逻辑,不依赖任何 MCP 类型,供
     /// `#[tool]` 方法体和测试共用,避免同一段逻辑写两份。
     async fn fetch_context(&self) -> anyhow::Result<Option<PreviewContext>> {
+        let session_id = self
+            .session_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("当前会话没有 session id"))?;
         let sessions = self
             .client
             .list()
@@ -528,7 +596,7 @@ impl DozerMcpServer {
             .map_err(|e| anyhow::anyhow!("连接 dozerd 失败: {e}"))?;
         let session = sessions
             .iter()
-            .find(|s| s.id == self.session_id)
+            .find(|s| s.id == session_id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在于 dozerd"))?;
         let project_id = session
             .project_id
@@ -545,6 +613,10 @@ impl DozerMcpServer {
     async fn resolve_project_and_agent(
         &self,
     ) -> anyhow::Result<(i64, dozer_core::protocol::AgentKind)> {
+        let session_id = self
+            .session_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("当前会话没有 session id"))?;
         let sessions = self
             .client
             .list()
@@ -552,7 +624,7 @@ impl DozerMcpServer {
             .map_err(|e| anyhow::anyhow!("连接 dozerd 失败: {e}"))?;
         let session = sessions
             .iter()
-            .find(|s| s.id == self.session_id)
+            .find(|s| s.id == session_id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在于 dozerd"))?;
         let project_id = session
             .project_id
@@ -569,13 +641,85 @@ impl DozerMcpServer {
     }
 }
 
-pub async fn run() -> anyhow::Result<()> {
-    let session_id = std::env::var(dozer_core::paths::session_env()).map_err(|_| {
-        anyhow::anyhow!("缺少 DOZER_SESSION_ID：dozer-mcp 只能在 dozer 拉起的会话里跑")
-    })?;
-    let client = Client::new(dozer_core::paths::socket_path());
-    let server = DozerMcpServer::new(client, session_id);
+/// 按产品运行 `serve`。`session_id` 缺失且存在别的已知产品的会话变量时
+/// 进入安静模式:零工具、不写 stderr、不连接守护进程。
+pub async fn run_for(
+    product: &dozer_core::paths::ProductId,
+    features: McpFeatures,
+) -> anyhow::Result<()> {
+    let own = std::env::var(product.session_env)
+        .ok()
+        .filter(|v| !v.is_empty());
+    let (session_id, features) = match own {
+        Some(id) => (Some(id), features),
+        None => {
+            let other = dozer_core::paths::other_known_session_env_present(
+                product.session_env,
+                &|name| std::env::var(name).ok(),
+            );
+            if other {
+                (None, McpFeatures::none())
+            } else {
+                return Err(anyhow::anyhow!(missing_session_message(product)));
+            }
+        }
+    };
+    let server_name = if product.name == "dozer" {
+        // 与抽库前的 `initialize` 应答逐字一致。
+        "rmcp".to_string()
+    } else {
+        product.mcp_bin()
+    };
+    let client = Client::new(product.socket_path());
+    let server = DozerMcpServer::with_options(client, session_id, features, server_name);
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+/// 缺会话变量时的报错文案(默认产品逐字保留旧文案)。
+pub fn missing_session_message(product: &dozer_core::paths::ProductId) -> String {
+    format!(
+        "缺少 {}：{} 只能在 {} 拉起的会话里跑",
+        product.session_env,
+        product.mcp_bin(),
+        product.name
+    )
+}
+
+/// 产品入口:子命令与产品/特性注入(替代写死的 `main`)。
+pub fn run_main(product: dozer_core::paths::ProductId, features: McpFeatures) -> ! {
+    if let Err(e) = dozer_core::paths::install(product.clone()) {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
+    let arg1 = std::env::args().nth(1);
+    match arg1.as_deref() {
+        Some("serve") => {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio runtime");
+            if let Err(e) = rt.block_on(run_for(&product, features)) {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+            std::process::exit(0);
+        }
+        Some("install") => {
+            let agent = std::env::args().nth(2).unwrap_or_else(|| "claude".into());
+            std::process::exit(crate::install::run_for(&product, &agent, true));
+        }
+        Some("uninstall") => {
+            let agent = std::env::args().nth(2).unwrap_or_else(|| "claude".into());
+            std::process::exit(crate::install::run_for(&product, &agent, false));
+        }
+        _ => {
+            eprintln!(
+                "用法: {} <serve|install|uninstall> [agent]",
+                product.mcp_bin()
+            );
+            std::process::exit(2);
+        }
+    }
 }

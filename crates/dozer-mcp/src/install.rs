@@ -240,6 +240,12 @@ pub fn config_path_for(agent: &str) -> Option<ConfigTarget> {
     }
 }
 
+/// 按产品运行安装/卸载(S6e-1;条目名 = 产品名)。
+pub fn run_for(product: &dozer_core::paths::ProductId, agent: &str, install: bool) -> i32 {
+    let _ = product;
+    run(agent, install)
+}
+
 pub fn run(agent: &str, install: bool) -> i32 {
     run_at_with_exe_impl(agent, install, &exe_path())
 }
