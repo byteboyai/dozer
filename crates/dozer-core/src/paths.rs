@@ -111,6 +111,33 @@ impl ProductId {
     pub fn db_path(&self) -> PathBuf {
         self.state_dir().join(self.db_file)
     }
+
+    /// 该产品的 MCP 二进制名(`dozer-mcp` / `digger-mcp`)。
+    pub fn mcp_bin(&self) -> String {
+        format!("{}-mcp", self.name)
+    }
+
+    /// 该产品用于配置/环境变量覆盖的前缀(`DOZER` / `DIGGER`)。
+    pub fn env_prefix(&self) -> String {
+        self.name.to_uppercase()
+    }
+}
+
+/// 已知产品的会话环境变量名(只含名字,不带值)。安静模式据此判断
+/// "别的产品的会话变量在、自己的不在"。新增第三个产品时须同步这里;
+/// 测试会核对两个产品的 `session_env` 都在列表中。
+pub const KNOWN_SESSION_ENVS: &[&str] = &["DOZER_SESSION_ID", "DIGGER_SESSION_ID"];
+
+/// 是否存在**别的**已知产品的会话变量,且值非空。`own` 是当前产品的
+/// 会话变量名(不参与判断)。
+pub fn other_known_session_env_present(
+    own: &str,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> bool {
+    KNOWN_SESSION_ENVS
+        .iter()
+        .filter(|name| **name != own)
+        .any(|name| env(name).is_some_and(|v| !v.is_empty()))
 }
 
 fn dirs_from(
@@ -278,5 +305,46 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn mcp_bin_and_env_prefix_are_derived_from_the_name() {
+        assert_eq!(ProductId::dozer().mcp_bin(), "dozer-mcp");
+        assert_eq!(ProductId::dozer().env_prefix(), "DOZER");
+        let tmp = std::env::temp_dir();
+        let digger = digger_at(&tmp);
+        assert_eq!(digger.mcp_bin(), "digger-mcp");
+        assert_eq!(digger.env_prefix(), "DIGGER");
+    }
+
+    #[test]
+    fn other_known_session_env_present_ignores_the_own_variable_and_empty_values() {
+        let env = |name: &str| -> Option<String> {
+            match name {
+                "DOZER_SESSION_ID" => Some("dozer-session".into()),
+                "DIGGER_SESSION_ID" => Some("digger-session".into()),
+                _ => None,
+            }
+        };
+        assert!(other_known_session_env_present("DOZER_SESSION_ID", &env));
+        assert!(other_known_session_env_present("DIGGER_SESSION_ID", &env));
+
+        let empty = |name: &str| -> Option<String> {
+            (name == "DIGGER_SESSION_ID").then(String::new)
+        };
+        assert!(!other_known_session_env_present("DOZER_SESSION_ID", &empty));
+
+        let none = |_name: &str| -> Option<String> { None };
+        assert!(!other_known_session_env_present("DOZER_SESSION_ID", &none));
+    }
+
+    #[test]
+    fn known_session_envs_cover_both_products_default_session_env_names() {
+        let tmp = std::env::temp_dir();
+        let digger = digger_at(&tmp);
+        assert!(KNOWN_SESSION_ENVS.contains(&ProductId::dozer().session_env));
+        assert!(KNOWN_SESSION_ENVS.contains(&digger.session_env));
+        // 名单里不应有重复。
+        let unique: std::collections::HashSet<_> = KNOWN_SESSION_ENVS.iter().collect();
+        assert_eq!(unique.len(), KNOWN_SESSION_ENVS.len());
     }
 }
