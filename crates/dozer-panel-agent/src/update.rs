@@ -72,10 +72,6 @@ pub enum Message {
         snapshot: Vec<u8>,
         picked_agent: Option<AgentKind>,
     },
-    TabDragMove {
-        index: usize,
-    },
-    TabDragEnd,
     OverflowToggle {
         at: Option<(f32, f32)>,
     },
@@ -312,8 +308,6 @@ pub fn update(
             state.term_tab_first = reveal_tab(state, state.active, ctx.term_tab_bar_avail_px);
             state.term_tab_overflow_anchor = None;
         }
-        Message::TabDragMove { index } => reorder_term_tab(state, index),
-        Message::TabDragEnd => {}
         Message::OverflowToggle { at } => {
             state.term_tab_overflow_anchor = if state.term_tab_overflow_anchor.is_some() {
                 None
@@ -395,19 +389,6 @@ pub fn close_tab(state: &mut AgentPanelState, ctx: &UpdateCtx<'_>, idx: usize) {
         state.active -= 1;
     }
     state.term_tab_first = 0;
-}
-
-fn reorder_term_tab(state: &mut AgentPanelState, to: usize) {
-    // 来源下标由产品在拖拽状态机里维护;库里只做换位,来源不在这里。
-    let from = state.active;
-    if from == to || from >= state.tabs.len() || to >= state.tabs.len() {
-        return;
-    }
-    let tab = state.tabs.remove(from);
-    state.tabs.insert(to, tab);
-    if state.active == from {
-        state.active = to;
-    }
 }
 
 pub fn ensure_project_terminal(

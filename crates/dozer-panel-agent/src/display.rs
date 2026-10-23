@@ -79,7 +79,7 @@ pub trait PanelDisplay<'a, M: Clone + 'a> {
         on_close: fn(usize) -> Message,
         on_dismiss: Message,
     ) -> El<'a, M>;
-    fn drag_surface(&self, content: El<'a, M>, index: usize, on_move: M) -> El<'a, M>;
+    fn drag_surface(&self, content: El<'a, M>, index: usize) -> El<'a, M>;
 
     fn term_style(&self) -> &'a TermStyle;
     fn terminal_focused(&self) -> bool;

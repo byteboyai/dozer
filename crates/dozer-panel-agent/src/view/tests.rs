@@ -102,12 +102,7 @@ impl<'a> PanelDisplay<'a, Message> for FakeDisplay {
     ) -> El<'a, Message> {
         text(format!("menu:{}", entries.len())).into()
     }
-    fn drag_surface(
-        &self,
-        content: El<'a, Message>,
-        _index: usize,
-        _on_move: Message,
-    ) -> El<'a, Message> {
+    fn drag_surface(&self, content: El<'a, Message>, _index: usize) -> El<'a, Message> {
         content
     }
     fn term_style(&self) -> &'a TermStyle {

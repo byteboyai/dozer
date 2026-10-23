@@ -98,7 +98,7 @@ fn tab_bar<'a, M: Clone + 'static>(
                 on_select: host.wrap(Message::SelectTab(idx)),
                 on_close: host.wrap(Message::CloseTab(idx)),
             });
-            host.drag_surface(content, idx, host.wrap(Message::TabDragMove { index: idx }))
+            host.drag_surface(content, idx)
         })
         .collect();
 

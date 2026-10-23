@@ -181,14 +181,9 @@ impl<'a> PanelDisplay<'a, Message> for DozerDisplay<'a> {
             },
         })
     }
-    fn drag_surface(
-        &self,
-        content: El<'a, Message>,
-        index: usize,
-        _on_move: Message,
-    ) -> El<'a, Message> {
-        // 不用库给的 `TabDragMove`(它无条件换位):换位必须经 App 的拖拽状态机
-        // (按下武装 + 位移阈值 + 组校验),否则光标划过页签就会触发拖动。
+    fn drag_surface(&self, content: El<'a, Message>, index: usize) -> El<'a, Message> {
+        // 换位必须经 App 的拖拽状态机(按下武装 + 位移阈值 + 组校验),
+        // 否则光标划过页签就会触发拖动。
         crate::term::terminal::tab_drag_surface(
             content,
             TabGroup::Terminal,
