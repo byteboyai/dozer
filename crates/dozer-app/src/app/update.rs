@@ -4473,6 +4473,11 @@ impl App {
         msg: dozer_panel_agent::update::Message,
     ) {
         let avail_px = self.terminal_tab_bar_avail_px();
+        // 按下页签栏里的页签＝选中＋准备被拖走;卡片列表用 `SelectTabNoDrag`,不武装。
+        let pressed_tab = match &msg {
+            dozer_panel_agent::update::Message::SelectTab(idx) => Some(*idx),
+            _ => None,
+        };
         let mut notices = Vec::new();
         let mut requests = Vec::new();
         let mut host_events = Vec::new();
@@ -4503,6 +4508,17 @@ impl App {
             requests = ws.agent.take_requests();
             host_events = ws.agent.take_host_events();
         });
+        if let Some(idx) = pressed_tab
+            && self
+                .active_workspace()
+                .is_some_and(|ws| idx < ws.tabs.len())
+        {
+            self.tab_drag = Some(TabDrag {
+                group: TabGroup::Terminal,
+                source: idx,
+                press_pos: self.last_cursor,
+            });
+        }
         for n in notices {
             let level = match n.level {
                 dozer_panel_host::NoticeLevel::Info => toast::Level::Info,
