@@ -356,6 +356,32 @@ fn reveal_tab(state: &AgentPanelState, target: usize, avail_px: f32) -> usize {
     )
 }
 
+/// 把页签 `from` 挪到 `to`,并让 `active` 仍指向同一个会话。越界或 `from == to`
+/// 返回 `false`、不改任何东西。
+///
+/// 这是纯换位,不含拖拽手势:什么时候算"在拖"(按下武装、位移阈值、组校验)
+/// 是产品的拖拽状态机的事——库曾带过一个"消息一到就换位"的版本,会让光标划过
+/// 页签就触发换位(2026-08-17 的真实 bug),已删除;换位入口只留这个显式的
+/// `from`/`to` 版本,来源下标由调用方维护,不再借用 `active`。
+pub fn reorder_term_tab(state: &mut AgentPanelState, from: usize, to: usize) -> bool {
+    let len = state.tabs.len();
+    if from == to || from >= len || to >= len {
+        return false;
+    }
+    let tab = state.tabs.remove(from);
+    state.tabs.insert(to, tab);
+    state.active = if state.active == from {
+        to
+    } else if from < state.active && state.active <= to {
+        state.active - 1
+    } else if to <= state.active && state.active < from {
+        state.active + 1
+    } else {
+        state.active
+    };
+    true
+}
+
 pub fn close_tab(state: &mut AgentPanelState, ctx: &UpdateCtx<'_>, idx: usize) {
     if idx >= state.tabs.len() {
         return;
@@ -748,6 +774,55 @@ mod tests {
             forwarder: rt.spawn(async {}),
             backend: TabBackend::Daemon,
         }
+    }
+
+    #[tokio::test]
+    async fn reorder_term_tab_moves_the_tab_and_keeps_active_on_the_same_session() {
+        let handle = tokio::runtime::Handle::current();
+        let order = |s: &AgentPanelState| s.tabs.iter().map(|t| t.tab_id).collect::<Vec<_>>();
+        let fresh = |active: usize| {
+            let mut state = AgentPanelState::new();
+            state.tabs = (0..4)
+                .map(|i| make_tab(&handle, i, AgentKind::Unknown))
+                .collect();
+            state.active = active;
+            state
+        };
+        // 被拖的就是当前页签:active 跟着走。
+        let mut s = fresh(0);
+        assert!(reorder_term_tab(&mut s, 0, 2));
+        assert_eq!((order(&s), s.active), (vec![1, 2, 0, 3], 2));
+        // 当前页签夹在 from 与 to 之间:向后拖前面的页签,active 前移一位。
+        let mut s = fresh(1);
+        assert!(reorder_term_tab(&mut s, 0, 2));
+        assert_eq!((order(&s), s.active), (vec![1, 2, 0, 3], 0));
+        // 反方向:把后面的页签拖到前面,active 后移一位。
+        let mut s = fresh(1);
+        assert!(reorder_term_tab(&mut s, 3, 0));
+        assert_eq!((order(&s), s.active), (vec![3, 0, 1, 2], 2));
+        // 不在区间内的 active 不变,且每种情况下 active 指的仍是原来那个会话。
+        let mut s = fresh(3);
+        assert!(reorder_term_tab(&mut s, 0, 2));
+        assert_eq!((order(&s), s.active), (vec![1, 2, 0, 3], 3));
+    }
+
+    #[tokio::test]
+    async fn reorder_term_tab_ignores_out_of_range_and_noop_moves() {
+        let handle = tokio::runtime::Handle::current();
+        let mut state = AgentPanelState::new();
+        state.tabs = (0..3)
+            .map(|i| make_tab(&handle, i, AgentKind::Unknown))
+            .collect();
+        state.active = 1;
+        for (from, to) in [(1, 1), (3, 0), (0, 3), (9, 9)] {
+            assert!(!reorder_term_tab(&mut state, from, to), "{from}->{to}");
+        }
+        let ids: Vec<_> = state.tabs.iter().map(|t| t.tab_id).collect();
+        assert_eq!((ids, state.active), (vec![0, 1, 2], 1));
+        // 单个页签没有可换的位置。
+        state.tabs.truncate(1);
+        state.active = 0;
+        assert!(!reorder_term_tab(&mut state, 0, 0));
     }
 
     #[tokio::test]

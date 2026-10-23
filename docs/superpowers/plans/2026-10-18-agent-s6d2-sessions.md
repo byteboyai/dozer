@@ -2,6 +2,12 @@
 
 > **迁移说明(2026-10-20):** 本文原在 Digger 仓库,现移入 Dozer 仓库;文内 `docs/superpowers/...` 路径均相对 **Dozer 仓库根**。写作「Digger(仓库 `../digger`)」的部分,实施仍在 Digger 仓库的 worktree 里进行,但文档不在那里。Digger 自有文档(`docs/adr/*`、`2026-10-14-window-shell-design.md`、`docs/superpowers/notes/`)仍在 Digger 仓库。最新要求与决定见 `docs/superpowers/specs/2026-10-18-agent-panel-s6-design.md` §0。
 
+> **2026-10-23 修订(Dozer 侧验收通过后,以此为准,与下文及其它顶部修订冲突处以本条为准):**
+> - **Dozer 侧链路已验收、合并 `main`、推送。** 库快照 tag 是 **`libs-2026-10-23a`**(上一个是 `libs-2026-10-20a`);本文及其它修订里"尚未验收/未合并/没有 `libs-*` tag""不合并 `main`、不打 tag、不推送""用不提交的本地 `[patch]`""占位 tag `libs-2026-10-20a`""`Cargo.lock` 不提交/没有 `--locked` 可验"一律作废:依赖直接钉 tag、**提交 `Cargo.lock`**、`cargo metadata --locked` 与 `cargo tree -d` 门禁照常跑。打 tag/推送仍是对外动作,逐次向用户确认。
+> - **`reorder_term_tab` 回到库里,且签名变了:** `dozer_panel_agent::update::reorder_term_tab(state, from, to) -> bool`(显式来源下标,越界或 `from == to` 返回 `false`;`active` 始终指向同一个会话)。库里**不再有** `Message::TabDragMove` / `TabDragEnd`;`PanelDisplay::drag_surface(&self, content, index)` 只有两个参数(没有 `on_move`)。**含这个函数的 tag 是 `libs-2026-10-23b`(待切,见 Dozer 侧提交);在它存在之前不要开始依赖它的任务(S6d-3 Task 3)。** 拖拽手势(按下武装、位移阈值、组校验)全部由产品的拖拽状态机负责,库只做换位。
+> - **opencode 验收要覆盖 2.x:** opencode 2.x 拒绝具名导出的插件。Dozer 的插件模板已改成 `export default { id, setup, server }`(`c15804ad`),Digger 的 `digger.ts` 由同一模板生成,插件 id 是 `digger`。验收时在 opencode 2.x 下确认:`opencode` 日志里没有 `failed to load plugin`,状态点随回合更新。
+> - **hook 对旧守护进程的取舍已付过一次代价:** 新版 hook 遇到不认识 `Hello` 的旧守护进程会放弃上报(S6a 的刻意取舍),Dozer 因此出过"卡片不更新"。Dozer 的配套是 `Client::daemon_is_outdated()` + 顶栏"需重启 dozerd"徽标(`c016794b`)。Digger 首发不会遇到(`diggerd` 是新进程),但以后升级会;如要复用,在 S6d-3 的顶栏里接同一个标记。
+
 
 > **2026-10-21 修订(本轮范围与叠分支要求,以此为准):**
 > - **本轮只做 Part A(Dozer 库补丁,即总设计 §0 第 9 条链上的「S6d-2 Part A」)。Part B(Task 2–7,Digger 一侧)本期不执行**:它依赖 `libs-*` tag,而 tag 要等整条 Dozer 侧链路经用户一次性人工验收后才切;Part B 留到那之后另行安排。

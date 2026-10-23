@@ -2,12 +2,18 @@
 
 > **迁移说明(2026-10-20):** 本文原在 Digger 仓库,现移入 Dozer 仓库;文内 `docs/superpowers/...` 路径均相对 **Dozer 仓库根**。写作「Digger(仓库 `../digger`)」的部分,实施仍在 Digger 仓库的 worktree 里进行,但文档不在那里。Digger 自有文档(`docs/adr/*`、`2026-10-14-window-shell-design.md`、`docs/superpowers/notes/`)仍在 Digger 仓库。最新要求与决定见 `docs/superpowers/specs/2026-10-18-agent-panel-s6-design.md` §0。
 
+> **2026-10-23 修订(Dozer 侧验收通过后,以此为准,与下文及其它顶部修订冲突处以本条为准):**
+> - **Dozer 侧链路已验收、合并 `main`、推送。** 库快照 tag 是 **`libs-2026-10-23a`**(上一个是 `libs-2026-10-20a`);本文及其它修订里"尚未验收/未合并/没有 `libs-*` tag""不合并 `main`、不打 tag、不推送""用不提交的本地 `[patch]`""占位 tag `libs-2026-10-20a`""`Cargo.lock` 不提交/没有 `--locked` 可验"一律作废:依赖直接钉 tag、**提交 `Cargo.lock`**、`cargo metadata --locked` 与 `cargo tree -d` 门禁照常跑。打 tag/推送仍是对外动作,逐次向用户确认。
+> - **`reorder_term_tab` 回到库里,且签名变了:** `dozer_panel_agent::update::reorder_term_tab(state, from, to) -> bool`(显式来源下标,越界或 `from == to` 返回 `false`;`active` 始终指向同一个会话)。库里**不再有** `Message::TabDragMove` / `TabDragEnd`;`PanelDisplay::drag_surface(&self, content, index)` 只有两个参数(没有 `on_move`)。**含这个函数的 tag 是 `libs-2026-10-23b`(待切,见 Dozer 侧提交);在它存在之前不要开始依赖它的任务(S6d-3 Task 3)。** 拖拽手势(按下武装、位移阈值、组校验)全部由产品的拖拽状态机负责,库只做换位。
+> - **opencode 验收要覆盖 2.x:** opencode 2.x 拒绝具名导出的插件。Dozer 的插件模板已改成 `export default { id, setup, server }`(`c15804ad`),Digger 的 `digger.ts` 由同一模板生成,插件 id 是 `digger`。验收时在 opencode 2.x 下确认:`opencode` 日志里没有 `failed to load plugin`,状态点随回合更新。
+> - **hook 对旧守护进程的取舍已付过一次代价:** 新版 hook 遇到不认识 `Hello` 的旧守护进程会放弃上报(S6a 的刻意取舍),Dozer 因此出过"卡片不更新"。Dozer 的配套是 `Client::daemon_is_outdated()` + 顶栏"需重启 dozerd"徽标(`c016794b`)。Digger 首发不会遇到(`diggerd` 是新进程),但以后升级会;如要复用,在 S6d-3 的顶栏里接同一个标记。
+
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把 S6d-2 的朴素页签换成 Dozer 同款外观,补齐溢出菜单、拖拽换位、悬停高亮与延迟提示,与 Dozer 逐状态对照验收,做压力与同机并存回归,**完成 Agent 面板迁移并发布 Dozer 与 Digger 各一个新版本**(项目硬性要求)。
 
-**Architecture:** 全部在 `digger-desktop`。`adapters/agent_tabs.rs` 实现 `PanelDisplay` 的页签四件(`panel_tab`、`overflow_button`、`overflow_menu`、`drag_surface`),外观对照 Dozer `chrome/tab_widget.rs`,用 byteui 的 `tabs::tab_core` 与 `tab_strip::{tab_window, tab_drag_past_threshold}` 搭;菜单外框复用 S6d-2 的 `adapters/menu_overlay.rs`(byteui 没有菜单渲染)。悬停用「阶跃」代替动画(进入即满、离开即空),延迟提示借用现有的 1 秒 `Tick`。拖拽状态机放在 `AgentPanel`(Dozer 里它在 `App`,是跨页签组共享的)。新增 `examples/agent_gallery.rs`:不连守护进程,用预置的假会话把面板摆到固定状态,供与 Dozer 对照截图。
+**Architecture:** 全部在 `digger-desktop`。`adapters/agent_tabs.rs` 实现 `PanelDisplay` 的页签四件(`panel_tab`、`overflow_button`、`overflow_menu`、`drag_surface`),外观对照 Dozer `chrome/tab_widget.rs`,用 byteui 的 `tabs::tab_core` 与 `tab_strip::{tab_window, tab_drag_past_threshold}` 搭(`drag_surface` 为 `(content, index)` 两个参数);菜单外框复用 S6d-2 的 `adapters/menu_overlay.rs`(byteui 没有菜单渲染)。悬停用「阶跃」代替动画(进入即满、离开即空),延迟提示借用现有的 1 秒 `Tick`。拖拽状态机放在 `AgentPanel`(Dozer 里它在 `App`,是跨页签组共享的)。新增 `examples/agent_gallery.rs`:不连守护进程,用预置的假会话把面板摆到固定状态,供与 Dozer 对照截图。
 
 **Tech Stack:** Rust、iced 0.14、byteui、`dozer-panel-agent`(`PanelDisplay`、`AgentHover`、`TabArgs`、`OverflowEntry`)、tokio。
 
@@ -65,8 +71,9 @@
 - Test:`agent.rs`
 
 **Interfaces:**
-- Produces:`AgentPanel` 新增 `drag: Option<TabDrag { source: usize, press_pos: Point }>`;`on_select_tab(pid, idx)`(库的 `SelectTab` 到达时记录 `drag = Some(TabDrag { source: idx, press_pos: cursor })`;`SelectTabNoDrag` 不记);`on_drag_move(pid, to)`:无 `drag`、未越过 `tab_drag_past_threshold(press_pos, cursor)`、`to == source`、`to` 越界 → 什么都不做;否则调库的页签换位(`reorder_term_tab(source, to)`),并把 `drag.source = to`(续拖以新位置为准);`on_pointer_released()` 与 `clear_drag()`(失焦、切项目、切走面板、被拖的会话被关时调用)。
-- [ ] **Step 1: 接缝核对。** 确认拖拽状态由谁持有:若库的 `Message::TabDragMove` / `TabDragEnd` 已自带状态机,则本任务只转发消息并删掉上面的 `drag` 字段(报告写明);若库只暴露 `reorder_term_tab`,按 Interfaces 在 Digger 持有状态。**两者都不满足(没有换位入口)就停下报告。**
+- Produces:`AgentPanel` 新增 `drag: Option<TabDrag { source: usize, press_pos: Point }>`;`on_select_tab(pid, idx)`(库的 `SelectTab` 到达时记录 `drag = Some(TabDrag { source: idx, press_pos: cursor })`;`SelectTabNoDrag` 不记);`on_drag_move(pid, to)`:无 `drag`、未越过 `tab_drag_past_threshold(press_pos, cursor)`、`to == source`、`to` 越界 → 什么都不做;否则调库的 **`dozer_panel_agent::update::reorder_term_tab(&mut state, source, to)`**(2026-10-23 回补,显式 `from`/`to`,见顶部修订),成功才把 `drag.source = to`(续拖以新位置为准);`on_pointer_released()` 与 `clear_drag()`(失焦、切项目、切走面板、被拖的会话被关时调用)。
+- `agent_tabs::drag_surface(content, index)` 只有两个参数(库的 `PanelDisplay::drag_surface` 已去掉 `on_move`):surface 自己在悬停时向产品上报"光标在第 `index` 个页签上",由产品转成 `on_drag_move(pid, index)`,**不经库的消息**。
+
 - [ ] **Step 2: 写失败测试:** `select_tab_arms_the_drag_but_select_without_drag_does_not`(卡片点选不会因光标划过页签条而换位——Dozer 2026-08-17 修过的真实 bug)、`no_reorder_before_the_movement_threshold`、`reorder_moves_the_tab_and_keeps_the_dragged_tab_under_the_cursor`(拖 0→2 再 2→1,顺序与激活页签符合库的语义)、`out_of_range_targets_are_ignored`、`release_clears_the_drag_even_when_released_outside_the_window`、`closing_the_dragged_tab_or_switching_project_clears_the_drag`、`a_single_tab_can_not_be_dragged`、`hover_is_cleared_after_a_reorder`。
 - [ ] **Step 3: 运行确认失败,实现,验证,提交。** 沙箱真机:拖拽换位流畅、松手后顺序保持、拖拽时终端仍在收输出。
 
