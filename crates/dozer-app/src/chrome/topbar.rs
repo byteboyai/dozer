@@ -168,14 +168,27 @@ fn dozer_home_tab<'a>(
 }
 
 /// 顶栏 daemon 状态徽标的内容:`App.daemon_unavailable` 有值(dozerd 不可用这个**持久
-/// 状态**)才显示,返回 `(标签, 悬停详情)`。详情为空白时给兜底文案——状态本身是真的,
+/// 状态**)才显示,返回 `(标签, 悬停详情)`。另有一种"在跑但过旧"(`outdated`,来自
+/// `Client::daemon_is_outdated`):旧 dozerd 下 `dozer-hook` 放弃上报,agent 状态/模型
+/// 不再更新,只能重启它恢复;不可用优先于过旧(都显示时说"不可用")。详情为空白时给兜底文案——状态本身是真的,
 /// 不能因为没有文案就把徽标藏起来。文案按 `locale` 现取(i18n Task 06),切换语言即刷新。
 pub(crate) fn daemon_badge(
     unavailable: Option<&crate::app::DaemonUnavailable>,
+    outdated: bool,
     locale: &str,
 ) -> Option<(String, String)> {
     use crate::app::DaemonUnavailable;
     use crate::i18n::host_text;
+    if unavailable.is_none() && outdated {
+        return Some((
+            host_text("topbar.daemon_outdated", "Restart dozerd", locale),
+            host_text(
+                "topbar.daemon_outdated_detail",
+                "dozerd is older than this app, so agent status, model and activity are not updating. Open Settings and restart dozerd (running sessions will end).",
+                locale,
+            ),
+        ));
+    }
     let label = host_text("topbar.daemon_unavailable", "dozerd unavailable", locale);
     unavailable.map(|state| {
         let detail = match state {
@@ -204,8 +217,11 @@ pub(crate) fn daemon_badge(
 fn daemon_badge_view(
     app: &App,
 ) -> Option<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> {
-    let (label, detail) =
-        daemon_badge(app.daemon_unavailable.as_ref(), app.locale.active_locale())?;
+    let (label, detail) = daemon_badge(
+        app.daemon_unavailable.as_ref(),
+        app.client.daemon_is_outdated(),
+        app.locale.active_locale(),
+    )?;
     let colors = byteui::theme::color::current();
     let red = colors.red;
     let chip = button(
@@ -903,21 +919,21 @@ fn project_tab_dot(ws: &Workspace) -> Option<Color> {
 mod tests {
     #[test]
     fn daemon_badge_hidden_when_daemon_is_available() {
-        assert_eq!(daemon_badge(None, "en"), None);
+        assert_eq!(daemon_badge(None, false, "en"), None);
     }
 
     #[test]
     fn daemon_badge_shows_label_and_detail_when_unavailable() {
         use crate::app::DaemonUnavailable;
         assert_eq!(
-            daemon_badge(Some(&DaemonUnavailable::Stopped), "zh-CN"),
+            daemon_badge(Some(&DaemonUnavailable::Stopped), false, "zh-CN"),
             Some((
                 "dozerd 不可用".to_string(),
                 "dozerd 已停止,部分功能不可用".to_string()
             ))
         );
         assert_eq!(
-            daemon_badge(Some(&DaemonUnavailable::Stopped), "en"),
+            daemon_badge(Some(&DaemonUnavailable::Stopped), false, "en"),
             Some((
                 "dozerd unavailable".to_string(),
                 "dozerd is stopped; some features are unavailable".to_string()
@@ -926,17 +942,39 @@ mod tests {
     }
 
     #[test]
+    fn daemon_badge_prompts_a_restart_when_the_daemon_is_outdated() {
+        use crate::app::DaemonUnavailable;
+        let (label, detail) = daemon_badge(None, true, "zh-CN").expect("过旧要显示徽标");
+        assert_eq!(label, "需重启 dozerd");
+        assert!(detail.contains("重启"), "{detail}");
+        let (label, _) = daemon_badge(None, true, "en").unwrap();
+        assert_eq!(label, "Restart dozerd");
+        // 不可用优先:同时过旧时仍说"不可用"。
+        assert_eq!(
+            daemon_badge(Some(&DaemonUnavailable::Stopped), true, "en")
+                .unwrap()
+                .0,
+            "dozerd unavailable"
+        );
+    }
+
+    #[test]
     fn daemon_badge_falls_back_when_the_detail_is_blank() {
         use crate::app::DaemonUnavailable;
         // 状态为"不可用"但没有文案:徽标仍要显示(状态本身是真的),详情给个兜底。
         assert_eq!(
-            daemon_badge(Some(&DaemonUnavailable::StartupError("  ".into())), "zh-CN"),
+            daemon_badge(
+                Some(&DaemonUnavailable::StartupError("  ".into())),
+                false,
+                "zh-CN"
+            ),
             Some(("dozerd 不可用".to_string(), "无法连接到 dozerd".to_string()))
         );
         // 启动失败附带的原始诊断详情原样显示,不翻译。
         assert_eq!(
             daemon_badge(
                 Some(&DaemonUnavailable::StartupError("io error".into())),
+                false,
                 "zh-CN"
             ),
             Some(("dozerd 不可用".to_string(), "io error".to_string()))

@@ -98,6 +98,8 @@
   "topbar.daemon_unavailable": "dozerd 不可用",
   "topbar.daemon_stopped_detail": "dozerd 已停止,部分功能不可用",
   "topbar.daemon_unreachable_detail": "无法连接到 dozerd",
+  "topbar.daemon_outdated": "需重启 dozerd",
+  "topbar.daemon_outdated_detail": "dozerd 版本比当前应用旧,Agent 状态、模型与当前工作不会更新。请打开设置重启 dozerd(运行中的会话会结束)。",
   "tab.view_table": "查看表格",
   "tab.view_source": "查看原文",
   "tab.view_tree": "查看树视图",

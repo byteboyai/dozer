@@ -32,8 +32,15 @@ pub use bytehost_client::{AppApiError, AppChange, AppHostApi};
 pub struct Client {
     socket: PathBuf,
     /// 握手结果缓存:check_version 只在首个业务请求前真正跑一次。
-    version_checked: std::sync::Arc<std::sync::OnceLock<()>>,
+    /// `VERSION_UNCHECKED`/`VERSION_COMPATIBLE`/`VERSION_OLD_DAEMON`。
+    version_checked: std::sync::Arc<std::sync::atomic::AtomicU8>,
 }
+
+const VERSION_UNCHECKED: u8 = 0;
+const VERSION_COMPATIBLE: u8 = 1;
+/// 放行了不认识 Hello 的旧守护进程:业务照常,但 `dozer-hook` 对这种守护
+/// 进程会放弃上报(agent 状态/模型/transcript 不再更新),需要用户重启它。
+const VERSION_OLD_DAEMON: u8 = 2;
 
 /// 版本握手失败:客户端与守护进程协议版本不一致、或连到了别的产品的
 /// 守护进程。给出可读文案而不是莫名其妙的反序列化错误。
@@ -120,7 +127,9 @@ impl Client {
     pub fn new(socket: PathBuf) -> Self {
         Self {
             socket,
-            version_checked: std::sync::Arc::new(std::sync::OnceLock::new()),
+            version_checked: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
+                VERSION_UNCHECKED,
+            )),
         }
     }
 
@@ -136,14 +145,36 @@ impl Client {
     /// `Reply::Error`)——放行并记一条 warn,不阻断、不向用户弹错,
     /// 否则只升级客户端的用户得先杀守护进程,会丢掉所有存活会话。
     pub async fn check_version(&self) -> Result<(), ClientError> {
-        if self.version_checked.get().is_some() {
+        use std::sync::atomic::Ordering::Relaxed;
+        if self.version_checked.load(Relaxed) != VERSION_UNCHECKED {
             return Ok(());
         }
         let result = self.hello_once().await;
-        if result.is_ok() {
-            let _ = self.version_checked.set(());
+        if let Ok(old) = result {
+            self.version_checked.store(
+                if old {
+                    VERSION_OLD_DAEMON
+                } else {
+                    VERSION_COMPATIBLE
+                },
+                Relaxed,
+            );
         }
-        result
+        result.map(|_| ())
+    }
+
+    /// 最近一次握手是否放行了旧守护进程(尚未握手时为 false)。顶栏据此
+    /// 提示"重启 dozerd":旧守护进程下 hook 上报被丢,只能靠重启恢复。
+    pub fn daemon_is_outdated(&self) -> bool {
+        self.version_checked
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == VERSION_OLD_DAEMON
+    }
+
+    /// 守护进程被重新拉起后调用:丢掉握手缓存,下个业务请求重新握手。
+    pub fn forget_version_check(&self) {
+        self.version_checked
+            .store(VERSION_UNCHECKED, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// roundtrip/attach 用的 anyhow 包装:握手失败把 ClientError 原样
@@ -152,7 +183,8 @@ impl Client {
         self.check_version().await.map_err(anyhow::Error::new)
     }
 
-    async fn hello_once(&self) -> Result<(), ClientError> {
+    /// `Ok(true)` = 放行了旧守护进程。
+    async fn hello_once(&self) -> Result<bool, ClientError> {
         // 不走通用 roundtrip:它会把 Reply::Error 折叠成 anyhow 错误,
         // 而握手恰恰要区分"守护进程回了 Error(旧守护进程,放行)"与
         // "连不上"。
@@ -165,13 +197,13 @@ impl Client {
                 kind: ClientErrorKind::Unreachable(e.to_string()),
             })?;
         match classify_hello_reply(&reply) {
-            Ok(HelloCheck::Compatible) => Ok(()),
+            Ok(HelloCheck::Compatible) => Ok(false),
             Ok(HelloCheck::OldDaemonAllowed) => {
                 tracing::warn!(
                     socket = %self.socket.display(),
                     "守护进程不认识协议握手(版本过旧),按兼容策略放行;建议尽快把 dozerd 与客户端升级到同一版本"
                 );
-                Ok(())
+                Ok(true)
             }
             Err(kind) => Err(ClientError { kind }),
         }

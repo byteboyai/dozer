@@ -2354,6 +2354,9 @@ impl App {
                 }
                 if restart_succeeded {
                     self.daemon_unavailable = None;
+                    // 新拉起的 dozerd 是当前版本:丢掉握手缓存,"过旧"徽标随下次
+                    // 握手重新判定(不丢的话会一直显示旧结果)。
+                    self.client.forget_version_check();
                     // dozerd 刚被重新拉起:立刻拉一次应用列表(同步图标栏),不等下一次轮询。
                     self.app_host_update(crate::extensions::app_host::Message::Refresh);
                     // i18n Task 04:连接换代——重建 revision 基线并立即刷新语言快照。

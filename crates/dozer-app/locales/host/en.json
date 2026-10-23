@@ -87,6 +87,8 @@
   "topbar.daemon_unavailable": "dozerd unavailable",
   "topbar.daemon_stopped_detail": "dozerd is stopped; some features are unavailable",
   "topbar.daemon_unreachable_detail": "Cannot connect to dozerd",
+  "topbar.daemon_outdated": "Restart dozerd",
+  "topbar.daemon_outdated_detail": "dozerd is older than this app, so agent status, model and activity are not updating. Open Settings and restart dozerd (running sessions will end).",
   "home.project_list": "Project list",
   "home.recents": "Recents",
   "home.projects": "Projects",

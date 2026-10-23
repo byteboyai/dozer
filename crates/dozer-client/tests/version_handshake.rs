@@ -81,9 +81,11 @@ async fn matching_versions_pass_and_the_check_is_cached() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let client = Client::new(sock);
+    assert!(!client.daemon_is_outdated(), "握手前不报旧");
     assert!(client.check_version().await.is_ok());
     // 缓存:第二次调用不再碰 socket
     assert!(client.check_version().await.is_ok());
+    assert!(!client.daemon_is_outdated(), "版本一致的守护进程不算旧");
 }
 
 #[tokio::test]
@@ -218,6 +220,15 @@ async fn old_same_product_daemon_is_allowed_and_business_requests_proceed() {
     let sessions = client.list().await.expect("旧守护进程必须放行");
     assert!(sessions.is_empty());
     assert!(client.check_version().await.is_ok(), "放行结果应被缓存");
+    assert!(
+        client.daemon_is_outdated(),
+        "放行旧守护进程后必须能查到,顶栏据此提示重启"
+    );
+    client.forget_version_check();
+    assert!(
+        !client.daemon_is_outdated(),
+        "守护进程重启后丢掉握手缓存,等下次握手重新判定"
+    );
     let got = received.lock().unwrap().clone();
     assert_eq!(
         got,
