@@ -33,6 +33,22 @@ impl Component {
     }
 }
 
+impl Component {
+    /// 按产品取日志文件前缀:守护进程在非 Dozer 产品下叫 `<产品名>.log`(Digger:`digger.log`),
+    /// Dozer 保持 `dozerd.log` 字节不变;其余组件不随产品变。
+    pub fn file_prefix_for(self, product: &str) -> std::borrow::Cow<'static, str> {
+        match self {
+            Component::Daemon if product != "dozer" => format!("{product}.log").into(),
+            _ => self.file_prefix().into(),
+        }
+    }
+
+    /// 当前进程产品下的日志文件前缀(`paths::install` 之后调用才有意义)。
+    fn current_file_prefix(self) -> std::borrow::Cow<'static, str> {
+        self.file_prefix_for(crate::paths::product().name)
+    }
+}
+
 /// 日志来源。`target` 格式固定为 `dozer::<kind>::<name>`,面板日志即
 /// `dozer::panel::<面板名>`。用 `scope!` 声明,不要手写。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,7 +200,11 @@ pub fn plain_write_in(
     if std::fs::create_dir_all(dir).is_err() {
         return;
     }
-    let path = dir.join(format!("{}.{}", component.file_prefix(), date_string(secs)));
+    let path = dir.join(format!(
+        "{}.{}",
+        component.current_file_prefix(),
+        date_string(secs)
+    ));
     let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -234,8 +254,12 @@ pub fn prune_old_logs(dir: &Path, now: SystemTime, keep_days: u64) -> usize {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
         let ours = Component::ALL.iter().any(|c| {
-            name.strip_prefix(c.file_prefix())
-                .is_some_and(|rest| rest.starts_with('.'))
+            [c.file_prefix(), &c.current_file_prefix()]
+                .iter()
+                .any(|prefix| {
+                    name.strip_prefix(*prefix)
+                        .is_some_and(|rest| rest.starts_with('.'))
+                })
         });
         if !ours {
             continue;
@@ -343,7 +367,7 @@ mod backend {
             prune_old_logs(dir, SystemTime::now(), RETENTION_DAYS);
         }
         let (file_layer, worker) = if dir_ok {
-            let appender = tracing_appender::rolling::daily(dir, component.file_prefix());
+            let appender = tracing_appender::rolling::daily(dir, &*component.current_file_prefix());
             let (writer, guard) = tracing_appender::non_blocking(appender);
             (
                 Some(
@@ -376,7 +400,7 @@ mod backend {
         }));
         tracing::info!(
             target: "dozer::module::log",
-            component = component.file_prefix(),
+            component = &*component.current_file_prefix(),
             version,
             pid = std::process::id(),
             "启动"
@@ -473,6 +497,13 @@ mod tests {
         assert!(!is_valid_scope_name("code-health"));
         assert!(!is_valid_scope_name("a b"));
         assert!(!is_valid_scope_name("中文"));
+    }
+
+    #[test]
+    fn daemon_log_file_is_named_after_a_non_dozer_product() {
+        assert_eq!(Component::Daemon.file_prefix_for("dozer"), "dozerd.log");
+        assert_eq!(Component::Daemon.file_prefix_for("digger"), "digger.log");
+        assert_eq!(Component::Hook.file_prefix_for("digger"), "dozer-hook.log");
     }
 
     #[test]
