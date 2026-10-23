@@ -1,13 +1,13 @@
-// `dozer.ts` 本身故意只有一个具名导出（`DozerPlugin`）——opencode 把
+// `dozer.ts` 本身故意没有具名导出、只有一个 default export——v1 opencode 把
 // `plugins/` 目录下每个文件的每个具名导出都当 Plugin 工厂调一次，多导出
 // 一个 `resolveState`/`stateFor` 会被误当插件调用，产出运行时报错（跟
 // `dozer-translate.ts` 必须塞进 `dozer-lib/` 子目录躲开扫描是同一条硬性
-// 约束）。所以这里不直接 import 内部函数，走 `DozerPlugin` 整个工厂函数
+// 约束）。所以这里不直接 import 内部函数，走 default export 的 `server`（v1）/ `setup`（v2）
 // 拿到 hooks，用假的 `$`/`client` 驱动，只断言最终有没有 spawn
 // `dozer-hook`（即 emit 到没到）。
 
 import { describe, test, expect } from "bun:test"
-import { DozerPlugin } from "./dozer"
+import Dozer from "./dozer"
 
 type ShellCall = { values: any[] }
 
@@ -38,7 +38,7 @@ function makeClientStub(sessions: Record<string, { directory: string; parentID?:
 }
 
 async function loadPlugin($: any, client: any) {
-  return DozerPlugin({ $, client } as any)
+  return Dozer.server({ $, client } as any)
 }
 
 describe("resume gap: 未经本进程 session.created 的会话", () => {

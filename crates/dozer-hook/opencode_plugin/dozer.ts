@@ -3,6 +3,16 @@
 // `dozer-hook opencode <event>`，JSON 走 stdin（与 Claude Code hook 机制
 // 同构，socket 连接/协议编码全部留在 Rust 里复用）。
 //
+// 两代 opencode 插件格式并存于同一个 default export：v2（2.x，`setup(ctx)` +
+// `ctx.event.subscribe`，事件模型是 `session.text.*`/`session.tool.*`/
+// `session.execution.*`）与 v1（`server()` 返回 `event`/`chat.message`
+// hook，事件是 `session.idle`/`message.part.updated`）。两边都翻译进
+// dozer-translate.ts 的同一组纯函数，Dozer 侧看到的规范事件不变。v2 不认
+// 具名导出（"Plugin must export a default definition with an id and an
+// effect or setup function"），v1 要 opencode >= 1.18.29 才认对象形式的
+// default export；所以这里故意不再有具名导出。迁移规范见
+// https://opencode.ai/v2/docs/build/plugins/migrate-v1/。
+//
 // 硬性要求（design 2026-07-31-dozer-multi-agent-codebuddy-opencode-design.md
 // §5.3）：插件跑在用户的 opencode 进程内部，任何 dozer 侧故障都不能拖垮
 // 或拖慢用户的会话——每个 hook 回调整体包 try/catch，吞掉一切异常。
@@ -11,7 +21,7 @@
 // dozer-hook 二进制的绝对路径；DOZER_HOOK_BIN 环境变量可覆盖，供开发/
 // 测试用。
 
-import type { Plugin } from "@opencode-ai/plugin"
+import { spawn } from "node:child_process"
 import {
   createSessionState,
   onSessionCreated,
@@ -25,8 +35,12 @@ import {
   type TranslatedEvent,
 } from "./dozer-translate"
 
+// 安装时替换成产品名（`dozer`/`digger`…）：v2 用 id 做存储隔离与诊断，两个
+// 产品的插件并存时不能撞 id。
+const PLUGIN_ID = "__DOZER_PLUGIN_ID__"
 const HOOK_BIN_PLACEHOLDER = "__DOZER_HOOK_BIN_PATH__"
-const hookBin = process.env.DOZER_HOOK_BIN || HOOK_BIN_PLACEHOLDER
+// 每次取值而不是模块加载时固定：测试要在 import 之后才设 `DOZER_HOOK_BIN`。
+const hookBin = () => process.env.DOZER_HOOK_BIN || HOOK_BIN_PLACEHOLDER
 
 // `session.created` 是这个 Map 的常规填充路径，但用户 resume/continue
 // 一个不是在本 opencode 进程里新建的会话时不会有 `session.created`——这
@@ -92,10 +106,11 @@ async function emit($: any, translated: TranslatedEvent | null): Promise<void> {
   // `.quiet()`：Bun `$` 默认把子进程 stdout/stderr 转发到当前进程——
   // dozer-hook 失败时会 eprintln 中文错误信息，不加 `.quiet()` 会直接喷
   // 进用户的 opencode 终端。
-  await $`echo ${stdin} | ${hookBin} opencode ${translated.event}`.quiet()
+  await $`echo ${stdin} | ${hookBin()} opencode ${translated.event}`.quiet()
 }
 
-export const DozerPlugin: Plugin = async ({ $, client }) => {
+// v1：`server()` 的返回值。
+async function v1Hooks({ $, client }: { $: any; client: any }) {
   return {
     event: async ({ event }: { event: { type: string; properties?: Record<string, any> } }) => {
       try {
@@ -226,4 +241,212 @@ export const DozerPlugin: Plugin = async ({ $, client }) => {
       }
     },
   }
+}
+
+// ---------------------------------------------------------------------------
+// v2（opencode 2.x）
+//
+// 事件形状（`@opencode/schema` 的 session-event + 实测）：`{ type, data }`，
+// `data.sessionID` 在几乎所有 session.* 事件里。没有 `session.idle`——回合
+// 结束是 `session.execution.succeeded|failed|interrupted`；没有 `message.*`
+// ——文本是 `session.text.ended`（带整段 `text`），工具是
+// `session.tool.input.started`（唯一带工具名的）→ `called` → `success|failed`，
+// 用量在 `session.step.ended`。`session.created` 只有会话在本插件已订阅后
+// 才新建时才会到，CLI `run`/resume 的会话往往收不到，所以首个事件到达时
+// 用 `ctx.session.get` 补建 state 并补发 SessionStart。
+// ---------------------------------------------------------------------------
+
+// v2 没有 Bun `$`，直接 spawn；stdin 约定与 v1 的 `echo … | hookBin` 相同。
+// stdio 全丢弃：dozer-hook 失败时的 eprintln 不能喷进用户的 opencode 终端。
+function emitSpawn(translated: TranslatedEvent | null): Promise<void> {
+  if (!translated) return Promise.resolve()
+  const stdin = JSON.stringify({
+    cwd: translated.cwd,
+    transcript_line: translated.transcriptLine ?? null,
+  })
+  return new Promise((resolve) => {
+    try {
+      const child = spawn(hookBin(), ["opencode", translated.event], {
+        stdio: ["pipe", "ignore", "ignore"],
+      })
+      child.on("error", () => resolve())
+      child.on("close", () => resolve())
+      child.stdin.on("error", () => {})
+      child.stdin.end(stdin)
+    } catch {
+      resolve()
+    }
+  })
+}
+
+// `session.tool.success` 的 `content` 是非空数组；已知元素带 `text`，其余
+// 形状（图片/文件引用）没有可读文本，拼不出来就留空，不抛。
+function v2ContentText(content: unknown): string {
+  if (!Array.isArray(content)) return ""
+  return content
+    .map((c) => (c && typeof c.text === "string" ? c.text : ""))
+    .filter((t) => t)
+    .join("\n")
+}
+
+async function v2Setup(ctx: any): Promise<() => void> {
+  // v2 的 state 与 v1 共用 `SessionState`，但各用各的 Map：同一个进程里
+  // 只会跑其中一代。
+  const states = new Map<string, SessionState>()
+  // 子/subagent 会话与查不到的会话：记住，之后的事件直接丢，不再反复查。
+  const ignored = new Set<string>()
+  const toolNames = new Map<string, string>()
+  const models = new Map<string, string>()
+  const fallbackCwd: string = ctx.location?.directory ?? "."
+
+  async function resolve(sessionID: unknown): Promise<SessionState | undefined> {
+    if (typeof sessionID !== "string") return undefined
+    const existing = states.get(sessionID)
+    if (existing) return existing
+    if (ignored.has(sessionID)) return undefined
+    let info: any
+    try {
+      info = await ctx.session.get({ sessionID })
+    } catch {
+      return undefined
+    }
+    if (!info || info.parentID) {
+      if (info) ignored.add(sessionID)
+      return undefined
+    }
+    const state = createSessionState(info.location?.directory ?? fallbackCwd)
+    states.set(sessionID, state)
+    if (info.model?.providerID && info.model?.id) {
+      models.set(sessionID, `${info.model.providerID}/${info.model.id}`)
+    }
+    await emitSpawn(onSessionCreated(state, { id: sessionID, directory: state.cwd }))
+    return state
+  }
+
+  async function onEvent(event: { type: string; data?: Record<string, any> }): Promise<void> {
+    const d = event.data ?? {}
+    switch (event.type) {
+      case "session.created": {
+        if (!d.sessionID || d.parentID || states.has(d.sessionID)) {
+          if (d.parentID && d.sessionID) ignored.add(d.sessionID)
+          return
+        }
+        const state = createSessionState(d.location?.directory ?? fallbackCwd)
+        states.set(d.sessionID, state)
+        await emitSpawn(onSessionCreated(state, { id: d.sessionID, directory: state.cwd }))
+        return
+      }
+      case "session.deleted": {
+        const state = states.get(d.sessionID)
+        if (!state) return
+        await emitSpawn(onSessionDeleted(state))
+        states.delete(d.sessionID)
+        models.delete(d.sessionID)
+        return
+      }
+      case "session.step.started": {
+        if (d.model?.providerID && d.model?.id && typeof d.sessionID === "string") {
+          models.set(d.sessionID, `${d.model.providerID}/${d.model.id}`)
+        }
+        return
+      }
+      case "session.text.ended": {
+        const state = await resolve(d.sessionID)
+        if (!state || typeof d.text !== "string") return
+        onTextPartUpdated(state, { id: `${d.assistantMessageID}:${d.ordinal}`, text: d.text })
+        return
+      }
+      case "session.step.ended": {
+        const state = await resolve(d.sessionID)
+        if (!state || !d.tokens) return
+        onMessageUpdated(state, { id: d.assistantMessageID, role: "assistant", tokens: d.tokens })
+        return
+      }
+      case "session.tool.input.started": {
+        if (d.id && d.name) toolNames.set(d.id, d.name)
+        return
+      }
+      case "session.tool.called": {
+        const state = await resolve(d.sessionID)
+        if (!state) return
+        await emitSpawn(
+          onToolPartUpdated(state, {
+            callID: d.id,
+            tool: toolNames.get(d.id) ?? "tool",
+            state: { status: "running", input: d.input },
+          })
+        )
+        return
+      }
+      case "session.tool.success":
+      case "session.tool.failed": {
+        const state = await resolve(d.sessionID)
+        if (!state) return
+        const failed = event.type === "session.tool.failed"
+        await emitSpawn(
+          onToolPartUpdated(state, {
+            callID: d.id,
+            tool: toolNames.get(d.id) ?? "tool",
+            state: failed
+              ? { status: "error", error: d.error?.message ?? "" }
+              : { status: "completed", output: v2ContentText(d.content) },
+          })
+        )
+        toolNames.delete(d.id)
+        return
+      }
+      case "session.execution.succeeded":
+      case "session.execution.failed":
+      case "session.execution.interrupted": {
+        const state = await resolve(d.sessionID)
+        if (!state) return
+        await emitSpawn(onSessionIdle(state))
+        return
+      }
+      default:
+        return
+    }
+  }
+
+  const controller = new AbortController()
+  // 串行消费：事件顺序就是 Dozer 状态机看到的顺序，不能并发处理。
+  void (async () => {
+    try {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        try {
+          await onEvent(event)
+        } catch {
+          // 任何翻译/转发失败都吞掉，绝不抛到 opencode 主流程。
+        }
+      }
+    } catch {
+      // 订阅被 abort 或流断开：静默结束。
+    }
+  })()
+
+  // `prompt` hook 在提示被接收时跑一次，是 v1 `chat.message` 的对应物。
+  // 只读不改 event，且必须吞掉一切异常——抛出会让用户的提示被拒。
+  try {
+    await ctx.session.hook("prompt", async (e: any) => {
+      try {
+        const state = await resolve(e?.sessionID)
+        if (!state) return
+        await emitSpawn(
+          onUserMessage(state, [{ type: "text", text: e.prompt?.text }], models.get(e.sessionID))
+        )
+      } catch {
+        // 同上。
+      }
+    })
+  } catch {
+    // hook 注册失败：只丢 UserPromptSubmit，事件订阅照常。
+  }
+
+  return () => controller.abort()
+}
+
+export default {
+  id: PLUGIN_ID,
+  setup: v2Setup,
+  server: v1Hooks,
 }

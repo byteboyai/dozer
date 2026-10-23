@@ -26,6 +26,8 @@ use std::path::{Path, PathBuf};
 const DOZER_TS_TEMPLATE: &str = include_str!("../opencode_plugin/dozer.ts");
 const TRANSLATE_TS: &str = include_str!("../opencode_plugin/dozer-translate.ts");
 const HOOK_BIN_PLACEHOLDER: &str = "__DOZER_HOOK_BIN_PATH__";
+// v2 插件 id（存储隔离/诊断用），装机时换成产品名，两个产品的插件并存不撞 id。
+const PLUGIN_ID_PLACEHOLDER: &str = "__DOZER_PLUGIN_ID__";
 // 源码树里 `dozer.ts` 从平铺的 `./dozer-translate` 导入（跟
 // `dozer-translate.test.ts` 同目录，`bun test` 能直接跑，也是这次改动的
 // 点——之前这个导入路径写死指向 `./dozer-lib/dozer-translate`，只有装机
@@ -101,6 +103,7 @@ pub fn run_at_with_exe_for(
         let escaped_exe = escape_ts_string_literal(exe);
         let dozer_ts = DOZER_TS_TEMPLATE
             .replace(HOOK_BIN_PLACEHOLDER, &escaped_exe)
+            .replace(PLUGIN_ID_PLACEHOLDER, &product.name)
             .replace(TRANSLATE_IMPORT_SRC, &translate_import_installed);
         if let Err(e) = std::fs::write(dir.join(&plugin_ts), dozer_ts) {
             eprintln!("写 {plugin_ts} 失败: {e}");
@@ -185,6 +188,10 @@ mod tests {
         );
         assert!(!plugin.contains("./dozer-lib"), "不得再引用 Dozer 的库目录");
         assert!(
+            plugin.contains("const PLUGIN_ID = \"digger\""),
+            "v2 插件 id 必须是 Digger 自己的，不能与 Dozer 的撞"
+        );
+        assert!(
             !dir.path().join("dozer.ts").exists() && !dir.path().join("dozer-lib").exists(),
             "Digger 安装不得写 Dozer 名下的文件"
         );
@@ -245,7 +252,19 @@ mod tests {
             !dozer_ts.contains("__DOZER_HOOK_BIN_PATH__"),
             "占位符必须被替换成真实 exe 路径"
         );
-        assert!(dozer_ts.contains("DozerPlugin"));
+        assert!(
+            dozer_ts.contains("export default"),
+            "opencode 2.x 要求 default export（含 id 与 setup）"
+        );
+        assert!(
+            !dozer_ts.contains("export const"),
+            "不得有具名导出：v1 会把每个具名导出当插件工厂调用"
+        );
+        assert!(
+            dozer_ts.contains("const PLUGIN_ID = \"dozer\""),
+            "插件 id 必须被替换成产品名"
+        );
+        assert!(!dozer_ts.contains(PLUGIN_ID_PLACEHOLDER));
         let translate_ts =
             std::fs::read_to_string(dir.path().join("dozer-lib").join("dozer-translate.ts"))
                 .unwrap();
