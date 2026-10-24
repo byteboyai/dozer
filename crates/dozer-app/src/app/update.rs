@@ -4505,7 +4505,10 @@ impl App {
                     None => Vec::new(),
                 };
             let items = tab_widget::tab_overflow_items(&entries, move |i| {
-                Message::Agent(project_id, dozer_panel_agent::update::Message::SelectTab(i))
+                Message::Agent(
+                    project_id,
+                    dozer_panel_agent::update::Message::SelectTabNoDrag(i),
+                )
             });
             if let Some(msg) = crate::chrome::native_menu::show(items, cursor) {
                 self.update(msg);
@@ -5513,6 +5516,23 @@ mod agent_overflow_anchor_tests {
                 at: Some((1.0, 2.0))
             }
         ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_native_agent_overflow_menu_does_not_arm_a_tab_drag() {
+        // 原生菜单吞掉鼠标松开事件:选中走 `SelectTab` 会武装页签拖拽(`pressed_tab`),拖拽状态
+        // 一直挂着,之后鼠标扫过页签就被换位。从菜单选的不是"按下页签",要用 `SelectTabNoDrag`。
+        let source = include_str!("update.rs");
+        let start = source
+            .find("fn agent_panel_message(")
+            .expect("找不到 agent_panel_message");
+        let rest = &source[start..];
+        let end = rest.find("let avail_px").expect("找不到原生分支结尾");
+        let branch = &rest[..end];
+        assert!(branch.contains("native_menu::show"), "应有原生菜单分支");
+        assert!(branch.contains("SelectTabNoDrag"));
+        assert!(!branch.contains("update::Message::SelectTab("));
     }
 
     #[test]
