@@ -416,7 +416,13 @@ impl TerminalModel {
                         let cell = &line[Column(col)];
                         let spacer = cell.flags.contains(Flags::WIDE_CHAR_SPACER);
                         Cell {
-                            ch: if spacer { ' ' } else { cell.c },
+                            // alacritty 把 '\t' 存进制表位起始格;字体没有它的字形(画出来是缺字方块),
+                            // 对渲染来说制表位就是空白。复制走 `selection_to_string`,不受影响。
+                            ch: if spacer || cell.c == '\t' {
+                                ' '
+                            } else {
+                                cell.c
+                            },
                             fg: fg_to_rgb(cell.fg, table, dfg),
                             bg: bg_to_rgb(cell.bg, table, dfg),
                             bold: cell.flags.contains(Flags::BOLD),
@@ -598,6 +604,36 @@ mod tests {
         assert_eq!(line_text(&lines[0]), "one");
         assert_eq!(line_text(&lines[1]), "two");
         assert_eq!(t.cursor(), (3, 1));
+    }
+
+    #[test]
+    fn a_tab_is_rendered_as_blank_never_as_a_tab_glyph() {
+        // alacritty 的 `put_tab` 会把 '\t' 存进制表位起始那一格(`cell.c = '\t'`)。
+        // 字体里没有它的字形,直接画就是缺字方块:`ls` 用制表符对齐列,每个文件名后面
+        // 都会多一个方块(最后一项后面没有)。渲染单元格里必须是空白。
+        let mut t = TerminalModel::new(40, 4);
+        let _ = t.feed(b"a\tb\tc");
+        let row = &t.visible_lines()[0];
+        assert_eq!(row[0].ch, 'a');
+        assert!(
+            row.iter().all(|c| c.ch != '\t'),
+            "渲染行里不能残留制表符: {:?}",
+            row.iter().map(|c| c.ch).collect::<String>()
+        );
+        assert_eq!(row[1].ch, ' ', "制表位起始格应是空白");
+        assert!(row.iter().any(|c| c.ch == 'b') && row.iter().any(|c| c.ch == 'c'));
+    }
+
+    #[test]
+    fn copying_a_selection_across_a_tab_still_goes_through_alacritty_text() {
+        // 复制走 alacritty 自己的 `selection_to_string`,不读渲染单元格,
+        // 所以把渲染单元格里的制表符换成空白不影响复制出的文本。
+        let mut t = TerminalModel::new(40, 4);
+        let _ = t.feed(b"ab\tcd");
+        t.selection_start(0, 0, false);
+        t.selection_update(39, 0, true);
+        let copied = t.selection_text().unwrap_or_default();
+        assert!(copied.contains("ab") && copied.contains("cd"), "{copied:?}");
     }
 
     #[test]

@@ -6,10 +6,12 @@
 //!   由调用方经 [`style::TermStyle`] / [`view::view`] 的 `map` 注入,库里
 //!   不读产品应用的状态。
 //!
-//! 本库不含 PTY(在守护进程里),也不内嵌字体(调用方注册并传入)。
+//! 本库不含 PTY(在守护进程里)。主字体由调用方注册并传入;库只内置一个只含符号的
+//! Nerd Font 字体,专画私有区图标(见 [`symbols`])。
 
 pub mod input;
 pub mod model;
 pub mod osc;
 pub mod style;
+pub mod symbols;
 pub mod view;

@@ -18,16 +18,16 @@ dozer-i18n = { path = "../dozer-i18n" }
 dozer-preview-core = { path = "../dozer-preview-core" }
 dozer-client = { path = "../dozer-client" }
 dozer-services = { path = "../dozer-services" }
-bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.11" }
-bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.11" }
-bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.11" }
-bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.11" }
+bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.12" }
+bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.12" }
+bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.12" }
+bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.12" }
 # 公共桌面宿主契约:稳定身份、请求身份、布局 DTO(bytehost-core,本地 patch 联调)。
-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.11" }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.12" }
 # 共享桌面宿主执行层:Surface 生命周期/路由/几何(iced + wry 平台实现)。
 # `overlay` feature(C10 方案 C):浮层共用 wgpu 渲染管线 + 遮罩外壳
 # (`bytehost_desktop::overlay_gpu`),dozer-app 侧不再自写建窗/alpha 机制。
-bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.11", features = ["overlay"] }
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.12", features = ["overlay"] }
 dozer-codehealth = { path = "../dozer-codehealth" }
 # 同源 Usage 面板库(Task 19):Dozer 只做 ctor/重导出包装,数据层/视图层/资源
 # 都在此 crate;其依赖闭包不含 dozer-app(见 crate 文档)。
@@ -47,7 +47,7 @@ dozer-panel-files = { path = "../dozer-panel-files" }
 dozer-hook = { path = "../dozer-hook" }
 # 新建 agent 会话时静默注册对应 CLI 的 dozer-mcp（第一个写工具 2026-08-27）。
 dozer-mcp = { path = "../dozer-mcp" }
-byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.5" }
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.6" }
 bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1", features = ["watch"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -121,21 +121,9 @@ tempfile = "3"
 # 面板单元测试用 `TempRepo` 造真实仓库。
 bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1", features = ["testutil"] }
 
-# macOS 原生右键菜单(`native_menu`)在运行时把内嵌 Lucide SVG 栅格化成
-# PNG 包成 NSImage,依赖 resvg/usvg/tiny-skia。三个 crate 已经是 iced_wgpu
-# svg feature 的间接依赖(见 Cargo.lock 0.45.1/0.45.1/0.11.4),这里 pin 到
-# 同一精确版本,避免引入重复编译;tiny-skia 开 `png` feature 供
-# `encode_png()` 用(该 feature 也已由 iced_wgpu 链间接启用)。
+# macOS 原生右键菜单(`native_menu`)已搬进 byteui(`byteui::native_menu`),它依赖的
+# resvg / usvg / tiny-skia / objc2-quartz-core 现在由 byteui 持有,这里不再直接声明。
 [target.'cfg(target_os = "macos")'.dependencies]
-resvg = "=0.45.1"
-usvg = "=0.45.1"
-tiny-skia = { version = "=0.11.4", features = ["png"] }
-# 原生菜单项 hover 高亮:直接改 `CALayer.backgroundColor`(`NSView.layer()`
-# 返回的 `CALayer`)。objc2-app-kit 只按自己所需的最小 feature 集间接拉
-# `objc2-quartz-core`,拿不到完整 `CALayer` API(`setBackgroundColor`/
-# `setCornerRadius` 编译期直接报"方法不存在"),显式声明成直接依赖并开
-# `CALayer` feature 才能用;`Cargo.lock` 里已有同版本(0.3.2),pin 一致。
-objc2-quartz-core = { version = "=0.3.2", features = ["CALayer"] }
 # 预览 webview 的 ⌘F 兜底:页面内没有可聚焦的搜索框时,调 WKWebView 原生
 # `findString:withConfiguration:completionHandler:` 弹出 macOS 系统查找条。
 # 该 API 在 objc2-web-kit 里被 `WKFindConfiguration`+`WKFindResult`+`block2`

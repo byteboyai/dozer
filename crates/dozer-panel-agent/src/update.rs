@@ -511,6 +511,9 @@ pub fn spawn_new_tab(
                 forward_events(tab_id, rx, emit).await;
             }
             Err(e) => {
+                // create 已在守护进程里建好会话,但没有 `Attached`,产品拿不到会话 id,
+                // 没人能结束它。先尽力 kill,再上报 attach 的错误;kill 失败不覆盖它。
+                let _ = svc.kill(info.id.clone()).await;
                 emit(Message::Failed {
                     key: KEY_ATTACH_SESSION,
                     error: e.to_string(),
@@ -601,6 +604,10 @@ mod tests {
         }
         fn with_attach_err(self, e: ServiceError) -> Self {
             self.inner.lock().unwrap().attach_err = Some(e);
+            self
+        }
+        fn with_kill_err(self, e: ServiceError) -> Self {
+            self.inner.lock().unwrap().kill_err = Some(e);
             self
         }
         fn with_write_err(self, e: ServiceError) -> Self {
@@ -1386,6 +1393,64 @@ mod tests {
             None,
         );
         let msg = rx.recv().await.expect("message");
+        update(&mut state, msg, &ctx, |_| {});
+        let notices = state.take_outbox();
+        assert_eq!(notices[0].key.as_deref(), Some("attach-session-failed"));
+        assert!(state.tabs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn attach_failure_kills_the_session_that_create_already_made() {
+        // create 成功、attach 失败:守护进程里会话已经存在,产品拿不到 `Attached`
+        // 也就拿不到会话 id,没人能 kill。库自己在 attach 失败时收尾,不留孤儿。
+        let mut h = Harness::new();
+        h.svc = Arc::new(FakeSvc::default().with_attach_err(err()));
+        let svc = h.svc();
+        let handle = tokio::runtime::Handle::current();
+        let ctx = h.ctx(&svc, &handle, &|_| {});
+        let mut state = AgentPanelState::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        spawn_new_tab(
+            &mut state,
+            &ctx,
+            move |m| {
+                let _ = tx.send(m);
+            },
+            PickerLaunch::Agent(Some(AgentKind::Claude)),
+            None,
+        );
+        let msg = rx.recv().await.expect("failed message");
+        assert!(matches!(msg, Message::Failed { .. }));
+        let calls = h.svc.calls();
+        assert!(
+            calls.iter().any(|c| c.starts_with("kill(")),
+            "attach 失败后必须 kill 已创建的会话,实际调用: {calls:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_kill_after_attach_failure_still_reports_the_attach_error() {
+        let mut h = Harness::new();
+        h.svc = Arc::new(
+            FakeSvc::default()
+                .with_attach_err(err())
+                .with_kill_err(err()),
+        );
+        let svc = h.svc();
+        let handle = tokio::runtime::Handle::current();
+        let ctx = h.ctx(&svc, &handle, &|_| {});
+        let mut state = AgentPanelState::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        spawn_new_tab(
+            &mut state,
+            &ctx,
+            move |m| {
+                let _ = tx.send(m);
+            },
+            PickerLaunch::Agent(Some(AgentKind::Claude)),
+            None,
+        );
+        let msg = rx.recv().await.expect("failed message");
         update(&mut state, msg, &ctx, |_| {});
         let notices = state.take_outbox();
         assert_eq!(notices[0].key.as_deref(), Some("attach-session-failed"));

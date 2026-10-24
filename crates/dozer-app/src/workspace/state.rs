@@ -14,7 +14,7 @@ use crate::extensions::ssh;
 use crate::extensions::todo;
 use crate::extensions::usage;
 use crate::osc::OscScanner;
-use crate::preview::{PreviewPane, TabKind};
+use crate::preview::PreviewPane;
 use crate::project::FileTree;
 use crate::term::term_model::TerminalModel;
 use crate::transcript::ReviewEntry;
@@ -1031,62 +1031,7 @@ impl Workspace {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let context = self
-            .preview
-            .tabs()
-            .get(self.preview.active_idx())
-            .and_then(|tab| {
-                let TabKind::File(path) = &tab.kind else {
-                    return None;
-                };
-                let path_str = path.to_string_lossy().into_owned();
-                // 两套后端:老 iced `CodeView`(editor)与 CodeMirror host
-                // (uses_codemirror,正文在 WebView,这里只读镜像字段)。其余
-                // CodeMirror/JSON host(镜像字段)或表格;其余不提供文本上下文。
-                let (mut ctx, read_only) = if tab.uses_editor_host() {
-                    (
-                        preview_context_from_web_state(
-                            &path_str,
-                            tab.web_selection,
-                            tab.web_selected_text.clone(),
-                            tab.web_viewport,
-                            tab.web_revision,
-                            now_ms,
-                        ),
-                        tab.backend_read_only(),
-                    )
-                } else if let Some(view) = tab.tabular_view() {
-                    // 表格预览:sheet、逻辑滚动锚点、选中单元格/范围(T12)。
-                    let (selected_cell, selected_range) = match view.selection {
-                        Some((r1, c1, r2, c2)) if r1 == r2 && c1 == c2 => {
-                            (Some((r1 as u32, c1 as u32)), None)
-                        }
-                        Some((r1, c1, r2, c2)) => {
-                            (None, Some((r1 as u32, c1 as u32, r2 as u32, c2 as u32)))
-                        }
-                        None => (None, None),
-                    };
-                    let mut c = dozer_core::protocol::PreviewContext {
-                        path: path_str.clone(),
-                        updated_at_ms: now_ms,
-                        ..Default::default()
-                    };
-                    c.tabular = Some(dozer_core::protocol::PreviewTabularContext {
-                        sheet: view.active_sheet,
-                        scroll_row: view.scroll_row as u32,
-                        scroll_col: view.scroll_col as u32,
-                        selected_cell,
-                        selected_range,
-                        ..Default::default()
-                    });
-                    (c, false)
-                } else {
-                    return None;
-                };
-                ctx.mode = tab.current_mode().map(|m| mode_token(m).to_string());
-                ctx.read_only = read_only;
-                Some(ctx)
-            });
+        let context = dozer_panel_preview::build_preview_context(&self.preview, now_ms);
 
         let nonce = self
             .preview_context_nonce
@@ -1701,36 +1646,15 @@ impl Workspace {
         &self,
         cmd: &dozer_core::protocol::PreviewCommand,
     ) -> Option<(PanelKind, usize)> {
-        use dozer_core::protocol::PreviewCommandTarget;
-        match &cmd.target {
-            PreviewCommandTarget::Tab { panel, tab_id } => Some((
-                if panel == "project" {
-                    PanelKind::Project
-                } else {
-                    PanelKind::Files
-                },
-                *tab_id,
-            )),
-            PreviewCommandTarget::Path { path } => {
-                let want = std::path::Path::new(path);
-                if let Some(id) = self
-                    .preview
-                    .tabs()
-                    .iter()
-                    .find(|t| matches!(&t.kind, TabKind::File(p) if p == want))
-                    .map(|t| t.id)
-                {
-                    Some((PanelKind::Files, id))
-                } else {
-                    self.project_preview
-                        .tabs()
-                        .iter()
-                        .find(|t| matches!(&t.kind, TabKind::File(p) if p == want))
-                        .map(|t| t.id)
-                        .map(|id| (PanelKind::Project, id))
-                }
-            }
-        }
+        let (panel, tab_id) =
+            dozer_panel_preview::resolve_command_target(&self.preview, &self.project_preview, cmd)?;
+        let panel = match panel {
+            dozer_preview_core::resources::ViewerPanel::Project => PanelKind::Project,
+            // GitLog 不在 Agent 命令的目标范围里;按 Files 兜底(不新增行为)。
+            dozer_preview_core::resources::ViewerPanel::Files
+            | dozer_preview_core::resources::ViewerPanel::GitLog => PanelKind::Files,
+        };
+        Some((panel, tab_id))
     }
 
     /// `kind` 面板的 Find 条当前是否显示(main.rs Esc/⌘ 键盘路由、视图渲染分层
