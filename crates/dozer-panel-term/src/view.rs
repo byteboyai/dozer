@@ -80,6 +80,35 @@ fn fill_cell_text(
     });
 }
 
+/// 画一个私有区图标:用内置符号字体,并均匀缩小到恰好占一个终端格(字形本身宽 1 em,
+/// 比约 0.6 em 的终端格宽,不缩就会盖住后面的字符)。以行盒左侧中点为锚点缩放,
+/// 图标在行内保持垂直居中。
+fn fill_symbol_text(
+    frame: &mut canvas::Frame,
+    content: String,
+    x: f32,
+    y: f32,
+    color: Color,
+    style: &TermStyle,
+) {
+    let scale = crate::symbols::scale_for_cell(style.cell_width(), style.scaled_font_size());
+    let half = style.line_height_px() / 2.0;
+    frame.with_save(|frame| {
+        frame.translate(Vector::new(x, y + half));
+        frame.scale(scale);
+        frame.translate(Vector::new(0.0, -half));
+        frame.fill_text(canvas::Text {
+            content,
+            position: Point::ORIGIN,
+            color,
+            size: Pixels(style.scaled_font_size()),
+            line_height: LineHeight::Absolute(Pixels(style.line_height_px())),
+            font: crate::symbols::font(),
+            ..canvas::Text::default()
+        });
+    });
+}
+
 /// canvas 交互产生的事件。库不依赖产品的消息类型:调用方传入
 /// `fn(T, TermEvent) -> M` 把它们映射成自己的消息。
 ///
@@ -125,6 +154,9 @@ struct Run {
     /// 宽字符（CJK 等）本体 run：`cells == 2` 不能当宽字符判据——两个窄
     /// 字符合并的 run 也可能 `cells == 2`（如 "ab"）,必须显式记录。
     wide: bool,
+    /// 私有区字符(Nerd Font 图标)run:固定用内置符号字体画,每个字符独占一个 run,
+    /// 不交给系统回退(见 [`crate::symbols`])。
+    symbols: bool,
 }
 
 /// RGB 三元组，配 [`Run::bg`] 这类"可能没有显式背景"的字段用。
@@ -162,6 +194,22 @@ fn layout_runs(row: &[Cell], term_bg: (u8, u8, u8)) -> Vec<Run> {
             col += 1;
             continue;
         }
+        if crate::symbols::is_private_use(cell.ch) {
+            let (fg, bg) = effective_colors(cell, term_bg);
+            runs.push(Run {
+                col,
+                cells: 1,
+                text: cell.ch.to_string(),
+                fg,
+                bg,
+                bold: false,
+                selected: cell.selected,
+                wide: false,
+                symbols: true,
+            });
+            col += 1;
+            continue;
+        }
         if cell.wide {
             let (fg, bg) = effective_colors(cell, term_bg);
             runs.push(Run {
@@ -173,6 +221,7 @@ fn layout_runs(row: &[Cell], term_bg: (u8, u8, u8)) -> Vec<Run> {
                 bold: cell.bold,
                 selected: cell.selected,
                 wide: true,
+                symbols: false,
             });
             col += 2; // 本体 + spacer
             continue;
@@ -188,7 +237,12 @@ fn layout_runs(row: &[Cell], term_bg: (u8, u8, u8)) -> Vec<Run> {
                 let (fg, bg) = effective_colors(c, term_bg);
                 (fg, bg, c.bold, c.selected)
             };
-            if c.wide || c.spacer || blank || c_style != style {
+            if c.wide
+                || c.spacer
+                || blank
+                || crate::symbols::is_private_use(c.ch)
+                || c_style != style
+            {
                 break;
             }
             text.push(c.ch);
@@ -203,6 +257,7 @@ fn layout_runs(row: &[Cell], term_bg: (u8, u8, u8)) -> Vec<Run> {
             bold: style.2,
             selected: style.3,
             wide: false,
+            symbols: false,
         });
     }
     runs
@@ -531,15 +586,19 @@ where
                         },
                     );
                 }
-                fill_cell_text(
-                    &mut frame,
-                    run.text,
-                    x,
-                    y,
-                    rgb(run.fg),
-                    cell_font(self.style, run.bold),
-                    self.style,
-                );
+                if run.symbols {
+                    fill_symbol_text(&mut frame, run.text, x, y, rgb(run.fg), self.style);
+                } else {
+                    fill_cell_text(
+                        &mut frame,
+                        run.text,
+                        x,
+                        y,
+                        rgb(run.fg),
+                        cell_font(self.style, run.bold),
+                        self.style,
+                    );
+                }
             }
         }
 
@@ -854,6 +913,83 @@ mod tests {
         assert_eq!((ascii.cells, ascii.wide), (2, false));
         let cjk = &layout_runs(&row_of("你".as_bytes(), 40), TEST_TERM_BG)[0];
         assert_eq!((cjk.cells, cjk.wide), (2, true));
+    }
+
+    #[test]
+    fn private_use_chars_get_their_own_one_cell_symbols_run() {
+        // Nerd Font 图标在私有区。中文系统字体(Songti 等)也在 U+E000 附近放 GB18030
+        // 自定义字,回退时会抢先命中,把 Rust/文件夹图标画成不相关的汉字。所以私有区字符
+        // 固定走内置符号字体,且每个字符独占一个 run(各自定位在自己的列,不累积漂移)。
+        let runs = layout_runs(&row_of("a\u{e7a8}b".as_bytes(), 40), TEST_TERM_BG);
+        let shape: Vec<_> = runs
+            .iter()
+            .map(|r| (r.col, r.cells, r.text.as_str(), r.symbols))
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                (0, 1, "a", false),
+                (1, 1, "\u{e7a8}", true),
+                (2, 1, "b", false)
+            ]
+        );
+    }
+
+    #[test]
+    fn consecutive_private_use_chars_are_one_run_each() {
+        let runs = layout_runs(&row_of("\u{f15b}\u{f115}".as_bytes(), 40), TEST_TERM_BG);
+        let shape: Vec<_> = runs.iter().map(|r| (r.col, r.cells, r.symbols)).collect();
+        assert_eq!(shape, vec![(0, 1, true), (1, 1, true)]);
+    }
+
+    #[test]
+    fn supplementary_private_use_also_uses_the_symbols_font() {
+        // Nerd Font v3 的 Material Design 图标在补充私有区 A(U+F0000 起)。
+        let runs = layout_runs(&row_of("\u{f0001}".as_bytes(), 40), TEST_TERM_BG);
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].symbols);
+    }
+
+    #[test]
+    fn ordinary_ascii_and_cjk_never_use_the_symbols_font() {
+        let runs = layout_runs(&row_of("ab你好cd".as_bytes(), 40), TEST_TERM_BG);
+        assert!(runs.iter().all(|r| !r.symbols), "{runs:?}");
+    }
+
+    #[test]
+    fn private_use_ranges_have_exact_boundaries() {
+        use crate::symbols::is_private_use;
+        for (c, expect) in [
+            ('\u{d7ff}', false),
+            ('\u{e000}', true),
+            ('\u{f8ff}', true),
+            ('\u{f900}', false),
+            ('\u{effff}', false),
+            ('\u{f0000}', true),
+            ('\u{ffffd}', true),
+            ('\u{ffffe}', false),
+            ('\u{100000}', true),
+            ('\u{10fffd}', true),
+            ('a', false),
+            ('你', false),
+        ] {
+            assert_eq!(is_private_use(c), expect, "U+{:X}", c as u32);
+        }
+    }
+
+    #[test]
+    fn symbol_scale_fits_one_cell_and_never_enlarges() {
+        use crate::symbols::scale_for_cell;
+        assert!((scale_for_cell(7.8, 13.0) - 0.6).abs() < 1e-4);
+        assert_eq!(scale_for_cell(20.0, 13.0), 1.0, "格比字形宽时不放大");
+        assert_eq!(scale_for_cell(0.0, 13.0), 0.0);
+    }
+
+    #[test]
+    fn the_bundled_symbols_font_is_a_truetype_font() {
+        // 0x00010000 是 TrueType(glyf)的 sfnt 版本号。
+        assert_eq!(&crate::symbols::SYMBOLS_FONT_DATA[..4], &[0, 1, 0, 0]);
+        assert!(crate::symbols::SYMBOLS_FONT_DATA.len() > 1_000_000);
     }
 
     #[test]

@@ -31,6 +31,9 @@ pub fn load_embedded_fonts() {
         .expect("锁定 font system");
     let db = font_system.raw().db_mut();
     db.load_font_data(JETBRAINS_MONO.to_vec());
+    // 终端里 Nerd Font 图标(私有区)专用的符号字体,由终端库内置;不注册的话回退会
+    // 落到中文字体放在私有区的 GB18030 自定义字上,图标显示成不相关的汉字。
+    db.load_font_data(dozer_panel_term::symbols::SYMBOLS_FONT_DATA.to_vec());
 }
 
 /// 代码/终端字体的统一描述符：JetBrains Mono（variable，bold 等变体由
@@ -105,6 +108,60 @@ mod tests {
             .faces()
             .any(|f| f.families.iter().any(|(n, _)| n.contains("GB18030")));
         assert!(!poisoned, "GB18030 Bitmap 仍在 fontdb 中");
+    }
+
+    /// 用排版引擎实测某个私有区字符最终由哪个字体画、占多宽。
+    fn shape_one(ch: char, family: &str) -> (String, f32) {
+        use iced_wgpu::graphics::text::cosmic_text::{Attrs, Buffer, Family, Metrics, Shaping};
+        let mut fs = iced_wgpu::graphics::text::font_system()
+            .write()
+            .expect("font system");
+        let raw = fs.raw();
+        let mut buf = Buffer::new(raw, Metrics::new(13.0, 18.0));
+        buf.set_text(
+            raw,
+            &ch.to_string(),
+            &Attrs::new().family(Family::Name(family)),
+            Shaping::Advanced,
+            None,
+        );
+        buf.shape_until_scroll(raw, false);
+        let glyph = buf
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter())
+            .next()
+            .expect("至少一个字形")
+            .clone();
+        let name = raw
+            .db()
+            .face(glyph.font_id)
+            .and_then(|f| f.families.first().map(|(n, _)| n.clone()))
+            .unwrap_or_default();
+        (name, glyph.w)
+    }
+
+    #[test]
+    fn nerd_font_icons_are_drawn_by_the_bundled_symbols_font_not_a_cjk_fallback() {
+        // U+E7A8 是 Nerd Font 的 Rust 图标。macOS 的 Songti 等中文字体在这个码位放着
+        // GB18030 自定义字,回退时会抢先命中,图标就成了不相关的汉字(宽 2 格)。
+        load_embedded_fonts();
+        sanitize_font_db();
+        for ch in ['\u{e7a8}', '\u{e5ff}', '\u{f15b}', '\u{f0001}'] {
+            let (name, width) = shape_one(ch, dozer_panel_term::symbols::SYMBOLS_FONT_FAMILY);
+            assert_eq!(
+                name,
+                dozer_panel_term::symbols::SYMBOLS_FONT_FAMILY,
+                "U+{:X} 应由内置符号字体绘制,实际: {name}",
+                ch as u32
+            );
+            // 终端库按"字形宽 = 1 em"把图标缩放到一个终端格(`symbols::scale_for_cell`),
+            // 这个前提变了缩放就会错,所以在这里钉死。字号 13 → 宽 13。
+            assert!(
+                (width - 13.0).abs() < 0.5,
+                "U+{:X} 字形宽 {width} 应为 1 em(13)",
+                ch as u32
+            );
+        }
     }
 
     #[test]
