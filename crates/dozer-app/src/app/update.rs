@@ -4475,6 +4475,45 @@ impl App {
         project_id: ProjectId,
         msg: dozer_panel_agent::update::Message,
     ) {
+        // macOS:页签溢出走原生菜单(与预览、SSH 一致),选中项回投 `SelectTab`。
+        // S6c 把 Agent 面板搬进共享库时丢了这条分支,于是 macOS 上走 iced 浮层、锚点 `(0, 0)`。
+        #[cfg(target_os = "macos")]
+        if matches!(
+            msg,
+            dozer_panel_agent::update::Message::OverflowToggle { .. }
+        ) {
+            let cursor = self.last_cursor;
+            let entries: Vec<(usize, String, bool)> =
+                match loaded_workspace_mut(&mut self.projects, project_id) {
+                    Some(ws) => ws
+                        .agent
+                        .tabs
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, tab)| {
+                            (
+                                idx,
+                                dozer_panel_agent::tabs::tab_title(
+                                    tab.agent,
+                                    tab.cwd.as_deref(),
+                                    &tab.info.name,
+                                ),
+                                idx == ws.agent.active,
+                            )
+                        })
+                        .collect(),
+                    None => Vec::new(),
+                };
+            let items = tab_widget::tab_overflow_items(&entries, move |i| {
+                Message::Agent(project_id, dozer_panel_agent::update::Message::SelectTab(i))
+            });
+            if let Some(msg) = crate::chrome::native_menu::show(items, cursor) {
+                self.update(msg);
+            }
+            return;
+        }
+        // 其他平台:iced 浮层,锚点取光标(库视图拿不到按钮位置,`at: None` 会退回 `(0, 0)`)。
+        let msg = with_overflow_cursor(msg, self.last_cursor);
         let avail_px = self.terminal_tab_bar_avail_px();
         // 按下页签栏里的页签＝选中＋准备被拖走;卡片列表用 `SelectTabNoDrag`,不武装。
         let pressed_tab = match &msg {
@@ -5426,5 +5465,61 @@ mod review_trace_tests {
         assert!(refresh_open_conversation_summary(&mut review, &mut nonce, &row).is_none());
         assert_eq!(nonce, 5);
         assert_eq!(review.as_ref().unwrap().nonce, 5);
+    }
+}
+
+/// 溢出下拉的锚点:库视图拿不到按钮位置,发出的 `OverflowToggle` 带 `at: None`,库对此退回
+/// `(0, 0)`。这里把当前光标位置补上(迁移前就是取光标);已有位置的原样保留。
+fn with_overflow_cursor(
+    msg: dozer_panel_agent::update::Message,
+    cursor: (f32, f32),
+) -> dozer_panel_agent::update::Message {
+    use dozer_panel_agent::update::Message as AM;
+    match msg {
+        AM::OverflowToggle { at: None } => AM::OverflowToggle { at: Some(cursor) },
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod agent_overflow_anchor_tests {
+    use super::*;
+    use dozer_panel_agent::update::Message as AM;
+
+    #[test]
+    fn an_overflow_toggle_without_a_position_gets_the_cursor() {
+        // 库视图拿不到按钮位置,发的是 `at: None`,库对此退回 `(0, 0)`——菜单就跑到窗口
+        // 左上角(S6c 把 Agent 面板搬进库时丢了迁移前"锚点取光标"的行为)。
+        let msg = with_overflow_cursor(AM::OverflowToggle { at: None }, (321.0, 45.0));
+        assert!(matches!(
+            msg,
+            AM::OverflowToggle {
+                at: Some((321.0, 45.0))
+            }
+        ));
+    }
+
+    #[test]
+    fn an_explicit_position_is_kept() {
+        let msg = with_overflow_cursor(
+            AM::OverflowToggle {
+                at: Some((1.0, 2.0)),
+            },
+            (9.0, 9.0),
+        );
+        assert!(matches!(
+            msg,
+            AM::OverflowToggle {
+                at: Some((1.0, 2.0))
+            }
+        ));
+    }
+
+    #[test]
+    fn other_messages_pass_through_untouched() {
+        assert!(matches!(
+            with_overflow_cursor(AM::SelectTab(3), (9.0, 9.0)),
+            AM::SelectTab(3)
+        ));
     }
 }
