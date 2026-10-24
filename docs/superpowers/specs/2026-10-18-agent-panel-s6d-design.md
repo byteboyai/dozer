@@ -4,7 +4,12 @@
 
 
 - 日期:2026-10-18
-- 状态:设计稿,待用户审阅
+- 状态:**代码已实现并合入 Digger 本地 `main`(`52df4b9`,2026-10-24,未推送);真机回归、Dozer 对照与发布未完成**
+- 实施状态(2026-10-24):
+  - S6d-1(探针与骨架)已完成;输入法探针五项由用户真机验证通过(2026-10-23)。
+  - S6d-2 Part B(会话、恢复、选择器、网格同步、键盘/指针/粘贴/拖入/输入法)已完成并经审核,含一次补测试与"关项目时回收在途 create 的孤儿会话"的修复。
+  - S6d-3(页签外观、悬停阶跃、溢出菜单、拖拽换位、`agent_gallery` 画廊)已完成并经审核;为让画廊复用产品适配层,`crates/desktop` 拆出了 `lib.rs`(计划外的结构变动)。
+  - 未完成:S6d-2 Task 7 真机回归;S6d-3 的 Dozer 逐状态截图对照、压力与同机并存回归、发布(Dozer 与 Digger 各一个版本)。
 - 路径:架构级,**分三期交付,每期单独写实施计划**(S6d-1 探针与骨架、S6d-2 会话与终端、S6d-3 页签条与菜单、真机回归)
 - 相关:`2026-10-18-agent-panel-s6-design.md`(S6 总设计)、`2026-10-18-agent-panel-s6c-design.md`、`plans/2026-10-18-agent-s6a-daemon-identity.md`(`diggerd` 已在跑)、`plans/2026-10-18-agent-s6b-term-lib.md`、`plans/2026-10-18-agent-s6c1-session-state.md`、`plans/2026-10-18-agent-s6c2-views.md`、`2026-10-18-project-panel-s5a-design.md`(Project 面板的接入方式是本文的模板)、`2026-10-14-window-shell-design.md`
 

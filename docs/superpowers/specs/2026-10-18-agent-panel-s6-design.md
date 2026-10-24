@@ -4,7 +4,12 @@
 
 
 - 日期:2026-10-18
-- 状态:设计稿,待用户审阅
+- 状态:**代码已实现并合入 Digger 本地 `main`(`52df4b9`,2026-10-24,未推送);真机验收与发布未完成**
+- 实施状态(2026-10-24):
+  - Dozer 侧(S6a Part A、S6b、S6c-1、S6c-2、S6d-2 Part A、S6e-1)已完成,库快照 tag 为 `libs-2026-10-23b`。
+  - Digger 侧代码已完成并经审核:S6a Part C(`diggerd`、`digger-hook`、`digger.db`)、S6d-1、S6d-2 Part B(含 Task 5 键盘与输入法、审核补修)、S6d-3、S6e-2。合并后干净快照 536 通过 / 0 失败,clippy 仅基线警告。
+  - 未完成:各期报告里的真机项(见 S6d、S6e 文档)、与 Dozer 的逐状态对照、Dozer 与 Digger 各发一个版本(M1 的发布要求)。因此 M1 **尚不能算完成**。
+  - 已知遗留:库侧 `create` 成功但 `attach` 失败时会留下孤儿会话(产品侧无会话 id,需库配合);`apps::tests::closing_during_startup_waits_and_releases_the_root` 偶发失败(旧有竞态,已决定暂不处理)。
 - 路径:架构级,**分四期交付,每期单独写实施计划**(S6a 守护进程与产品身份、S6b 终端控件库、S6c Agent 面板库、S6d Digger 接入)
 - 相关:ADR-014(产品运行时互相独立、只共享代码)、ADR-011(bytehost 进程内应用宿主)、`2026-10-18-project-panel-s5a-design.md`(Project 与项目注册表)、Dozer `2026-07-18-dozer-p1e-agent-integration-design.md`、`2026-08-16-agent-card-workspace-design.md`
 

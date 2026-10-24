@@ -4,7 +4,8 @@
 
 
 - 日期:2026-10-18
-- 状态:设计稿,待用户审阅
+- 状态:**已实现**(S6c-1、S6c-2 均在 Dozer 完成,库为 `dozer-panel-agent`,tag `libs-2026-10-23b`);Digger 已按该 tag 接入并合入本地 `main`(2026-10-24)
+- 实施状态(2026-10-24):拖拽换位入口按审核调整为 `update::reorder_term_tab(state, from, to)`,库不再提供"消息一到就换位"的入口,拖拽手势由产品的状态机负责;`PanelDisplay::drag_surface` 只有 `(content, index)` 两个参数。
 - 路径:架构级,**分两期交付,每期单独写实施计划**(S6c-1 会话服务与会话/页签状态、S6c-2 列表卡片、选择器与面板外壳)
 - 相关:`2026-10-18-agent-panel-s6-design.md`(S6 总设计,§6.6)、`2026-10-18-agent-s6a-daemon-identity.md`(`diggerd`、`ProductId`、hook 并排共存)、`2026-10-18-agent-s6b-term-lib.md`(`dozer-panel-term`)、Dozer `2026-10-10-project-services-design.md`(面板服务化的模板)、Dozer `2026-08-16-agent-card-workspace-design.md`
 

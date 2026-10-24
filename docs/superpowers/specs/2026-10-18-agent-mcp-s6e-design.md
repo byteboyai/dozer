@@ -4,7 +4,12 @@
 
 
 - 日期:2026-10-18
-- 状态:设计稿,待用户审阅
+- 状态:**S6e-1、S6e-2 已实现**(S6e-1 在 Dozer,S6e-2 已合入 Digger 本地 `main`,2026-10-24,未推送);真机项未完成;S6e-3 未做
+- 实施状态(2026-10-24):
+  - `digger-mcp` 只暴露 `write_memory` / `list_memories` / `get_memory` 三个工具;与 `dozer-mcp` 并存,另一产品会话里进入零工具安静模式;安装每进程每种 Agent 只尝试一次,退出码 3(同名条目被保护)只提示一次。
+  - Project 面板在 Agent 回合结束且面板可见时刷新记忆,这是相对 Dozer 的有意改进。
+  - 打包脚本与 `release.sh` 已校验 `digger-mcp`。MCP 不单独发布,随面板迁移的发布一起带上。
+  - 未完成:报告列出的 8 项真机项(尤其是各 Agent 对零工具服务的显示);S6e-3(待办、预览、编辑工具)依赖待办面板与预览引擎,本期不做。
 - 路径:架构级,**分两期**(S6e-1 Dozer 把 `dozer-mcp` 变成可按产品配置的共享库、S6e-2 Digger 接入);另有一期**依赖其它面板、现在不做**的 S6e-3(待办工具、预览与文件编辑工具)
 - 相关:`2026-10-18-agent-panel-s6-design.md`(S6 的 §4 把本期留到 S6e;hook 并排共存的做法是本文的模板)、`plans/2026-10-18-agent-s6a-daemon-identity.md`(`ProductId`、`dozer-hook` 的 `run_main`)、`plans/2026-10-18-agent-s6d2-sessions.md`(`HookInstaller::ensure_mcp`、`AgentCapabilities::mcp_install`)
 
