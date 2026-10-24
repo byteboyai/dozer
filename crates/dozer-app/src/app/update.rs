@@ -1484,13 +1484,10 @@ impl App {
                 let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
                     return;
                 };
-                if let Some(id) = ws.preview.find_existing_file_tab(&path) {
-                    ws.preview.bump_reload(id);
+                if bump_reload_for_path(&mut ws.preview, &path) {
                     return;
                 }
-                if let Some(id) = ws.project_preview.find_existing_file_tab(&path) {
-                    ws.project_preview.bump_reload(id);
-                }
+                bump_reload_for_path(&mut ws.project_preview, &path);
             }
 
             Message::Files(files::Message::TabContextMenuCloseTab(_kind, path)) => {
@@ -5471,6 +5468,19 @@ mod review_trace_tests {
     }
 }
 
+/// 按路径重载一个文件页签。`find_existing_file_tab` 返回页签**下标**,`bump_reload` 要页签 **id**——
+/// 关过页签后两者不再相等,不能把下标当 id 传。找不到该路径的页签返回 `false`。
+fn bump_reload_for_path(pane: &mut crate::preview::PreviewPane, path: &std::path::Path) -> bool {
+    let Some(idx) = pane.find_existing_file_tab(path) else {
+        return false;
+    };
+    let Some(tab_id) = pane.tabs().get(idx).map(|tab| tab.id) else {
+        return false;
+    };
+    pane.bump_reload(tab_id);
+    true
+}
+
 /// 溢出下拉的锚点:库视图拿不到按钮位置,发出的 `OverflowToggle` 带 `at: None`,库对此退回
 /// `(0, 0)`。这里把当前光标位置补上(迁移前就是取光标);已有位置的原样保留。
 fn with_overflow_cursor(
@@ -5540,6 +5550,48 @@ mod agent_overflow_anchor_tests {
         assert!(matches!(
             with_overflow_cursor(AM::SelectTab(3), (9.0, 9.0)),
             AM::SelectTab(3)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod reload_by_path_tests {
+    use super::*;
+    use crate::preview::PreviewPane;
+
+    fn touch(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, "x\n").unwrap();
+        p
+    }
+
+    #[test]
+    fn reloading_by_path_bumps_the_right_tab_after_another_tab_was_closed() {
+        // `find_existing_file_tab` 返回页签**下标**,`bump_reload` 要页签 **id**。关过页签后两者
+        // 不再相等:原来直接把下标当 id 传,会重载错页签(或者什么也没发生)。
+        let dir = std::env::temp_dir().join(format!("dozer-reload-by-path-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (touch(&dir, "a.rs"), touch(&dir, "b.rs"));
+        let mut pane = PreviewPane::default();
+        let a_idx = pane.open_path(a.clone());
+        let _b_idx = pane.open_path(b.clone());
+        pane.close(a_idx);
+        assert!(bump_reload_for_path(&mut pane, &b));
+        let bumped: Vec<String> = pane
+            .tabs()
+            .iter()
+            .filter(|t| t.reload_nonce > 0)
+            .map(|t| t.title.clone())
+            .collect();
+        assert_eq!(bumped, vec!["b.rs".to_string()]);
+    }
+
+    #[test]
+    fn reloading_an_unopened_path_is_a_no_op() {
+        let mut pane = PreviewPane::default();
+        assert!(!bump_reload_for_path(
+            &mut pane,
+            std::path::Path::new("/nope/x.rs")
         ));
     }
 }

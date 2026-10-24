@@ -369,11 +369,7 @@ mod tests {
     /// 和它们同时跑,读到 `Light` 就会断言失败(同 `color.rs`/
     /// `term_model.rs` 测试模块的教训)。凡是依赖当前方案的测试都先拿
     /// 这把锁序列化执行。
-    static SCHEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn lock_scheme() -> std::sync::MutexGuard<'static, ()> {
-        SCHEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
+    use crate::theme::test_support::lock_scheme;
 
     /// 防漂移锚:关键区域的解析结果必须和改动前的字面量完全一致——纯
     /// 代码搬家,数值不该变。以后有人手滑改错配置文件,这个测试会炸。

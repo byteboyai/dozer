@@ -104,6 +104,7 @@ fn render() -> String {
 
 #[test]
 fn preview_webview_specs_match_the_golden() {
+    let _guard = crate::theme::test_support::lock_scheme();
     let actual = render();
     if std::env::var_os("UPDATE_GOLDEN").is_some() {
         std::fs::write(GOLDEN, &actual).expect("写黄金文件");
@@ -131,7 +132,21 @@ fn preview_webview_specs_match_the_golden() {
 /// 生成黄金依赖清单是确定的:同一进程内渲染两次必须相同(排除随机 token / 时间戳)。
 #[test]
 fn rendering_the_specs_twice_gives_identical_text() {
+    // 期望清单的 URL 带当前配色方案:别的测试在两次渲染之间切方案,两次文本就不同。拿共用锁。
+    let _guard = crate::theme::test_support::lock_scheme();
     assert_eq!(render(), render());
+}
+
+/// 前提:清单确实带着当前方案——这就是上面两条测试必须拿共用锁的原因。
+#[test]
+fn the_specs_carry_the_current_color_scheme() {
+    use byteui::theme::color::{ColorScheme, set_scheme};
+    let _guard = crate::theme::test_support::lock_scheme();
+    set_scheme(ColorScheme::Light);
+    let light = render();
+    set_scheme(ColorScheme::Dark);
+    let dark = render();
+    assert_ne!(light, dark, "清单应随方案变化");
 }
 
 /// 注入脚本里"文本编辑段"是否安装,必须等价于搬迁前的 `editor_binding.is_none()`:
@@ -139,6 +154,7 @@ fn rendering_the_specs_twice_gives_identical_text() {
 #[test]
 fn text_editing_script_follows_the_editor_binding_of_every_real_spec() {
     use dozer_panel_preview::host_ipc::WebviewKind;
+    let _guard = crate::theme::test_support::lock_scheme();
     let mut seen = std::collections::HashSet::new();
     for (name, pane) in scenarios() {
         for panel in [ViewerPanel::Files, ViewerPanel::Project] {

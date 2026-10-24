@@ -95,3 +95,16 @@ pub mod homespace_color;
 pub mod homespace_font;
 pub mod region;
 pub mod terminal_font;
+
+/// 测试共用:`byteui::theme::color` 的当前配色方案是**进程级** static,cargo test 默认多线程
+/// 并跑。凡是读 / 切换当前方案的测试都要拿同一把锁——原先 `region.rs`、`homespace_color.rs`
+/// 各有一把模块私有的锁,互相不排斥,而期望清单的 URL 里带当前方案(`theme=...`),
+/// `webview_spec_golden` 的测试又完全没拿锁,于是它们在别的模块切方案的间隙里偶发失败。
+#[cfg(test)]
+pub(crate) mod test_support {
+    static SCHEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    pub(crate) fn lock_scheme() -> std::sync::MutexGuard<'static, ()> {
+        SCHEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}

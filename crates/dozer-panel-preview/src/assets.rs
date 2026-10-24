@@ -835,7 +835,11 @@ mod tests {
     }
 
     fn scratch_editor() -> (PathBuf, PathBuf) {
-        let base = std::env::temp_dir().join(format!("dozer-editor-test-{}", std::process::id()));
+        // 进程号 + 进程内自增:测试并行,每次调用都要独立目录。
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let base =
+            std::env::temp_dir().join(format!("dozer-editor-test-{}-{n}", std::process::id()));
         let flyfish = base.join("flyfish");
         let editor = base.join("editor");
         let _ = fs::create_dir_all(&flyfish);
@@ -844,6 +848,15 @@ mod tests {
         fs::write(editor.join("index.html"), b"<html>editor").unwrap();
         fs::write(editor.join("main.js"), b"js").unwrap();
         (flyfish, base)
+    }
+
+    #[test]
+    fn every_scratch_editor_call_gets_its_own_directory() {
+        // 12 个测试并行用 `scratch_editor()`;共用同一个目录名会让它们互相删建文件,
+        // `serves_editor_host_and_assets` 因此偶发失败。每次调用必须是独立目录。
+        let (_, a) = scratch_editor();
+        let (_, b) = scratch_editor();
+        assert_ne!(a, b);
     }
 
     #[test]

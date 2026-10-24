@@ -67,11 +67,7 @@ mod tests {
     /// `byteui::theme::color` 的当前配色方案是进程级共享 static，cargo
     /// test 默认多线程并跑；下面两个测试都依赖它处在 `Dark`/显式切换,
     /// 加锁序列化避免交叉(同 `region.rs` 测试模块同名锁的顾虑)。
-    static SCHEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn lock_scheme() -> std::sync::MutexGuard<'static, ()> {
-        SCHEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
+    use crate::theme::test_support::lock_scheme;
 
     /// 防漂移锚:各 token 解析结果必须和配置字面量一致——纯配置搬家,
     /// 数值不该变。以后有人手滑改错 homespace.json,这个测试会炸。
