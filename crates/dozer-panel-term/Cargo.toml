@@ -9,7 +9,7 @@ publish = false
 # dozer-client / dozer-core / dozerd / wry / portable-pty。
 [dependencies]
 alacritty_terminal.workspace = true
-byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.5" }
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.6" }
 unicode-width = "0.2"
 iced_widget = { version = "0.14", features = ["canvas"] }
 iced_renderer = "0.14"

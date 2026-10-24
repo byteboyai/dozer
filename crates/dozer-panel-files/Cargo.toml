@@ -13,7 +13,7 @@ dozer-model = { path = "../dozer-model" }
 dozer-services = { path = "../dozer-services" }
 dozer-i18n = { path = "../dozer-i18n" }
 dozer-panel-host = { path = "../dozer-panel-host" }
-byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.5" }
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.6" }
 bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1", features = ["watch"] }
 bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.11" }
 bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.11" }

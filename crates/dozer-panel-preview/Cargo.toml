@@ -28,7 +28,7 @@ unicode-width = "0.2"
 # 预览面板 iced 部分(焦点探测 Operation 等;视图在 Task 5 进库)与配色方案(跨产品共享的全局)。
 iced_widget = { version = "0.14", features = ["canvas", "svg"] }
 iced_renderer = "0.14"
-byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.5" }
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.6" }
 
 [dev-dependencies]
 tempfile = "3"
