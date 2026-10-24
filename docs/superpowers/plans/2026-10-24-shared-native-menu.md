@@ -14,7 +14,7 @@
 
 - **搬运,不改行为:** `native_menu.rs` 的函数体、尺寸常量(`SEP_ROW_HEIGHT` 等)、`dark_equivalent` 配色翻译、`MenuItemView` 的 `define_class!` 一律原样搬。Dozer 菜单外观字节不变。
 - **仅 macOS:** 整个模块 `#![cfg(target_os = "macos")]`;依赖放 `[target.'cfg(target_os = "macos")'.dependencies]`;非 macOS 构建不受影响。
-- **依赖版本:** `resvg = "=0.45.1"`、`usvg = "=0.45.1"`、`tiny-skia = { version = "=0.11.4", features = ["png"] }` 必须与 `iced_wgpu` 用的一致(Dozer `Cargo.toml` 125–132 行的注释已说明:避免重复编译);`objc2*` 版本与 Dozer、Digger 现用的一致,锁文件里不得出现两份。
+- **依赖版本:** `resvg = "=0.45.1"`、`usvg = "=0.45.1"`、`tiny-skia = { version = "=0.11.4", features = ["png"] }` 必须与 `iced_wgpu` 用的一致(Dozer `Cargo.toml` 125–132 行的注释已说明:避免重复编译);`objc2*` 版本与 Dozer、Digger 现用的一致(0.6 / 0.3 / 0.3),**不得新增重复版本**(锁文件里本来就有的 `objc2 0.5.3` 不算)。
 - **iced 版本:** byteui 与两个产品的 iced 必须同为 0.14,升 byteui 时 Dozer 与 Digger 同日一起升(项目既有约定)。
 - **库边界:** byteui 是独立仓库(`/Users/chrischiang/Projects/CoralProjects/byteboy/byteui`,`byteboyai/byteui`),只被 git tag 引用;不引入 `dozer_*` / `bytehost_*` 依赖;日志用 `tracing`(byteui 属于"独立库用裸 tracing"一类,`check-log-scope.sh` 不覆盖它)。
 - **`install_content_view` 签名:** 接收 `&dyn raw_window_handle::HasWindowHandle`,不依赖 `winit`(Digger 的窗口来自 iced 的 `window::run`,Dozer 传 `&winit::window::Window`,二者都实现该 trait)。
@@ -53,7 +53,7 @@
   - `show_with_no_items_returns_none`(**Review Focus 2**);
   - 原有的钳位、图标栅格化、`dark_equivalent` 测试照搬(**Review Focus 5**)。
   这两条测试要在不弹真实菜单的前提下运行:`show` 在内容 view 缺失与空表两种情况下都先于任何 AppKit 调用返回(原代码已如此,只补测试)。
-- [ ] **Step 4: 验证。** `cargo test`、`cargo clippy --all-targets`、`cargo fmt --check` 在 byteui 仓库全过;`cargo build --target aarch64-apple-darwin`;`cargo tree -d` 里 `objc2*`、`resvg`、`usvg`、`tiny-skia` 各只有一份(重复说明版本没对齐,停下来报告)。
+- [ ] **Step 4: 验证。** `cargo test`、`cargo clippy --all-targets`、`cargo fmt --check` 在 byteui 仓库全过;`cargo build --target aarch64-apple-darwin`;`cargo tree -d` 里 `objc2` **0.6 系列**、`objc2-app-kit`、`objc2-foundation`、`resvg`、`usvg`、`tiny-skia` 各只有一份。注意:两个产品的锁文件里本来就有两个 `objc2`(0.5.3 来自 wry / tao 一类的依赖,0.6.5 是我们自己的),这是既有状态,不算问题;判据是**不新增重复**,改动前后 `cargo tree -d` 的重复项集合相同(对不上就停下来报告)。
 - [ ] **Step 5: 提交** `feat(native_menu): macOS NSMenu moved from dozer-app (0.4.6)`。**打 tag `v0.4.6` 与推送先问用户。**
 
 ---
