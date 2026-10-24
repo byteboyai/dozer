@@ -119,7 +119,7 @@ impl App {
                 base,
                 dismiss,
                 files::context_menu_popup(&self.files, self.locale.active_locale())
-                .map(Message::Files)
+                    .map(Message::Files)
             ]
             .width(Length::Fill)
             .height(Length::Fill)
@@ -135,7 +135,7 @@ impl App {
                 base,
                 dismiss,
                 files::tab_context_menu_popup(&self.files, self.locale.active_locale())
-                .map(Message::Files)
+                    .map(Message::Files)
             ]
             .width(Length::Fill)
             .height(Length::Fill)
@@ -1816,29 +1816,26 @@ pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, ice
     byteui::layout::divider::horizontal()
 }
 
-/// 受控 tooltip:iced 0.14 的 `Tooltip` 没有"延迟显示"开关(它一悬停就弹),
-/// 所以这里不靠 `Tooltip` 自带的 hover 检测,而是**仅在 `show` 为真时才把
-/// `content` 包进 `Tooltip`**——调用方按"悬停满 2s"算好 `show`(见
-/// `App::hover_tooltip_ready` / `browser::State::hover_tooltip_ready`),满 2s
-/// 那一刻视图层才挂载 `Tooltip`,气泡随即弹出;离开即 `show` 为假,直接返回
-/// 裸 `content`,气泡消失。`position` 由调用方按页签位置定(顶栏页签用
-/// `Bottom`、底部面板页签用 `Top`,免得气泡出屏)。`label` 收 `String`(拥有
-/// 所有权),使气泡 `Element` 寿命不受调用方局部借用牵制,`Tooltip` 才能正常
-/// 把它当 overlay 渲染。
+/// 页签 / 顶栏的标题全称气泡:`content` **始终**包进 `Tooltip`,2 秒延迟交给 iced 自带的
+/// `Tooltip::delay`(它自己计时并在到期时请求重绘)。
+///
+/// 原先的做法是"悬停满 2s 才把 `content` 包进 `Tooltip`、离开就返回裸 `content`",理由是
+/// 当时认为 `Tooltip` 没有延迟开关——但 iced 0.14 有。那种做法会让控件树结构随 `show`
+/// 翻转,里面 `MouseArea` 的状态被重置成"未悬停":翻转那一帧如果光标已经离开,`on_exit`
+/// 永远不会触发,悬停底色与 × 就卡住不消失(用户反馈"tab 经常鼠标离开后 hover 色还留着")。
+/// 所以结构恒定,`show` 只保留为参数以免改动所有调用方(见测试)。`position` 由调用方按
+/// 页签位置定(顶栏页签用 `Bottom`、底部面板页签用 `Top`,免得气泡出屏)。`label` 收
+/// `String`(拥有所有权),使气泡 `Element` 寿命不受调用方局部借用牵制。
 pub(crate) fn controlled_tooltip<'a, M, R>(
     content: Element<'a, M, iced_widget::Theme, R>,
     label: String,
     position: Position,
-    show: bool,
+    _show: bool,
 ) -> Element<'a, M, iced_widget::Theme, R>
 where
     M: Clone + 'a,
     R: iced_widget::core::text::Renderer + 'a,
 {
-    // 未悬停满 2s:不包 tooltip,直接返回裸内容,避免一悬停就弹气泡打扰。
-    if !show {
-        return content;
-    }
     let bubble = container(
         text(label)
             .size(12)
@@ -1847,6 +1844,7 @@ where
     .padding([5, 9]);
     Tooltip::new(content, bubble, position)
         .gap(4)
+        .delay(super::state::HOVER_TOOLTIP_DELAY)
         .style(icons::tooltip_bubble_style())
         .into()
 }
@@ -2301,4 +2299,25 @@ pub(crate) fn ssh_empty_state<'a>(
     .align_x(iced_widget::core::alignment::Horizontal::Center)
     .align_y(iced_widget::core::alignment::Vertical::Center)
     .into()
+}
+
+#[cfg(test)]
+mod controlled_tooltip_tests {
+    use super::*;
+
+    /// 控件树的"形状":顶层控件的 tag 与子节点数。
+    fn shape(show: bool) -> (iced_widget::core::widget::tree::Tag, usize) {
+        let content: Element<'_, (), iced_widget::Theme, iced_renderer::Renderer> =
+            iced_widget::text("tab").into();
+        let el = controlled_tooltip(content, "full title".into(), Position::Top, show);
+        (el.as_widget().tag(), el.as_widget().children().len())
+    }
+
+    #[test]
+    fn the_widget_tree_shape_does_not_depend_on_show() {
+        // 到期才把页签包进 `Tooltip`,会让控件树结构翻转,里面 `MouseArea` 的状态被重置成
+        // "未悬停":翻转那一帧如果光标已经离开,`on_exit` 永远不会触发,悬停底色和 ×
+        // 就卡住不消失。结构必须恒定,是否显示气泡交给 `Tooltip` 自带的延迟。
+        assert_eq!(shape(true), shape(false), "show 不同,控件树结构必须相同");
+    }
 }
