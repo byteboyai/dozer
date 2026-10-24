@@ -10,7 +10,7 @@ use dozer_model::{PreviewCommand, PreviewCommandTarget, PreviewContext, PreviewT
 use dozer_preview_core::resources::ViewerPanel;
 
 use crate::state::{PreviewPane, TabKind};
-use crate::{PreviewMode, TextPosition, TextRange};
+use crate::{PreviewMode, TextRange};
 
 /// 由 CodeMirror host 镜像出的(路径, 1-based 选区, 可见行范围, revision,
 /// 时间)组装 1-based `PreviewContext`。选区 `start==end` 视为无选区(光标)。
@@ -101,7 +101,8 @@ pub fn build_preview_context(pane: &PreviewPane, now_ms: u64) -> Option<PreviewC
             ),
             tab.backend_read_only(),
         )
-    } else if let Some(view) = tab.tabular_view() {
+    } else {
+        let view = tab.tabular_view()?;
         let (selected_cell, selected_range) = tabular_selection(view.selection);
         let mut c = PreviewContext {
             path: path_str.clone(),
@@ -117,8 +118,6 @@ pub fn build_preview_context(pane: &PreviewPane, now_ms: u64) -> Option<PreviewC
             ..Default::default()
         });
         (c, false)
-    } else {
-        return None;
     };
     ctx.mode = tab.current_mode().map(|m| mode_token(m).to_string());
     ctx.read_only = read_only;
@@ -127,9 +126,9 @@ pub fn build_preview_context(pane: &PreviewPane, now_ms: u64) -> Option<PreviewC
 
 /// 表格选中范围 → (单格, 范围)。单点(四值相等)写 `selected_cell`,
 /// 其余写 `selected_range`。
-fn tabular_selection(
-    selection: Option<(usize, usize, usize, usize)>,
-) -> (Option<(u32, u32)>, Option<(u32, u32, u32, u32)>) {
+type TabularRanges = (Option<(u32, u32)>, Option<(u32, u32, u32, u32)>);
+
+fn tabular_selection(selection: Option<(usize, usize, usize, usize)>) -> TabularRanges {
     match selection {
         Some((r1, c1, r2, c2)) if r1 == r2 && c1 == c2 => (Some((r1 as u32, c1 as u32)), None),
         Some((r1, c1, r2, c2)) => (None, Some((r1 as u32, c1 as u32, r2 as u32, c2 as u32))),
@@ -174,6 +173,7 @@ fn find_file_tab(pane: &PreviewPane, want: &std::path::Path) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TextPosition;
     use crate::tabular::TabularView;
     use dozer_model::PreviewCommandAction;
     use std::path::PathBuf;
