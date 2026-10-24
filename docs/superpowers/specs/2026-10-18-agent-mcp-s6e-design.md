@@ -4,13 +4,15 @@
 
 
 - 日期:2026-10-18
-- 状态:**S6e-1、S6e-2 已实现**(S6e-1 在 Dozer,S6e-2 已合入 Digger 本地 `main`,2026-10-24,未推送);真机项未完成;S6e-3 未做
+- 状态:**S6e-1、S6e-2、S6e-3a 已实现**(S6e-1 在 Dozer;S6e-2 与 S6e-3a 已合入 Digger 本地 `main`,2026-10-24,未推送);真机项未完成;S6e-3b(待办工具)未做
 - 实施状态(2026-10-24):
-  - `digger-mcp` 只暴露 `write_memory` / `list_memories` / `get_memory` 三个工具;与 `dozer-mcp` 并存,另一产品会话里进入零工具安静模式;安装每进程每种 Agent 只尝试一次,退出码 3(同名条目被保护)只提示一次。
+  - `digger-mcp` 现暴露七个工具:记忆三个(`write_memory` / `list_memories` / `get_memory`)加 S6e-3a 打开的预览 / 定位 / 编辑四个(`get_preview_context` / `preview_navigate` / `locate_in_file` / `apply_precise_edit`);待办与总结工具仍不出现。与 `dozer-mcp` 并存,另一产品会话里进入零工具安静模式;安装每进程每种 Agent 只尝试一次,退出码 3(同名条目被保护)只提示一次。
   - Project 面板在 Agent 回合结束且面板可见时刷新记忆,这是相对 Dozer 的有意改进。
   - 打包脚本与 `release.sh` 已校验 `digger-mcp`。MCP 不单独发布,随面板迁移的发布一起带上。
-  - 未完成:报告列出的 8 项真机项(尤其是各 Agent 对零工具服务的显示);S6e-3(待办、预览、编辑工具)依赖待办面板与预览引擎,本期不做。
-- 路径:架构级,**分两期**(S6e-1 Dozer 把 `dozer-mcp` 变成可按产品配置的共享库、S6e-2 Digger 接入);另有一期**依赖其它面板、现在不做**的 S6e-3(待办工具、预览与文件编辑工具)
+  - **S6e-3a(预览 / 定位 / 精确编辑)已实现:** 先把预览上下文构造、模式 token、命令目标解析抽进共享库 `dozer-panel-preview::agent_bridge`(Dozer 改引用、行为不变、测试守恒),tag `libs-2026-10-24a`(指向分支顶端 `48b84fba`,**Dozer 侧 `feat/preview-bridge-lib` 尚未合并 `main`**,合并时注意 `main` 上的自动发版流程)。Digger 侧新增 `adapters/preview_bridge.rs`:向 `diggerd` 推送当前项目 Files 面板的预览上下文(普通变化防抖 250 ms,切页签 / 关页签 / 失焦 / 切项目立即推),并轮询、执行 Agent 发来的预览命令(失败退避,上限 5 s)。计划:`plans/2026-10-24-mcp-s6e3a-preview-bridge.md`;报告:Dozer `reviews/2026-10-24-s6e3a-parta-report.md`、Digger `docs/superpowers/reviews/2026-10-24-s6e3a-report.md`。
+  - **S6e-3a 与 Dozer 的已知差异:** Digger 一次只持当前项目的预览页签,后台项目的命令立即回 `NotFound`;命令目标必须是已打开的页签,未打开的文件回 `NotFound`;工具描述仍写"Dozer 预览面板"(未改 `dozer-mcp`)。
+  - 未完成:S6e-2 的 8 项、S6e-3a 的 9 项真机项(尤其是各 Agent 对零工具服务的显示、`apply_precise_edit` 落盘与过期版本被拒的真机表现);**S6e-3b(待办工具)依赖待办面板接入 Digger,本期不做。**
+- 路径:架构级,**分两期**(S6e-1 Dozer 把 `dozer-mcp` 变成可按产品配置的共享库、S6e-2 Digger 接入);另有 S6e-3:其中预览与文件编辑工具已作为 S6e-3a 完成,**依赖待办面板、现在不做**的只剩 S6e-3b(待办工具)
 - 相关:`2026-10-18-agent-panel-s6-design.md`(S6 的 §4 把本期留到 S6e;hook 并排共存的做法是本文的模板)、`plans/2026-10-18-agent-s6a-daemon-identity.md`(`ProductId`、`dozer-hook` 的 `run_main`)、`plans/2026-10-18-agent-s6d2-sessions.md`(`HookInstaller::ensure_mcp`、`AgentCapabilities::mcp_install`)
 
 ## 1. 用户意图
@@ -66,7 +68,7 @@ Dozer 里的 Agent 通过 MCP 服务 `dozer-mcp` 读写 Dozer 的东西(共享�
 - **安装时机:** S6d 里 `AgentCapabilities::mcp_install` 为假;本期改为真,`DiggerHooks::ensure_mcp(agent)` 运行同目录的 `digger-mcp install <agent>`(不继承 stdin、丢弃输出、10 秒上限,同 `ensure_hook`);只对支持 MCP 的 Agent(Claude / Codebuddy / Codex / Opencode / Qodercn)执行;Aider / Goose / V8agent / Unknown 空操作。
 - **记忆联动(G4):** Agent 经 MCP 写入记忆后,Project 面板需要看到。Project 面板在切入时拉取记忆;面板已经在眼前时,Agent 写入不会触发刷新。Digger 在该项目的 `AgentHostEvent::TurnEnded` 到达时,若 Project 面板可见,刷新该项目的记忆列表(只做这一件,不做轮询)。若库里没有可复用的「只刷新记忆」入口,先停下报告,不在 Digger 里重写读取逻辑。
 
-### 6.3 S6e-3(现在不做,写下依赖)
+### 6.3 S6e-3(S6e-3a 已做,S6e-3b 待办工具现在不做,写下依赖)
 
 待办工具随待办面板接入 Digger 时打开 `todos`;预览 / 定位 / 精确编辑随预览引擎(S5b-2)接入 Digger、且 Digger 的 GUI 开始向 `diggerd` 推送预览上下文并执行 `PreviewCommand` 之后打开 `preview` / `file_edit`。届时只改 `digger-mcp` 入口的特性开关与 GUI 侧,不再动 `dozer-mcp`。
 
