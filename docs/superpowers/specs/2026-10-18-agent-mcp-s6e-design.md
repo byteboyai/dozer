@@ -4,7 +4,7 @@
 
 
 - 日期:2026-10-18
-- 状态:**S6e-1、S6e-2、S6e-3a 已实现**(S6e-1 在 Dozer;S6e-2 与 S6e-3a 已合入 Digger 本地 `main`,2026-10-24,未推送);真机项未完成;S6e-3b(待办工具)未做
+- 状态:**S6e-1、S6e-2、S6e-3a 已实现**(S6e-1 在 Dozer;S6e-2 与 S6e-3a 已合入 Digger 本地 `main`,2026-10-24,未推送);真机项未完成;S6e-3b(待办工具)未做,**依赖待办面板接入 Digger:设计 `2026-10-25-digger-todo-panel-s3b-design.md`,计划 `plans/2026-10-25-digger-todo-s3b1-panel.md`(面板)与 `…-s3b2-mcp-and-release.md`(S6e-3b 本体),均已写好待审阅
 - 实施状态(2026-10-24):
   - `digger-mcp` 现暴露七个工具:记忆三个(`write_memory` / `list_memories` / `get_memory`)加 S6e-3a 打开的预览 / 定位 / 编辑四个(`get_preview_context` / `preview_navigate` / `locate_in_file` / `apply_precise_edit`);待办与总结工具仍不出现。与 `dozer-mcp` 并存,另一产品会话里进入零工具安静模式;安装每进程每种 Agent 只尝试一次,退出码 3(同名条目被保护)只提示一次。
   - Project 面板在 Agent 回合结束且面板可见时刷新记忆,这是相对 Dozer 的有意改进。
