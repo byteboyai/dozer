@@ -24,7 +24,7 @@
 
 1. **Digger 会话里同时配了 `dozer` 与 `digger` 两条 MCP**(S6e 设计 §2 的陷阱):`dozer-mcp serve` 缺 `DOZER_SESSION_ID` 会报错退出,agent 的 MCP 状态里 `dozer` 一直显示失败。要确认 `digger-mcp` 的待办工具**不受影响**,并在验收清单里把这条已知现象写明(Task 3)。
 2. **会话所在目录不属于任何已登记项目**(Task 1):`list_todos` / `add_todo` 返回人能读懂的错误,不 panic、不写到别的项目。
-3. **`add_todo` 传空串或只有空白**(Task 1):被拒绝并说明原因,不产生空任务。
+3. **`add_todo` 传空串或只有空白**(Task 1):**2026-10-25 核实,现状不拒绝**——`dozer-mcp` 的 `add_todo` 直接转给 `Client::add_todo`,`dozerd` 的 `TodoStore::add` 也不校验,Dozer 的 agent 同样能建出空任务。本期**钉住现状**(测试名 `blank_todo_text_is_accepted_today_like_dozer`,注释写明"改成拒绝要动 dozer-mcp / dozerd,走 Dozer 发新 libs tag"),并在验收清单与报告里列为已知行为;是否收紧由用户另议,不在本任务里改。
 4. **`toggle_todo` / `edit_todo_text` 的 `id` 不限定在本会话的项目内**(与 Dozer 现状一致,见 `dozer-mcp/src/server.rs`):agent 能改别的项目的任务。本期保持与 Dozer 一致,不单独收紧;在验收清单里列为已知行为,是否收紧另议。
 5. **已经开着的 Agent 会话看不到新工具**:agent 只在会话启动时读一次工具清单,升级后要重开会话(Task 3 的真机清单要写明,免得把它当成 bug)。
 
@@ -47,7 +47,7 @@
   - `todo_roundtrip.rs`:
     - `add_then_list_then_toggle_then_edit`:起隔离 `diggerd`、登记一个项目、造一个属于该项目的会话身份(同 `memory_roundtrip.rs`),依次 `add_todo("买牛奶")` → `list_todos` 含该条且 `done=false` → `toggle_todo(id, true)` → 再 `list_todos` 为 `done=true` → `edit_todo_text(id, "买燕麦奶")` → 再 `list_todos` 文字已变;最后经**独立的 `Client`** 直接 `list_todos(project_id)` 读到同样结果(证明落进 `digger.db`)。
     - `a_session_outside_any_registered_project_gets_a_readable_error`(Review Focus 2):会话 cwd 不属于任何项目时 `add_todo` 返回 `Err`,错误文本非空且不含 `panic`。
-    - `blank_todo_text_is_rejected`(Review Focus 3):`add_todo("")`、`add_todo("   \n")` 均 `Err`,项目的任务数不变。
+    - `blank_todo_text_is_accepted_today_like_dozer`(Review Focus 3,**钉住现状**,见上):`add_todo("")` 成功并产生一条空任务;测试注释写明这是与 Dozer 一致的现状、收紧另议。
     - `todo_ids_are_not_scoped_to_the_session_project`(Review Focus 4,**钉住现状**):项目 A 的会话对项目 B 的任务 id `toggle_todo` 成功;测试名与注释写明"与 Dozer 现状一致,收紧另议",以后收紧时这条测试会提醒同步改。
 - [ ] **Step 2: 跑测试确认失败**:`cargo test -p digger-mcp`,预期 `tool_set` 与 `todo_roundtrip` 失败(开关还是 `false`)。
 - [ ] **Step 3: 实现**:`main.rs` 里 `todos: true`;`memory_roundtrip.rs` 里的特性副本同步改(或改成引用一个共享的 `digger_features()` 辅助,二选一,选改动小的)。
