@@ -296,7 +296,11 @@ pub fn update(
                 osc: OscScanner::new(),
                 cwd: None,
                 last_exit: None,
-                llm_model: None,
+                // Codex 启动到第一条消息之间没有 hook:先用配置里的默认模型兜底。
+                llm_model: crate::codex_config::initial_llm_model(
+                    agent,
+                    crate::codex_config::default_model,
+                ),
                 permission_mode: None,
                 last_activity: None,
                 workspace_override: None,
@@ -1705,5 +1709,34 @@ mod tests {
             transcript_path: Some("/t.jsonl".into())
         }));
         assert!(events.contains(&AgentHostEvent::TurnEnded { tab_id: 5 }));
+    }
+
+    #[tokio::test]
+    async fn a_new_codex_tab_starts_with_the_configured_model_and_other_agents_do_not() {
+        let h = Harness::new();
+        let svc = h.svc();
+        let handle = tokio::runtime::Handle::current();
+        let tracked = |_t| {};
+        let ctx = h.ctx(&svc, &handle, &tracked);
+        let mut state = AgentPanelState::new();
+        for (tab_id, agent) in [(1, AgentKind::Codex), (2, AgentKind::Claude)] {
+            state.pending.insert(tab_id, handle.spawn(async {}));
+            update(
+                &mut state,
+                Message::Attached {
+                    tab_id,
+                    info: info(&format!("s{tab_id}"), agent, AgentState::Idle),
+                    snapshot: Vec::new(),
+                    picked_agent: Some(agent),
+                },
+                &ctx,
+                |_m| {},
+            );
+        }
+        assert_eq!(
+            state.tab_by_id(1).unwrap().llm_model,
+            crate::codex_config::default_model()
+        );
+        assert_eq!(state.tab_by_id(2).unwrap().llm_model, None);
     }
 }

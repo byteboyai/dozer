@@ -9,6 +9,7 @@
 
 pub mod adapter;
 pub mod card;
+pub mod codex_config;
 pub mod display;
 pub mod i18n;
 pub mod launch;
