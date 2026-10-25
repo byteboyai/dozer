@@ -1,7 +1,7 @@
 # S3b 待办(Todo)面板接入 Digger
 
 - 日期:2026-10-25
-- 状态:设计稿,待用户审阅(§7 有 5 个待你裁决的问题,每个都给了默认值,不裁决也能开工)
+- 状态:**2026-10-25 用户确认 §7 的默认值**(详情弹窗不做、不开 `task_poller`/总结、写失败落 stderr 等),可开工
 - 路径:**分两期交付,每期单独一份实施计划**:S3b-1 面板(列表 + 内容区 + 增删改查)、S3b-2 MCP 待办工具(即 S6e-3b)与发布
 - 上游:`2026-10-15-panel-todo-lib-design.md`(S3a,Dozer 里抽出 `dozer-panel-todo`,已完成)、`2026-10-18-agent-panel-s6-design.md` §基座与呈现的划分("Todo、群聊等面板自带业务逻辑与存储,只需接入 `diggerd`")、`2026-10-18-agent-mcp-s6e-design.md` §6.3(S6e-3b 依赖本设计)
 - 实施计划:`docs/superpowers/plans/2026-10-25-digger-todo-s3b1-panel.md`、`2026-10-25-digger-todo-s3b2-mcp-and-release.md`
