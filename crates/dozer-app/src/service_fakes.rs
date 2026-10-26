@@ -4,13 +4,14 @@ use dozer_model::{
     CodeHealthReportInfo, ContextItemInfo, ConversationSummary, FileEditHistoryInfo, GroupAuthor,
     GroupCancelScope, GroupInfo, GroupMessageInfo, LocalePreference, LocaleSnapshot,
     LocaleWriteOutcome, MemoryDetail, MemoryInfo, MutationOutcome, ProjectInfo, SessionInfo,
-    SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
+    SessionSummaryPayload, SummaryBatchInfo, SummaryJobInfo, TodoInfo, TodoStoredStatus,
+    TurnRecord,
 };
 use dozer_services::{
     BookmarkService, BoxFuture, CodeHealthService, ContextService, ConversationRows,
     ConversationService, DaemonService, EditHistoryService, GroupChatService, LocaleService,
     MemoryService, PostedMessages, PreciseEdit, ProjectService, ServiceError, ServiceErrorKind,
-    Services, SessionService, SessionSpec, TodoService, TranscriptService,
+    Services, SessionService, SessionSpec, SummaryService, TodoService, TranscriptService,
 };
 use std::sync::{Arc, Mutex};
 
@@ -191,6 +192,7 @@ pub(crate) fn base_services() -> Services {
         memory: Arc::new(FakeMemory::default()),
         group_chat: Arc::new(FakeGroupChat::default()),
         conversation: Arc::new(FakeConversation::default()),
+        summary: Arc::new(FakeSummary::default()),
         codehealth: Arc::new(FakeCodeHealth::default()),
         context: Arc::new(FakeContext::default()),
         edit_history: Arc::new(FakeEditHistory::default()),
@@ -706,6 +708,8 @@ pub(crate) fn conversation_row(
 
 struct ConversationState {
     rows: Result<ConversationRows, ServiceError>,
+    turns: std::collections::HashMap<String, Vec<TurnRecord>>,
+    turns_error: Option<ServiceError>,
     calls: Vec<String>,
 }
 
@@ -722,10 +726,24 @@ impl Default for FakeConversation {
 }
 
 impl FakeConversation {
+    pub(crate) fn with_turns(self, conversation_id: &str, turns: Vec<TurnRecord>) -> Self {
+        self.state
+            .lock()
+            .unwrap()
+            .turns
+            .insert(conversation_id.into(), turns);
+        self
+    }
+    pub(crate) fn failing_turn_reads(self, kind: ServiceErrorKind, message: &str) -> Self {
+        self.state.lock().unwrap().turns_error = Some(ServiceError::new(kind, message));
+        self
+    }
     fn with(rows: Result<ConversationRows, ServiceError>) -> Self {
         Self {
             state: Arc::new(Mutex::new(ConversationState {
+                turns_error: rows.as_ref().err().cloned(),
                 rows,
+                turns: std::collections::HashMap::new(),
                 calls: vec![],
             })),
         }
@@ -749,6 +767,35 @@ impl FakeConversation {
 }
 
 impl ConversationService for FakeConversation {
+    fn get_conversation_turns(
+        &self,
+        conversation_id: String,
+        after_turn_index: i64,
+        limit: u32,
+    ) -> BoxFuture<'_, Result<Vec<TurnRecord>, ServiceError>> {
+        let mut state = self.state.lock().unwrap();
+        state.calls.push(format!(
+            "get_conversation_turns({conversation_id},{after_turn_index},{limit})"
+        ));
+        let result = match &state.turns_error {
+            Some(error) => Err(error.clone()),
+            None => {
+                let mut turns: Vec<_> = state
+                    .turns
+                    .get(&conversation_id)
+                    .into_iter()
+                    .flatten()
+                    .filter(|turn| turn.turn_index > after_turn_index)
+                    .cloned()
+                    .collect();
+                turns.sort_by_key(|turn| turn.turn_index);
+                turns.truncate(limit as usize);
+                Ok(turns)
+            }
+        };
+        Box::pin(async move { result })
+    }
+
     fn list_conversations_with_summaries(
         &self,
         cwd: String,
@@ -762,6 +809,76 @@ impl ConversationService for FakeConversation {
         ));
         let r = s.rows.clone();
         Box::pin(async move { r })
+    }
+}
+
+// ---- FakeSummary ----
+
+struct SummaryState {
+    submit: Result<i64, ServiceError>,
+    jobs: std::collections::VecDeque<Result<Option<SummaryJobInfo>, ServiceError>>,
+    calls: Vec<String>,
+}
+
+/// 可脚本化的队列与失败:克隆共享调用记录;读完预置序列后返回任务不存在。
+#[derive(Clone)]
+pub(crate) struct FakeSummary {
+    state: Arc<Mutex<SummaryState>>,
+}
+
+impl Default for FakeSummary {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(SummaryState {
+                submit: Ok(1),
+                jobs: Default::default(),
+                calls: vec![],
+            })),
+        }
+    }
+}
+
+impl FakeSummary {
+    pub(crate) fn with_submission(self, result: Result<i64, ServiceError>) -> Self {
+        self.state.lock().unwrap().submit = result;
+        self
+    }
+    pub(crate) fn with_jobs(self, jobs: Vec<Result<Option<SummaryJobInfo>, ServiceError>>) -> Self {
+        self.state.lock().unwrap().jobs = jobs.into();
+        self
+    }
+    pub(crate) fn calls(&self) -> Vec<String> {
+        self.state.lock().unwrap().calls.clone()
+    }
+    pub(crate) fn into_services(self) -> Services {
+        Services {
+            summary: Arc::new(self),
+            ..base_services()
+        }
+    }
+}
+
+impl SummaryService for FakeSummary {
+    fn submit_summary_job(
+        &self,
+        conversation_id: String,
+        force: bool,
+    ) -> BoxFuture<'_, Result<i64, ServiceError>> {
+        let mut state = self.state.lock().unwrap();
+        state
+            .calls
+            .push(format!("submit_summary_job({conversation_id},{force})"));
+        let result = state.submit.clone();
+        Box::pin(async move { result })
+    }
+    fn get_summary_job(
+        &self,
+        job_id: i64,
+    ) -> BoxFuture<'_, Result<Option<SummaryJobInfo>, ServiceError>> {
+        let mut state = self.state.lock().unwrap();
+        state.calls.push(format!("get_summary_job({job_id})"));
+        let result = state.jobs.pop_front().unwrap_or(Ok(None));
+        Box::pin(async move { result })
     }
 }
 
@@ -1505,5 +1622,119 @@ impl SessionService for FakeSession {
             None => Ok(()),
         };
         Box::pin(async move { r })
+    }
+}
+
+#[cfg(test)]
+mod conversation_turn_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mem_conversation_returns_turns_in_order_and_respects_after_turn_index_and_limit() {
+        let turns: Vec<dozer_model::TurnRecord> =
+            serde_json::from_str(include_str!("../tests/fixtures/review_turns_input.json"))
+                .unwrap();
+        let fake = FakeConversation::default()
+            .with_turns(
+                "a",
+                vec![turns[8].clone(), turns[2].clone(), turns[5].clone()],
+            )
+            .with_turns("b", vec![turns[3].clone()]);
+        let service: &dyn ConversationService = &fake;
+        assert_eq!(
+            service
+                .get_conversation_turns("a".into(), -1, 200)
+                .await
+                .unwrap(),
+            vec![turns[2].clone(), turns[5].clone(), turns[8].clone()]
+        );
+        assert_eq!(
+            service
+                .get_conversation_turns("a".into(), 2, 1)
+                .await
+                .unwrap(),
+            vec![turns[5].clone()]
+        );
+        assert!(
+            service
+                .get_conversation_turns("a".into(), 8, 1)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            service
+                .get_conversation_turns("a".into(), -1, 0)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            service
+                .get_conversation_turns("missing".into(), -1, 200)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            service
+                .get_conversation_turns("b".into(), -1, 200)
+                .await
+                .unwrap(),
+            vec![turns[3].clone()]
+        );
+        assert!(
+            fake.calls()
+                .contains(&"get_conversation_turns(a,2,1)".into())
+        );
+    }
+}
+
+#[cfg(test)]
+mod summary_fake_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn summary_fake_scripts_results_and_failures_and_records_calls() {
+        let job: SummaryJobInfo = serde_json::from_value(serde_json::json!({
+            "job_id": 17, "conversation_id": "a", "source_session_id": null,
+            "trigger": "manual", "provider": "claude", "requested_model": null,
+            "source_revision": "r", "pipeline_version": "v2", "generation": 1,
+            "status": "running", "attempt": 1, "error_kind": null,
+            "created_ts_ms": 1, "updated_ts_ms": 2
+        }))
+        .unwrap();
+        let error = ServiceError::new(ServiceErrorKind::Rejected, "scripted failure");
+        let fake = FakeSummary::default()
+            .with_submission(Ok(17))
+            .with_jobs(vec![Ok(Some(job.clone())), Err(error.clone()), Ok(None)]);
+        let observer = fake.clone();
+        let service = fake.into_services().summary;
+        assert_eq!(service.submit_summary_job("a".into(), true).await, Ok(17));
+        assert_eq!(service.get_summary_job(17).await, Ok(Some(job)));
+        assert_eq!(service.get_summary_job(17).await, Err(error.clone()));
+        assert_eq!(service.get_summary_job(17).await, Ok(None));
+        assert_eq!(
+            observer.calls(),
+            [
+                "submit_summary_job(a,true)",
+                "get_summary_job(17)",
+                "get_summary_job(17)",
+                "get_summary_job(17)"
+            ]
+        );
+        let failed = FakeSummary::default().with_submission(Err(error.clone()));
+        assert_eq!(
+            failed.submit_summary_job("b".into(), false).await,
+            Err(error.clone())
+        );
+        let failed_reads =
+            FakeConversation::default().failing_turn_reads(error.kind, &error.message);
+        assert_eq!(
+            failed_reads
+                .get_conversation_turns("b".into(), -1, 200)
+                .await,
+            Err(error)
+        );
     }
 }

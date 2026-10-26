@@ -13,7 +13,7 @@ use dozer_services::{
     BookmarkService, BoxFuture, CodeHealthService, ContextService, ConversationRows,
     ConversationService, EditHistoryService, GroupChatService, LocaleService, MemoryService,
     PreciseEdit, ProjectService, ServiceError, ServiceErrorKind, SessionService, SessionSpec,
-    TodoService, TranscriptService, UsageRows, UsageService,
+    SummaryService, TodoService, TranscriptService, UsageRows, UsageService,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -2347,6 +2347,19 @@ impl GroupChatService for Client {
 }
 
 impl ConversationService for Client {
+    fn get_conversation_turns(
+        &self,
+        conversation_id: String,
+        after_turn_index: i64,
+        limit: u32,
+    ) -> BoxFuture<'_, Result<Vec<TurnRecord>, ServiceError>> {
+        Box::pin(async move {
+            Client::get_conversation_turns(self, &conversation_id, after_turn_index, limit)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+
     fn list_conversations_with_summaries(
         &self,
         cwd: String,
@@ -2356,6 +2369,39 @@ impl ConversationService for Client {
     ) -> BoxFuture<'_, Result<ConversationRows, ServiceError>> {
         Box::pin(async move {
             Client::list_conversations_with_summaries(self, &cwd, agent, limit, offset)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+}
+
+impl SummaryService for Client {
+    fn submit_summary_job(
+        &self,
+        conversation_id: String,
+        force: bool,
+    ) -> BoxFuture<'_, Result<i64, ServiceError>> {
+        Box::pin(async move {
+            Client::submit_summary_job(
+                self,
+                &conversation_id,
+                None,
+                dozer_model::SummaryTrigger::Manual,
+                None,
+                None,
+                force,
+            )
+            .await
+            .map_err(into_service_error)
+        })
+    }
+
+    fn get_summary_job(
+        &self,
+        job_id: i64,
+    ) -> BoxFuture<'_, Result<Option<dozer_model::SummaryJobInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::get_summary_job(self, job_id)
                 .await
                 .map_err(into_service_error)
         })
@@ -3738,6 +3784,208 @@ mod conversation_protocol_golden {
         assert_eq!(
             actual,
             include_str!("../tests/fixtures/conversation_protocol_golden.txt")
+        );
+    }
+}
+
+#[cfg(test)]
+mod conversation_detail_service_tests {
+    use super::*;
+    use dozer_services::SummaryService;
+
+    fn turn(index: i64) -> TurnRecord {
+        serde_json::from_value(serde_json::json!({
+            "turn_index": index, "role": "human", "content": "你好 👋\n第二行",
+            "thinking": false, "ts": 42
+        }))
+        .unwrap()
+    }
+
+    /// 真 UDS 与 Hello 握手;捕获所有业务请求以核对接缝是否改写参数。
+    fn serve(
+        replies: Vec<Reply>,
+    ) -> (
+        tempfile::TempDir,
+        Client,
+        mpsc::UnboundedReceiver<Request>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let dir = tempfile::Builder::new()
+            .prefix("s7a")
+            .tempdir_in("/private/tmp")
+            .unwrap();
+        let socket = dir.path().join("s.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            let mut replies = replies.into_iter();
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (r, mut w) = stream.into_split();
+                let line = BufReader::new(r)
+                    .lines()
+                    .next_line()
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let request: Request = decode_line(&line).unwrap();
+                let reply = if matches!(request, Request::Hello { .. }) {
+                    Reply::Hello {
+                        protocol: dozer_core::protocol::PROTOCOL_VERSION,
+                        product: dozer_core::paths::product().name.to_string(),
+                    }
+                } else {
+                    tx.send(request).unwrap();
+                    replies.next().expect("one reply per business request")
+                };
+                w.write_all(encode_line(&reply).as_bytes()).await.unwrap();
+            }
+        });
+        (dir, Client::new(socket), rx, task)
+    }
+
+    #[tokio::test]
+    async fn client_implements_get_conversation_turns_end_to_end() {
+        let (_dir, client, mut seen, task) = serve(vec![
+            Reply::ConversationTurns {
+                conversation_id: "会话".into(),
+                turns: vec![turn(8)],
+            },
+            Reply::Error {
+                message: "拒绝读取".into(),
+            },
+            Reply::Ok,
+        ]);
+        let service: &dyn ConversationService = &client;
+        assert_eq!(
+            service
+                .get_conversation_turns("会话".into(), 7, 200)
+                .await
+                .unwrap(),
+            vec![turn(8)]
+        );
+        assert!(
+            matches!(seen.recv().await.unwrap(), Request::GetConversationTurns {
+            conversation_id, after_turn_index: 7, limit: 200,
+        } if conversation_id == "会话")
+        );
+        let error = service
+            .get_conversation_turns("会话".into(), -1, 1)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ServiceErrorKind::Rejected);
+        assert!(error.message.contains("拒绝读取"));
+        assert_eq!(
+            service
+                .get_conversation_turns("会话".into(), 0, 0)
+                .await
+                .unwrap_err()
+                .kind,
+            ServiceErrorKind::Protocol
+        );
+        task.abort();
+        let offline = Client::new(_dir.path().join("missing.sock"));
+        assert_eq!(
+            ConversationService::get_conversation_turns(&offline, "x".into(), -1, 200)
+                .await
+                .unwrap_err()
+                .kind,
+            ServiceErrorKind::Unavailable
+        );
+    }
+
+    #[tokio::test]
+    async fn client_implements_summary_service_end_to_end() {
+        let job: dozer_model::SummaryJobInfo = serde_json::from_value(serde_json::json!({
+            "job_id": 17, "conversation_id": "会话", "source_session_id": null,
+            "trigger": "manual", "provider": "claude", "requested_model": null,
+            "source_revision": "r1", "pipeline_version": "v2", "generation": 1,
+            "status": "running", "attempt": 1, "error_kind": null,
+            "created_ts_ms": 100, "updated_ts_ms": 200
+        }))
+        .unwrap();
+        let (_dir, client, mut seen, task) = serve(vec![
+            Reply::SummaryJobSubmitted { job_id: 17 },
+            Reply::SummaryJobSubmitted { job_id: 18 },
+            Reply::SummaryJob {
+                job: Some(job.clone()),
+            },
+            Reply::SummaryJob { job: None },
+            Reply::Error {
+                message: "不能提交".into(),
+            },
+            Reply::Ok,
+            Reply::Error {
+                message: "不能查询".into(),
+            },
+            Reply::Ok,
+        ]);
+        let service: &dyn SummaryService = &client;
+        for (force, expected) in [(false, 17), (true, 18)] {
+            assert_eq!(
+                service
+                    .submit_summary_job("会话".into(), force)
+                    .await
+                    .unwrap(),
+                expected
+            );
+            assert!(
+                matches!(seen.recv().await.unwrap(), Request::SubmitSummaryJob {
+                conversation_id, source_session_id: None,
+                trigger: dozer_model::SummaryTrigger::Manual, provider: None, model: None,
+                force: received_force,
+            } if conversation_id == "会话" && received_force == force)
+            );
+        }
+        assert_eq!(service.get_summary_job(17).await.unwrap(), Some(job));
+        assert!(matches!(
+            seen.recv().await.unwrap(),
+            Request::GetSummaryJob { job_id: 17 }
+        ));
+        assert_eq!(service.get_summary_job(99).await.unwrap(), None);
+        assert!(matches!(
+            seen.recv().await.unwrap(),
+            Request::GetSummaryJob { job_id: 99 }
+        ));
+        assert_eq!(
+            service
+                .submit_summary_job("会话".into(), true)
+                .await
+                .unwrap_err()
+                .kind,
+            ServiceErrorKind::Rejected
+        );
+        assert_eq!(
+            service
+                .submit_summary_job("会话".into(), true)
+                .await
+                .unwrap_err()
+                .kind,
+            ServiceErrorKind::Protocol
+        );
+        assert_eq!(
+            service.get_summary_job(17).await.unwrap_err().kind,
+            ServiceErrorKind::Rejected
+        );
+        assert_eq!(
+            service.get_summary_job(17).await.unwrap_err().kind,
+            ServiceErrorKind::Protocol
+        );
+        task.abort();
+        let offline = Client::new(_dir.path().join("missing.sock"));
+        assert_eq!(
+            SummaryService::submit_summary_job(&offline, "x".into(), true)
+                .await
+                .unwrap_err()
+                .kind,
+            ServiceErrorKind::Unavailable
+        );
+        assert_eq!(
+            SummaryService::get_summary_job(&offline, 17)
+                .await
+                .unwrap_err()
+                .kind,
+            ServiceErrorKind::Unavailable
         );
     }
 }
