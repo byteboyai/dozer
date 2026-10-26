@@ -13,6 +13,7 @@ default = []
 
 [dependencies]
 dozer-panel-conversations = { path = "../dozer-panel-conversations" }
+dozer-panel-group-chat = { path = "../dozer-panel-group-chat" }
 dozer-core = { path = "../dozer-core", features = ["logging"] }
 dozer-model = { path = "../dozer-model" }
 dozer-i18n = { path = "../dozer-i18n" }

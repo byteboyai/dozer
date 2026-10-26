@@ -4,7 +4,7 @@
 //! 槽位、状态映射、提示文案都在这里算好。形态仿 `extensions/todo/protocol.rs`
 //! (声明式比较 + 固定单槽)。
 
-use super::WorkspaceState;
+use crate::{consts::CREATABLE_AGENTS, i18n, state::WorkspaceState};
 use dozer_model::{
     AgentKind, GroupAuthor, GroupCancelScope, GroupInfo, GroupMessageStatus, LocaleStamp,
     LocalizedText, Stamped,
@@ -162,13 +162,13 @@ pub fn current_view_payload(
             let author = match &m.author {
                 GroupAuthor::Human => AuthorVm {
                     kind: AuthorKind::Human,
-                    label: super::t("author.you", "You", locale),
+                    label: i18n::t("author.you", "You", locale),
                     agent_label: None,
                     color_slot: None,
                 },
                 GroupAuthor::System => AuthorVm {
                     kind: AuthorKind::System,
-                    label: super::t("author.system", "System", locale),
+                    label: i18n::t("author.system", "System", locale),
                     agent_label: None,
                     color_slot: None,
                 },
@@ -184,7 +184,7 @@ pub fn current_view_payload(
                         },
                         None => AuthorVm {
                             kind: AuthorKind::Member,
-                            label: super::t("author.removed", "Removed member", locale),
+                            label: i18n::t("author.removed", "Removed member", locale),
                             agent_label: None,
                             color_slot: None,
                         },
@@ -213,9 +213,7 @@ pub fn current_view_payload(
         groups,
         selected_group_id: state.selected(),
         messages,
-        hint: state
-            .hint()
-            .map(|t| crate::i18n::render_localized(t, locale)),
+        hint: state.hint().map(|t| i18n::render(t, locale)),
         running: state.has_active_turn(),
     }
 }
@@ -377,7 +375,7 @@ fn member_exists(state: &WorkspaceState, id: i64) -> bool {
 /// 校验 webview 事件并映射成命令。`id` 已不存在、入参非法一律返回 `None`
 /// (空操作),绝不能落到别的对象上。`Ready`/`Failed` 由 `App` 自己处理,这里
 /// 返回 `None`。
-pub(crate) fn route_event(state: &WorkspaceState, event: GroupChatWebviewEvent) -> Option<Command> {
+pub fn route_event(state: &WorkspaceState, event: GroupChatWebviewEvent) -> Option<Command> {
     use GroupChatWebviewEvent as Ev;
     match event {
         // `SetDraft` 由 `App` 在进本函数前直接消费(纯视图状态,不产命令)。
@@ -397,7 +395,7 @@ pub(crate) fn route_event(state: &WorkspaceState, event: GroupChatWebviewEvent) 
             handle,
             role_prompt,
         } => {
-            if !group_exists(state, group_id) || !super::CREATABLE_AGENTS.contains(&agent) {
+            if !group_exists(state, group_id) || !CREATABLE_AGENTS.contains(&agent) {
                 return None;
             }
             Some(Command::AddMember {
@@ -528,7 +526,7 @@ impl WebviewPushState {
         let since = *self.waiting_since.get_or_insert(now);
         if self.failed.is_none() && now.duration_since(since) > READY_TIMEOUT {
             self.failed = Some(LocalizedText::keyed(
-                crate::i18n::HOST_OWNER,
+                i18n::HOST_OWNER,
                 "webview.load_timeout",
                 "Panel page load timed out",
             ));
@@ -572,7 +570,7 @@ impl WebviewPushState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extensions::group_chat::{Message, update};
+    use crate::{Message, update};
     use dozer_model::{
         AgentKind, GroupAuthor, GroupCancelScope, GroupInfo, GroupMemberInfo, GroupMessageInfo,
         GroupMessageStatus,
@@ -1188,13 +1186,13 @@ mod tests {
         let mut ps = WebviewPushState::default();
         ps.set_ready(true);
         ps.set_failed(dozer_model::LocalizedText::literal(
-            crate::i18n::HOST_OWNER,
+            i18n::HOST_OWNER,
             "渲染异常",
         ));
         let a = stamped(current_view_payload(&WorkspaceState::default(), 7, "en"));
         assert!(ps.pending_push(&a).is_none());
         assert_eq!(
-            ps.failed().map(|t| crate::i18n::render_localized(t, "en")),
+            ps.failed().map(|t| i18n::render(t, "en")),
             Some("渲染异常".to_string())
         );
     }
@@ -1203,7 +1201,7 @@ mod tests {
 #[cfg(test)]
 mod s8a_golden_tests {
     use super::*;
-    use crate::extensions::group_chat::{Message, update};
+    use crate::{Message, update};
     use dozer_model::{
         AgentKind, GroupAuthor, GroupInfo, GroupMemberInfo, GroupMessageInfo, GroupMessageStatus,
     };
@@ -1211,7 +1209,7 @@ mod s8a_golden_tests {
 
     fn fixture(name: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures")
+            .join("../dozer-app/tests/fixtures")
             .join(name)
     }
 
@@ -1325,7 +1323,9 @@ mod s8a_golden_tests {
                 7,
                 7,
                 GroupAuthor::Member { member_id: 13 },
-                Some(GroupMessageStatus::Failed { reason: "超时".into() }),
+                Some(GroupMessageStatus::Failed {
+                    reason: "超时".into(),
+                }),
                 "failed",
             ),
             msg(
@@ -1336,14 +1336,7 @@ mod s8a_golden_tests {
                 Some(GroupMessageStatus::Cancelled),
                 "cancelled",
             ),
-            msg(
-                9,
-                9,
-                9,
-                GroupAuthor::Human,
-                None,
-                &"长".repeat(20_000),
-            ),
+            msg(9, 9, 9, GroupAuthor::Human, None, &"长".repeat(20_000)),
         ];
         update(
             &mut state,
@@ -1414,29 +1407,33 @@ mod s8a_golden_tests {
             out.push('\n');
         }
         // 非 UTF-8 输入在 &str 边界就已被拒绝;记录这一事实。
-        let bad = std::str::from_utf8(&[0xff, 0xfe]);
-        out.push_str(&serde_json::json!({"non_utf8": bad.is_err()}).to_string());
+        let bad = String::from_utf8(vec![0xff, 0xfe]).is_err();
+        out.push_str(&serde_json::json!({"non_utf8": bad}).to_string());
         out.push('\n');
         write_or_assert("group_chat_events_golden.txt", &out);
     }
 
     #[test]
     fn group_chat_serve_matches_the_golden() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/group-chat-content");
         let mut out = String::new();
-        for path in ["host.html", "group-chat-content.js", "group-chat-content.css"] {
-            let reply = crate::assets::serve_vendored(&root, path);
-            let hash = Sha256::digest(&reply.body);
-            out.push_str(&format!(
-                "{path}\t{}\t{}\t{:x}\n",
-                reply.status,
-                reply.body.len(),
-                hash
-            ));
+        for path in [
+            "host.html",
+            "group-chat-content.js",
+            "group-chat-content.css",
+        ] {
+            let (mime, body) = crate::assets::serve_group_chat_content(path)
+                .unwrap_or_else(|| panic!("missing {path}"));
+            let hash = Sha256::digest(body);
+            out.push_str(&format!("{path}\t200\t{}\t{:x}\n", body.len(), hash));
+            let _ = mime;
         }
         for path in ["../usage-content/host.html", "nope", ""] {
-            let reply = crate::assets::serve_vendored(&root, path);
-            out.push_str(&format!("{path}\t{}\n", reply.status));
+            let status = if crate::assets::serve_group_chat_content(path).is_some() {
+                200
+            } else {
+                404
+            };
+            out.push_str(&format!("{path}\t{status}\n"));
         }
         write_or_assert("group_chat_serve_golden.txt", &out);
     }

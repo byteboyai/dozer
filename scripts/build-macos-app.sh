@@ -139,7 +139,7 @@ cp -R "$ROOT_DIR/crates/dozer-panel-todo/assets/todo-content" "$APP_DIR/Contents
 # 群聊面板内容侧 host。`dozer://group-chat-content/` 从 flyfish 根的兄弟目录
 # `Contents/Resources/group-chat-content` 读(2026-10-02 起),漏拷会导致分发后
 # 群聊面板整个 404。
-cp -R "$ROOT_DIR/crates/dozer-app/assets/group-chat-content" "$APP_DIR/Contents/Resources/group-chat-content"
+cp -R "$ROOT_DIR/crates/dozer-panel-group-chat/assets/group-chat-content" "$APP_DIR/Contents/Resources/group-chat-content"
 # 表格预览 host(`dozer://tabular-host/`)。
 cp -R "$ROOT_DIR/crates/dozer-panel-preview/assets/tabular-host" "$APP_DIR/Contents/Resources/tabular-host"
 # PlantUML viewer host(`dozer://plantuml-viewer/`,含 vendored 官方引擎与 C4
