@@ -1316,57 +1316,34 @@ impl App {
     /// 群聊面板待下发推送。声明式:每帧比较"当前该显示什么"
     /// (`current_view_payload`)与"上次送达的"(`group_chat_webview.pending_push`),
     /// 同时驱动加载超时判定。已失败时不推送——原生占位页接管。
-    pub fn take_group_chat_content_script(
+    pub fn group_chat_content_scripts(
         &mut self,
         available_webview_ids: &std::collections::HashSet<usize>,
         now: std::time::Instant,
     ) -> Vec<(usize, String)> {
         let webview_id = GROUP_CHAT_CONTENT_ID_OFFSET;
-        self.group_chat_webview
-            .observe_availability(available_webview_ids.contains(&webview_id), now);
-        if !available_webview_ids.contains(&webview_id)
-            || self.group_chat_webview.failed().is_some()
-        {
-            return Vec::new();
-        }
         let Some(project_id) = self.active_project_id else {
             return Vec::new();
         };
+        let locale = self.locale.active_locale();
+        let stamp = self.locale_stamp();
+        let available = available_webview_ids.contains(&webview_id);
+        let mut push = std::mem::take(&mut self.group_chat_webview);
         let Some(ws) = self.active_workspace() else {
+            self.group_chat_webview = push;
             return Vec::new();
         };
-        // 先把用到 `ws` 的两份内容算完(草稿快照 + 目标载荷),再碰
-        // `self.group_chat_webview` 的可变方法,避免借用冲突。
-        let drafts_json = ws.group_chat.composer_drafts_restore_json();
-        let desired = crate::extensions::group_chat::current_view_payload(
+        let scripts = dozer_panel_group_chat::host::take_content_script(
             &ws.group_chat,
+            &mut push,
             project_id,
-            self.locale.active_locale(),
+            available,
+            now,
+            stamp,
+            locale,
         );
-        let stamp = self.locale_stamp();
-        let desired = dozer_model::Stamped::new(stamp, desired);
-        let mut scripts = Vec::new();
-        // 页面(重)加载后先下一次输入框草稿快照(`__gcDrafts` + `__gcApplyDrafts`,
-        // 顺序无关:前端组件挂载时也会主动应用一次)。若并入声明式载荷,每个
-        // 键都会触发整份载荷重推 + 前端整树 diff,故走一次性脚本(见
-        // `WebviewPushState::needs_draft_restore`)。
-        if self.group_chat_webview.take_needs_draft_restore() {
-            scripts.push((
-                webview_id,
-                format!("window.__gcDrafts={drafts_json};window.__gcApplyDrafts&&window.__gcApplyDrafts()"),
-            ));
-        }
-        if let Some(payload) = self.group_chat_webview.pending_push(&desired) {
-            let revision = self.group_chat_webview.mark_sent(payload.clone());
-            let (locale, payload) = payload.into_parts();
-            let envelope = crate::extensions::group_chat::encode_group_chat_push(
-                revision,
-                Some(locale),
-                payload,
-            );
-            scripts.push((webview_id, crate::preview::dispatch_script(&envelope)));
-        }
-        scripts
+        self.group_chat_webview = push;
+        scripts.into_iter().map(|s| (webview_id, s)).collect()
     }
 
     /// 找到某个 pane 里处于"CodeMirror 且 Ready"的 tab(Agent 命令入口的前置
@@ -1722,10 +1699,12 @@ impl App {
     /// `about_to_wait` 是否需要为群聊排下一拍唤醒:面板可见,且(需要加载群列表 或
     /// 本群有发言进行中)。没有发言时不轮询,不空转。
     pub fn group_chat_poll_wanted(&self) -> bool {
-        self.group_chat_panel_visible()
-            && self
-                .active_workspace()
-                .is_some_and(|ws| ws.group_chat.load_pending() || ws.group_chat.has_active_turn())
+        self.active_workspace().is_some_and(|ws| {
+            dozer_panel_group_chat::host::poll_wanted(
+                &ws.group_chat,
+                self.group_chat_panel_visible(),
+            )
+        })
     }
 
     /// `ResumeTimeReached` 时调用:该加载就加载,该轮询就轮询(限速、在途、退避都在
@@ -3978,21 +3957,28 @@ impl App {
                     list_visible,
                 );
                 if bounds.2 > 0.0 && bounds.3 > 0.0 {
-                    let spec = WebviewSpec {
-                        id: GROUP_CHAT_CONTENT_ID_OFFSET,
-                        url: format!(
-                            "dozer://group-chat-content/host.html?theme={}",
-                            crate::preview::scheme_query_value()
-                        ),
-                        visible: !app_modal_open,
-                        editor_binding: None,
-                        reserve: None,
-                        loading_generation: None,
-                        surface: None,
-                        park_offscreen: false,
-                        display_i18n: None,
+                    let Some(spec) = dozer_panel_group_chat::assets::group_chat_webview_spec(
+                        false,
+                        true,
+                        "dozer",
+                        crate::preview::scheme_query_value(),
+                    ) else {
+                        continue;
                     };
-                    out.push((spec, bounds));
+                    out.push((
+                        WebviewSpec {
+                            id: GROUP_CHAT_CONTENT_ID_OFFSET,
+                            url: spec.url,
+                            visible: !app_modal_open && spec.visible,
+                            editor_binding: None,
+                            reserve: None,
+                            loading_generation: None,
+                            surface: None,
+                            park_offscreen: spec.park_offscreen,
+                            display_i18n: None,
+                        },
+                        bounds,
+                    ));
                 }
                 continue;
             }

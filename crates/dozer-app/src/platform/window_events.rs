@@ -2829,7 +2829,7 @@ impl Runner {
         }
         // 群聊面板 webview(单固定槽):声明式推送,同 Todo 节奏。
         for (webview_id, js) in
-            app.take_group_chat_content_script(&available_webview_ids, std::time::Instant::now())
+            app.group_chat_content_scripts(&available_webview_ids, std::time::Instant::now())
         {
             if let Some((view, _)) = webviews.get(&webview_id) {
                 let _ = view.evaluate_script(&js);
