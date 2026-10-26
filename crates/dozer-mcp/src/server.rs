@@ -308,6 +308,7 @@ impl DozerMcpServer {
         &self,
         Parameters(AddTodoParams { text }): Parameters<AddTodoParams>,
     ) -> Result<CallToolResult, McpError> {
+        require_text(&text)?;
         let (project_id, _agent) = self
             .resolve_project_and_agent()
             .await
@@ -327,6 +328,7 @@ impl DozerMcpServer {
         &self,
         Parameters(ToggleTodoParams { id, done }): Parameters<ToggleTodoParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.require_own_todo(id).await?;
         let todo = self
             .client
             .toggle_todo(id, done)
@@ -342,6 +344,8 @@ impl DozerMcpServer {
         &self,
         Parameters(EditTodoTextParams { id, text }): Parameters<EditTodoTextParams>,
     ) -> Result<CallToolResult, McpError> {
+        require_text(&text)?;
+        self.require_own_todo(id).await?;
         let todo = self
             .client
             .edit_todo_text(id, &text)
@@ -606,6 +610,28 @@ impl DozerMcpServer {
             .map_err(|e| anyhow::anyhow!("查询预览上下文失败: {e}"))
     }
 
+    /// 任务必须属于本会话所在的项目:agent 只能改自己项目的待办,
+    /// 用别的项目(或不存在)的 id 一律拒绝,什么都不写。
+    async fn require_own_todo(&self, id: i64) -> Result<(), McpError> {
+        let (project_id, _agent) = self
+            .resolve_project_and_agent()
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        let own = self
+            .client
+            .list_todos(project_id)
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        if own.iter().any(|t| t.id == id) {
+            Ok(())
+        } else {
+            Err(McpError::invalid_params(
+                format!("任务 {id} 不属于当前项目(或不存在);先用 list_todos 查看本项目的任务 id"),
+                None,
+            ))
+        }
+    }
+
     /// session_id → (project_id, agent) 的解析逻辑。`agent` 用于
     /// `write_memory` 的 `actor` 归属;`list_todos`/`add_todo` 等既有
     /// 调用方不需要 `agent`,解构时用 `_` 丢弃即可。
@@ -637,6 +663,15 @@ impl DozerMcpServer {
     /// 让集成测试看不到这个方法，所以保持普通 `pub`。
     pub async fn fetch_context_for_test(&self) -> anyhow::Result<Option<PreviewContext>> {
         self.fetch_context().await
+    }
+}
+
+/// 任务文字不能为空,也不能只有空白;有内容的文字原样保存,不替 agent 改写。
+fn require_text(text: &str) -> Result<(), McpError> {
+    if text.trim().is_empty() {
+        Err(McpError::invalid_params("任务文字不能为空", None))
+    } else {
+        Ok(())
     }
 }
 
