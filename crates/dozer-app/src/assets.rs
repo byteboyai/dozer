@@ -159,7 +159,7 @@ pub fn handle_protocol(
 }
 
 /// vendored 静态资源服务(应用外壳自己的命名空间)。
-fn serve_vendored(root: &Path, encoded_path: &str) -> ProtocolReply {
+pub(crate) fn serve_vendored(root: &Path, encoded_path: &str) -> ProtocolReply {
     let mut full = root.to_path_buf();
     for seg in encoded_path.split('/') {
         let Some(seg) = dozer_panel_preview::assets::percent_decode(seg) else {

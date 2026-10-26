@@ -1199,3 +1199,245 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod s8a_golden_tests {
+    use super::*;
+    use crate::extensions::group_chat::{Message, update};
+    use dozer_model::{
+        AgentKind, GroupAuthor, GroupInfo, GroupMemberInfo, GroupMessageInfo, GroupMessageStatus,
+    };
+    use sha2::{Digest, Sha256};
+
+    fn fixture(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
+    }
+
+    fn write_or_assert(name: &str, actual: &str) {
+        let path = fixture(name);
+        if std::env::var_os("UPDATE_GOLDEN").is_some() {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, actual).unwrap();
+            return;
+        }
+        let expected = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        assert_eq!(actual, expected, "{} changed", path.display());
+    }
+
+    fn member(id: i64, agent: AgentKind, handle: &str) -> GroupMemberInfo {
+        GroupMemberInfo {
+            id,
+            group_id: 1,
+            agent,
+            handle: handle.into(),
+            role_prompt: "角色".into(),
+        }
+    }
+
+    fn msg(
+        id: i64,
+        seq: i64,
+        rev: i64,
+        author: GroupAuthor,
+        status: Option<GroupMessageStatus>,
+        text: &str,
+    ) -> GroupMessageInfo {
+        GroupMessageInfo {
+            id,
+            group_id: 1,
+            seq,
+            rev,
+            author,
+            text: text.into(),
+            mentions: vec![],
+            status,
+            duration_ms: Some(1500),
+            created_ms: 0,
+            todo_id: None,
+        }
+    }
+
+    fn rich_state() -> WorkspaceState {
+        let mut state = WorkspaceState::default();
+        let groups = vec![
+            GroupInfo {
+                id: 1,
+                project_id: 7,
+                topic: "评审登录方案".into(),
+                created_ms: 0,
+                members: vec![
+                    member(10, AgentKind::Claude, "架构师"),
+                    member(11, AgentKind::Codex, "审阅者"),
+                    member(12, AgentKind::Codebuddy, "第三人"),
+                    member(13, AgentKind::Opencode, "第四人"),
+                    member(14, AgentKind::Qodercn, "回绕到零"),
+                ],
+            },
+            GroupInfo {
+                id: 2,
+                project_id: 7,
+                topic: "second".into(),
+                created_ms: 1,
+                members: vec![],
+            },
+        ];
+        update(&mut state, Message::GroupsLoaded(7, Ok(groups)));
+        let mut messages = vec![
+            msg(1, 1, 1, GroupAuthor::Human, None, "第一行\n第二行"),
+            msg(
+                2,
+                2,
+                2,
+                GroupAuthor::Member { member_id: 10 },
+                Some(GroupMessageStatus::Done),
+                "RTL: \u{202e}abc\u{202c}; zero:\u{200b}",
+            ),
+            msg(
+                3,
+                3,
+                3,
+                GroupAuthor::Member { member_id: 99 },
+                Some(GroupMessageStatus::Done),
+                "removed",
+            ),
+            msg(4, 4, 4, GroupAuthor::System, None, "system"),
+            msg(
+                5,
+                5,
+                5,
+                GroupAuthor::Member { member_id: 11 },
+                Some(GroupMessageStatus::Queued),
+                "queued",
+            ),
+            msg(
+                6,
+                6,
+                6,
+                GroupAuthor::Member { member_id: 12 },
+                Some(GroupMessageStatus::Running),
+                "running",
+            ),
+            msg(
+                7,
+                7,
+                7,
+                GroupAuthor::Member { member_id: 13 },
+                Some(GroupMessageStatus::Failed { reason: "超时".into() }),
+                "failed",
+            ),
+            msg(
+                8,
+                8,
+                8,
+                GroupAuthor::Member { member_id: 14 },
+                Some(GroupMessageStatus::Cancelled),
+                "cancelled",
+            ),
+            msg(
+                9,
+                9,
+                9,
+                GroupAuthor::Human,
+                None,
+                &"长".repeat(20_000),
+            ),
+        ];
+        update(
+            &mut state,
+            Message::Polled {
+                project_id: 7,
+                group_id: 1,
+                result: Ok((std::mem::take(&mut messages), 9)),
+            },
+        );
+        state
+    }
+
+    #[test]
+    fn group_chat_payload_matches_the_golden() {
+        let payload = current_view_payload(&rich_state(), 7, "en");
+        let text = encode_group_chat_push(
+            3,
+            Some(dozer_model::LocaleStamp {
+                ui_locale: dozer_model::Locale::default_locale(),
+                locale_revision: 0,
+            }),
+            payload,
+        );
+        write_or_assert("group_chat_payload_golden.json", &text);
+    }
+
+    #[test]
+    fn group_chat_events_match_the_golden() {
+        let state = rich_state();
+        let bodies = [
+            r#"{"kind":"ready"}"#,
+            r#"{"kind":"failed","reason":"boom"}"#,
+            r#"{"kind":"set_draft","group_id":1,"text":"draft"}"#,
+            r#"{"kind":"create_group","topic":"新群"}"#,
+            r#"{"kind":"create_group","topic":"   "}"#,
+            r#"{"kind":"select_group","group_id":1}"#,
+            r#"{"kind":"select_group","group_id":999}"#,
+            r#"{"kind":"delete_group","group_id":2}"#,
+            r#"{"kind":"add_member","group_id":1,"agent":"claude","handle":"新成员","role_prompt":""}"#,
+            r#"{"kind":"add_member","group_id":1,"agent":"unknown","handle":"x","role_prompt":""}"#,
+            r#"{"kind":"update_member","member_id":10,"handle":"改名","role_prompt":"角色"}"#,
+            r#"{"kind":"remove_member","member_id":999}"#,
+            r#"{"kind":"post","group_id":1,"text":"hello"}"#,
+            r#"{"kind":"post","group_id":2,"text":"wrong group"}"#,
+            r#"{"kind":"cancel","group_id":1,"scope":"all"}"#,
+            r#"{"kind":"retry","message_id":7}"#,
+            r#"{"kind":"retry","message_id":1}"#,
+            r#"{"kind":"push_todo","message_id":1,"text":"买菜"}"#,
+            r#"{"kind":"open_todo","todo_id":9}"#,
+            r#"{"kind":"open_todo","todo_id":0}"#,
+            r#"{"kind":"nope"}"#,
+            r#"{"kind":"post","group_id":1,"text":"#,
+            r#"{"kind":"add_height","px":1}"#,
+        ];
+        let mut out = String::new();
+        for body in bodies {
+            let parsed = parse_group_chat_event(body).map_err(|e| e.to_string());
+            let routed = parsed
+                .as_ref()
+                .ok()
+                .and_then(|ev| route_event(&state, ev.clone()));
+            let row = serde_json::json!({
+                "body": body,
+                "parse": parsed.as_ref().map(|_| "ok").map_err(|e| e.clone()),
+                "route": routed.map(|c| format!("{c:?}")),
+            });
+            out.push_str(&serde_json::to_string(&row).unwrap());
+            out.push('\n');
+        }
+        // 非 UTF-8 输入在 &str 边界就已被拒绝;记录这一事实。
+        let bad = std::str::from_utf8(&[0xff, 0xfe]);
+        out.push_str(&serde_json::json!({"non_utf8": bad.is_err()}).to_string());
+        out.push('\n');
+        write_or_assert("group_chat_events_golden.txt", &out);
+    }
+
+    #[test]
+    fn group_chat_serve_matches_the_golden() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/group-chat-content");
+        let mut out = String::new();
+        for path in ["host.html", "group-chat-content.js", "group-chat-content.css"] {
+            let reply = crate::assets::serve_vendored(&root, path);
+            let hash = Sha256::digest(&reply.body);
+            out.push_str(&format!(
+                "{path}\t{}\t{}\t{:x}\n",
+                reply.status,
+                reply.body.len(),
+                hash
+            ));
+        }
+        for path in ["../usage-content/host.html", "nope", ""] {
+            let reply = crate::assets::serve_vendored(&root, path);
+            out.push_str(&format!("{path}\t{}\n", reply.status));
+        }
+        write_or_assert("group_chat_serve_golden.txt", &out);
+    }
+}
