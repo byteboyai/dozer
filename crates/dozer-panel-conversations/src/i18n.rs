@@ -48,3 +48,18 @@ pub fn t_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) ->
     }
     resolver().resolve(&text, locale).text
 }
+
+/// Deferred panel-owned text, rendered by the host's registered panel resources.
+pub fn keyed(key: &str, fallback: &str) -> LocalizedText {
+    LocalizedText::keyed(CONVERSATIONS_OWNER, key, fallback)
+}
+pub fn keyed_args(key: &str, fallback: &str, args: &[(&str, &str)]) -> LocalizedText {
+    let mut t = keyed(key, fallback);
+    for (k, v) in args {
+        t = t.with_arg(*k, *v);
+    }
+    t
+}
+pub fn render(text: &LocalizedText, locale: &str) -> String {
+    resolver().resolve(text, locale).text
+}

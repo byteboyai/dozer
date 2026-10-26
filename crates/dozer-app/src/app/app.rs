@@ -44,12 +44,6 @@ pub(crate) const DEFAULT_COLS: u16 = 80;
 
 pub(crate) const DEFAULT_ROWS: u16 = 24;
 
-/// `Message::ReviewLoaded` 落地新一页回合时,决定是替换还是追加进已有
-/// `entries`。`append == true`("加载更多")必须真的累加,不能让调用方
-/// 在这一步完成之前就拿刚到手的这一页去建 webview 快照——那样会把之前
-/// 已经展示的内容整个换掉,只剩最新这一页(2026-08-27 修正的真实 bug,
-/// 抽成纯函数方便 headless 单测覆盖这条语义,不依赖 App 级测试夹具)。
-
 #[cfg(target_os = "macos")]
 pub(crate) fn project_link_menu_items(
     target: project::links::LinkTarget,
@@ -4025,7 +4019,7 @@ impl App {
                     PROJECT_PREVIEW_ID_OFFSET,
                 ),
                 PanelKind::Conversations => (
-                    crate::workspace::review_webview_spec(ws.review.as_ref(), locale),
+                    crate::workspace::review_webview_spec(ws.conversations.review.as_ref(), locale),
                     CONVERSATION_REVIEW_ID_OFFSET,
                 ),
                 _ => continue,
@@ -6692,7 +6686,3 @@ mod tests {
         }
     }
 }
-
-pub(crate) use dozer_panel_conversations::{
-    review::merge_review_entries, snapshot::ReviewSnapshot,
-};

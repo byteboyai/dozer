@@ -13,3 +13,5 @@ pub(crate) mod project_panel;
 pub(crate) mod services;
 pub(crate) mod todo_panel;
 pub(crate) mod usage_panel;
+
+pub(crate) mod conversations_panel;

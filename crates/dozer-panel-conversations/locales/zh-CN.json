@@ -10,5 +10,21 @@
   "row.task_suffix": " · 关联任务: {text}",
   "row.task_suffix_truncated": " · 关联任务: {text}…",
   "more": "更多",
-  "error.list_load_failed": "会话列表加载失败: {e}"
+  "error.list_load_failed": "会话列表加载失败: {e}",
+  "common.loading": "加载中…",
+  "panel.collapse_list": "收起列表",
+  "panel.expand_list": "展开列表",
+  "review.no_conversation": "暂无对话",
+  "summary_failed": "⚠ 生成总结失败: {error}",
+  "summary_failed_unknown": "⚠ 生成总结失败",
+  "summary_submit_failed": "⚠ 提交总结任务失败: {error}",
+  "summary_cancelled": "总结任务已取消",
+  "summary_job_missing": "总结任务不存在，请重试",
+  "summary_poll_failed": "查询总结失败: {error}",
+  "summary_refresh_failed": "总结已生成，但刷新会话失败: {error}",
+  "load_more": "加载更多…",
+  "pane_title": "对话",
+  "generating": "生成中…",
+  "generate_summary": "生成总结",
+  "no_review_content": "暂无审阅内容——点击左侧对话列表中的对话开始审阅"
 }

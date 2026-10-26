@@ -10,5 +10,21 @@
   "row.task_suffix": " · Linked todo: {text}",
   "row.task_suffix_truncated": " · Linked todo: {text}…",
   "more": "More",
-  "error.list_load_failed": "Failed to load conversations: {e}"
+  "error.list_load_failed": "Failed to load conversations: {e}",
+  "common.loading": "Loading…",
+  "panel.collapse_list": "Collapse list",
+  "panel.expand_list": "Expand list",
+  "review.no_conversation": "No conversation",
+  "summary_failed": "⚠ Failed to generate summary: {error}",
+  "summary_failed_unknown": "⚠ Failed to generate summary",
+  "summary_submit_failed": "⚠ Failed to submit summary task: {error}",
+  "summary_cancelled": "Summary task cancelled",
+  "summary_job_missing": "Summary task not found, please retry",
+  "summary_poll_failed": "Failed to query summary: {error}",
+  "summary_refresh_failed": "Summary generated, but refreshing sessions failed: {error}",
+  "load_more": "Load more…",
+  "pane_title": "Conversations",
+  "generating": "Generating…",
+  "generate_summary": "Generate Summary",
+  "no_review_content": "No review content—click a conversation in the list on the left to start reviewing"
 }

@@ -23,14 +23,11 @@ use crate::extensions::usage;
 use crate::panel_host::ActivationCtx;
 use crate::term::terminal;
 use crate::workspace::{
-    CONVERSATION_DETAIL_PAGE_SIZE, RestorePayload, ReviewSource, ReviewView, SshOut,
-    TabAttachedArgs, TabBackend, Workspace, exited_marker, relative_time_text,
+    RestorePayload, SshOut, TabAttachedArgs, TabBackend, Workspace, exited_marker,
     spawn_disk_usage_refresh, spawn_project_git_refresh, tab_display_width, tab_title,
 };
 use byteui::interaction::icons;
-use dozer_core::protocol::{
-    AgentKind, BookmarkInfo, ProjectInfo, SummaryJobStatus, SummaryTrigger,
-};
+use dozer_core::protocol::{BookmarkInfo, ProjectInfo};
 use iced_widget::core::{Element, Length, Padding};
 use iced_widget::{column, container};
 use std::path::PathBuf;
@@ -187,7 +184,12 @@ impl App {
                         .into_iter()
                         .map(|n| toast::pending_from_notice(project::LOG, n)),
                 );
-                pending.extend(ws.conversations.take_outbox());
+                pending.extend(
+                    ws.conversations
+                        .take_outbox()
+                        .into_iter()
+                        .map(|n| toast::pending_from_notice(conversations::LOG, n)),
+                );
                 pending.extend(ws.codehealth.take_outbox());
                 pending.extend(ws.group_chat.take_outbox());
                 pending.extend(ws.ssh.take_outbox());
@@ -291,11 +293,8 @@ impl App {
                 }
             }
             Message::TodoContentWebviewEvent(event) => self.todo_content_event(event),
-            Message::ReviewTraceWebviewEvent(event) => {
-                let crate::preview::ReviewTraceEvent::DocumentLoaded = event;
-                self.with_focused_project(|ws, _io| {
-                    mark_review_loaded(&mut ws.review);
-                });
+            Message::ReviewTraceWebviewEvent(_event) => {
+                self.conversations_message(None, conversations::Message::ReviewTraceLoaded)
             }
             Message::Host(host_event) => self.host_event(host_event),
             Message::Preview(kind, msg) => self.preview_ui(kind, msg),
@@ -336,134 +335,7 @@ impl App {
                     }
                 });
             }
-            Message::ReviewLoaded(project_id, source, append, result) => {
-                self.with_project(project_id, |ws, _io| {
-                    if result.is_ok() {
-                        ws.review_nonce = ws.review_nonce.wrapping_add(1);
-                    }
-                    let nonce = ws.review_nonce;
-                    if let Some(rv) = &mut ws.review
-                        && rv.source == source
-                    {
-                        match result {
-                            Ok(entries) => {
-                                // 快照写入必须放在 `rv.source == source` 判断
-                                // 通过之后——这是它跟旧实现(main.rs 里的裸
-                                // `static`,过期/乱序结果也会无条件覆盖)的
-                                // 关键区别,过期加载结果到这里已经被
-                                // 上面的守卫挡在外面,不会再污染快照。
-                                merge_review_entries(&mut rv.entries, entries, append);
-                                let snapshot = ReviewSnapshot {
-                                    entries: &rv.entries,
-                                    agent_label: rv.agent.label(),
-                                    summary_title: rv.summary_title.clone(),
-                                    summary_text: rv.summary_text.clone(),
-                                    summary_time: rv.summary_time.clone(),
-                                };
-                                let json = serde_json::to_string(&snapshot).unwrap_or_default();
-                                *ws.review_snapshot.lock().expect("review snapshot 锁") =
-                                    Some(json);
-                                rv.nonce = nonce;
-                                rv.error = None;
-                            }
-                            Err(e) => rv.error = Some(e),
-                        }
-                    }
-                });
-            }
-            Message::Conversations(
-                msg @ (conversations::Message::SessionsRefreshed(..)
-                | conversations::Message::AsyncResult(..)),
-            ) => {
-                let project_id = msg.result_project().expect("conversation result project");
-                self.with_project(project_id, move |ws, _io| {
-                    conversations::update(&mut ws.conversations, msg);
-                    let open_cid = ws.review.as_ref().and_then(|rv| match &rv.source {
-                        ReviewSource::Conversation(cid) => Some(cid.clone()),
-                    });
-                    if let Some(row) = open_cid.as_deref().and_then(|cid| {
-                        ws.conversations
-                            .sessions()
-                            .and_then(|rows| rows.iter().find(|r| r.conversation_id == cid))
-                    }) && let Some(json) =
-                        refresh_open_conversation_summary(&mut ws.review, &mut ws.review_nonce, row)
-                    {
-                        *ws.review_snapshot.lock().expect("review snapshot 锁") = Some(json);
-                    }
-                });
-            }
-            Message::Conversations(conversations::Message::SessionOpen(conversation_id, agent)) => {
-                self.conversation_session_open(conversation_id, agent);
-            }
-            Message::Conversations(conversations::Message::DetailLoadMore(
-                conversation_id,
-                after_turn_index,
-            )) => {
-                self.with_focused_project(|ws, io| {
-                    ws.spawn_review_load_conversation(
-                        io,
-                        conversation_id,
-                        after_turn_index,
-                        CONVERSATION_DETAIL_PAGE_SIZE,
-                        true,
-                    );
-                });
-            }
-            Message::Conversations(conversations::Message::SummaryGenerate(
-                conversation_id,
-                agent,
-            )) => {
-                self.conversation_summary_generate(conversation_id, agent);
-            }
-            Message::Conversations(conversations::Message::SummaryGenerateFinished(
-                project_id,
-                conversation_id,
-                result,
-            )) => {
-                self.with_project(project_id, move |ws, _io| {
-                    ws.conversations
-                        .finish_summary_generation(conversation_id, result);
-                });
-            }
-            Message::Conversations(conversations::Message::Hover(id, h)) => self.set_hover(id, h),
-            Message::Conversations(conversations::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
-                    id: target.id,
-                    secure: target.secure,
-                }));
-            }
-            Message::Conversations(conversations::Message::AgentPickerOpen) => {
-                #[cfg(target_os = "macos")]
-                {
-                    let last_cursor = self.last_cursor;
-                    let items = self
-                        .active_workspace()
-                        .map(|ws| {
-                            conversations::agent_picker_items(
-                                &ws.conversations,
-                                self.locale.active_locale(),
-                            )
-                        })
-                        .unwrap_or_default();
-                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
-                        self.update(Message::Conversations(msg));
-                    }
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    self.with_focused_project(|ws, _io| {
-                        conversations::update(
-                            &mut ws.conversations,
-                            conversations::Message::AgentPickerOpen,
-                        );
-                    });
-                }
-            }
-            Message::Conversations(msg) => {
-                self.with_focused_project(|ws, _io| {
-                    conversations::update(&mut ws.conversations, msg);
-                });
-            }
+            Message::Conversations(msg) => self.conversations_message(None, msg),
             Message::ProjectDeleteDone {
                 project_id,
                 deregistered,
@@ -4557,214 +4429,6 @@ impl App {
         });
     }
 
-    /// 点击对话面板扁平列表里的某一行——只把审阅面板加载到这一个回合
-    /// 点对话面板会话列表某一行 → 打开该 session 的详情审阅:整段回合
-    /// 列表 + 总结展示区(标题/全文)。`agent` 由调用方随行内数据一并传入。
-    /// 总结数据直接取自已加载的 `SessionRow`,不为此单独发请求(2026-08-27)。
-    pub(crate) fn conversation_session_open(&mut self, conversation_id: String, agent: AgentKind) {
-        let locale = self.locale.active_locale().to_owned();
-        self.with_focused_project(move |ws, io| {
-            let Some(row) = ws
-                .conversations
-                .sessions()
-                .and_then(|rows| rows.iter().find(|r| r.conversation_id == conversation_id))
-            else {
-                // 列表刷新与点击之间的竞态(极小概率):这一行已经不在当前
-                // 列表里了,直接不打开详情,不 panic、不报错弹窗。
-                return;
-            };
-            let summary_title = row.display_title.clone();
-            let summary_text = row.summary.clone();
-            let last_ts = row.last_ts;
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-            let source = ReviewSource::Conversation(conversation_id.clone());
-            ws.review = Some(ReviewView {
-                source: source.clone(),
-                entries: Vec::new(),
-                error: None,
-                agent,
-                nonce: 0,
-                summary_title: Some(summary_title),
-                summary_text,
-                summary_time: Some(relative_time_text(last_ts, now_ms, &locale)),
-                loaded_nonce: None,
-            });
-            ws.spawn_review_load_conversation(
-                io,
-                conversation_id,
-                -1,
-                CONVERSATION_DETAIL_PAGE_SIZE,
-                false,
-            );
-        });
-    }
-
-    /// 会话详情面板"生成总结"按钮:对某 conversation 提交 V2 总结任务
-    /// (Manual + force),轮询到终态后刷新列表 + 重新打开详情(spec 2026-09-26
-    /// 第 8 节:会话详情提供生成/重试)。刷新与重开两条消息按序到达,主循环
-    /// 串行处理,`SessionsRefreshed` 先更新列表、`SessionOpen` 后用新 summary。
-    pub(crate) fn conversation_summary_generate(
-        &mut self,
-        conversation_id: String,
-        _agent: AgentKind,
-    ) {
-        let Some((project_id, cwd)) = self
-            .active_workspace()
-            .and_then(|ws| ws.project.as_ref())
-            .map(|p| (p.id, p.path.clone()))
-        else {
-            return;
-        };
-        let started = self.active_workspace_mut().is_some_and(|ws| {
-            ws.conversations
-                .start_summary_generation(conversation_id.clone())
-        });
-        if !started {
-            return;
-        }
-        let client = self.client.clone();
-        let handle = self.handle.clone();
-        let proxy = self.proxy.clone();
-        let conversation = crate::host_adapters::services::services_for(&client).conversation;
-        let requests = self
-            .active_workspace()
-            .unwrap()
-            .conversations
-            .requests
-            .clone();
-        let cid = conversation_id.clone();
-        handle.spawn(async move {
-            let job_id = match client
-                .submit_summary_job(&cid, None, SummaryTrigger::Manual, None, None, true)
-                .await
-            {
-                Ok(id) => id,
-                Err(e) => {
-                    dozer_core::log_warn!(LOG, error = %e, %cid, "提交总结任务失败");
-                    let _ = proxy.send_event(Message::Conversations(
-                        conversations::Message::SummaryGenerateFinished(
-                            project_id,
-                            cid.clone(),
-                            Err(crate::i18n::host_keyed_args(
-                                "conversations.summary_submit_failed",
-                                "⚠ Failed to submit summary task: {error}",
-                                &[("error", &e.to_string())],
-                            )),
-                        ),
-                    ));
-                    return;
-                }
-            };
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                match client.get_summary_job(job_id).await {
-                    Ok(Some(job)) => {
-                        if job.status == SummaryJobStatus::Failed {
-                            let err = match job.error_detail {
-                                Some(detail) => crate::i18n::host_keyed_args(
-                                    "conversations.summary_failed",
-                                    "⚠ Failed to generate summary: {error}",
-                                    &[("error", &detail)],
-                                ),
-                                None => crate::i18n::host_keyed(
-                                    "conversations.summary_failed_unknown",
-                                    "⚠ Failed to generate summary",
-                                ),
-                            };
-                            let _ = proxy.send_event(Message::Conversations(
-                                conversations::Message::SummaryGenerateFinished(
-                                    project_id,
-                                    cid.clone(),
-                                    Err(err),
-                                ),
-                            ));
-                            return;
-                        }
-                        if job.status == SummaryJobStatus::Cancelled {
-                            let _ = proxy.send_event(Message::Conversations(
-                                conversations::Message::SummaryGenerateFinished(
-                                    project_id,
-                                    cid.clone(),
-                                    Err(crate::i18n::host_keyed(
-                                        "conversations.summary_cancelled",
-                                        "Summary task cancelled",
-                                    )),
-                                ),
-                            ));
-                            return;
-                        }
-                        if matches!(
-                            job.status,
-                            SummaryJobStatus::Succeeded
-                                | SummaryJobStatus::Failed
-                                | SummaryJobStatus::Cancelled
-                        ) {
-                            break;
-                        }
-                    }
-                    Ok(None) => {
-                        dozer_core::log_warn!(LOG, job_id, %cid, "总结任务不存在");
-                        let _ = proxy.send_event(Message::Conversations(
-                            conversations::Message::SummaryGenerateFinished(
-                                project_id,
-                                cid.clone(),
-                                Err(crate::i18n::host_keyed(
-                                    "conversations.summary_job_missing",
-                                    "Summary task not found, please retry",
-                                )),
-                            ),
-                        ));
-                        return;
-                    }
-                    Err(e) => {
-                        dozer_core::log_warn!(LOG, error = %e, job_id, %cid, "查询总结任务失败");
-                        let _ = proxy.send_event(Message::Conversations(
-                            conversations::Message::SummaryGenerateFinished(
-                                project_id,
-                                cid.clone(),
-                                Err(crate::i18n::host_keyed_args(
-                                    "conversations.summary_poll_failed",
-                                    "Failed to query summary: {error}",
-                                    &[("error", &e.to_string())],
-                                )),
-                            ),
-                        ));
-                        return;
-                    }
-                }
-            }
-            let request = requests.begin(Some(project_id), "sessions");
-            let result: Result<Vec<dozer_model::SessionRow>, dozer_services::ServiceError> =
-                conversation
-                    .list_conversations_with_summaries(cwd.clone(), None, 500, 0)
-                    .await
-                    .map(|rows| {
-                        rows.iter()
-                            .map(|(c, s)| dozer_model::SessionRow::from_row(c, s.as_ref()))
-                            .collect()
-                    });
-            let completion = result.as_ref().map(|_| ()).map_err(|e| {
-                crate::i18n::host_keyed_args(
-                    "conversations.summary_refresh_failed",
-                    "Summary generated, but refreshing sessions failed: {error}",
-                    &[("error", &e.to_string())],
-                )
-            });
-            let _ = proxy.send_event(Message::Conversations(conversations::Message::AsyncResult(
-                request,
-                Box::new(conversations::Message::SessionsRefreshed(
-                    project_id, result,
-                )),
-            )));
-            let _ = proxy.send_event(Message::Conversations(
-                conversations::Message::SummaryGenerateFinished(project_id, cid, completion),
-            ));
-        });
-    }
-
     pub(crate) fn search_results(
         &mut self,
         project_id: i64,
@@ -5431,7 +5095,3 @@ mod reload_by_path_tests {
         ));
     }
 }
-
-pub(crate) use dozer_panel_conversations::snapshot::{
-    mark_review_loaded, refresh_open_conversation_summary,
-};

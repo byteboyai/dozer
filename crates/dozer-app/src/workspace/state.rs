@@ -17,10 +17,10 @@ use crate::osc::OscScanner;
 use crate::preview::PreviewPane;
 use crate::project::FileTree;
 use crate::term::term_model::TerminalModel;
-use crate::ui_text::text;
 use byteui::interaction::tab_strip::tab_window_reveal;
 use dozer_client::Client;
 use dozer_core::protocol::{AgentKind, ProjectInfo, SessionInfo};
+pub use dozer_panel_conversations::snapshot::ReviewView;
 
 dozer_core::scope!(LOG, module, "shell");
 
@@ -265,26 +265,7 @@ pub struct Workspace {
     /// `dozer://flyfish/__file__` 端点的文件白名单;与 main.rs 的协议
     /// 闭包共享(Arc),打开文件时插入.
     pub(crate) allowed_files: Arc<Mutex<dozer_panel_preview::assets::AllowedFiles>>,
-    /// 进行中的会话审阅（审阅 tab 内容;None=未打开;P1i）。
-    pub(crate) review: Option<ReviewView>,
-    /// `dozer://review-trace/data.json` 协议端点回显的当前审阅内容快照
-    /// (JSON 字符串)。**per-project**——`Message::ReviewLoaded` 只在
-    /// `rv.source == source`(未过期)时才会写(见该处理分支),协议闭包
-    /// 在 webview 创建时按当前聚焦项目捕获这个 `Arc`(同 `allowed_files`
-    /// 的手法),天然避免"过期加载结果覆盖当前内容"与"跨项目串数据"
-    /// 两个问题——不能像最初实现那样用 main.rs 里的裸 `static`(那样会绕开
-    /// `rv.source == source` 的过期结果过滤,也没有 per-project 隔离)。见
-    /// docs/superpowers/plans/2026-08-21-review-content-webview-trace.md
-    /// 审阅记录。
-    pub(crate) review_snapshot: Arc<Mutex<Option<String>>>,
-    /// 全局单调递增的审阅内容加载水位,每次 `Message::ReviewLoaded`
-    /// 成功一次就 +1(与具体加载了哪个回合区间无关)——保证连续点开
-    /// 两个不同回合、恰好都是"该 source 第一次加载"时,`ReviewView.nonce`
-    /// 也不会撞成同一个值(如果各自从 0 起独立计数会撞)。见
-    /// docs/superpowers/plans/2026-08-21-review-content-webview-trace.md
-    /// Task 2。
-    pub(crate) review_nonce: u64,
-    /// 对话(Conversations)面板列表侧的本地状态——见
+    /// 对话面板列表、详情、总结与请求状态——见
     /// `extensions::conversations::WorkspaceState`(2026-09-15 从 `Workspace`
     /// 上平铺的 7 个 `conversation_*` 字段收拢而来)。
     pub(crate) conversations: conversations::WorkspaceState,
@@ -525,9 +506,6 @@ impl Workspace {
             browser: browser::State::default(),
             agent_context: Default::default(),
             allowed_files: Arc::new(Mutex::new(dozer_panel_preview::assets::AllowedFiles::new())),
-            review: None,
-            review_snapshot: Arc::new(Mutex::new(None)),
-            review_nonce: 0,
             conversations: conversations::WorkspaceState::default(),
             usage: usage::WorkspaceState::default(),
             codehealth: codehealth::WorkspaceState::default(),
@@ -690,40 +668,9 @@ impl Workspace {
     /// 后者，导致同时开几个 tab 就有几行同时被标"● 当前"，见对话面板列表
     /// "● 当前"用 (`extensions::conversations::view`)。
     pub fn current_review_conversation_id(&self) -> Option<String> {
-        dozer_panel_conversations::snapshot::current_review_conversation_id(self.review.as_ref())
+        self.conversations
+            .current_conversation_id()
             .map(str::to_owned)
-    }
-
-    /// session 详情整段加载/"加载更多"追加(2026-08-27)。`append` 为
-    /// `true` 时结果应追加进现有 `entries`(加载更多),`false` 时替换
-    /// (首次打开)——原样透传进 `Message::ReviewLoaded` 的第三个参数,
-    /// 实际的追加/替换逻辑在 `update()` 里处理,这里只负责发请求带上
-    /// 这个标记。`Message::ReviewLoaded` 的签名是 4 元组
-    /// `(ProjectId, ReviewSource, bool, Result<...>)` 才能接住这里传的
-    /// `append`。
-    pub(crate) fn spawn_review_load_conversation(
-        &self,
-        io: &ShellIo,
-        conversation_id: String,
-        after_turn_index: i64,
-        limit: u32,
-        append: bool,
-    ) {
-        let Some(project) = self.project.as_ref() else {
-            return;
-        };
-        let project_id = project.id;
-        let client = io.client.clone();
-        let proxy = io.proxy.clone();
-        let source = ReviewSource::Conversation(conversation_id.clone());
-        io.handle.spawn(async move {
-            let result = client
-                .get_conversation_turns(&conversation_id, after_turn_index, limit)
-                .await
-                .map(|turns| crate::transcript::review_entries_from_turns(&turns))
-                .map_err(|e| e.to_string());
-            let _ = proxy.send_event(Message::ReviewLoaded(project_id, source, append, result));
-        });
     }
 
     /// 项目切换清理：关掉所有终端 tab（=结束会话，同 CloseTab 语义）与
@@ -1733,7 +1680,7 @@ impl Workspace {
 
     /// 协议闭包共享的审阅内容快照句柄,同 `allowed_files` 的手法。
     pub fn review_snapshot(&self) -> Arc<Mutex<Option<String>>> {
-        Arc::clone(&self.review_snapshot)
+        self.conversations.review_snapshot()
     }
 
     /// 当前激活 tab 是否处于 application cursor mode（DECCKM）。
@@ -1836,53 +1783,6 @@ pub(crate) fn spawn_disk_usage_refresh(project_id: i64, repo_path: PathBuf, io: 
 }
 
 pub(crate) use dozer_panel_agent::tabs::exited_marker;
-
-/// 验收 tab 内容（spec P1f D8）:目标 + 标准勾选 + 变更文件 + 意见 + 双动作。
-/// iced 直绘（验收 tab 激活时 webview 全隐藏，不抢层）。
-/// 会话审阅 tab 内容（P1i）：人类锚点 + AI 回合折叠（正文/过程）。
-pub(crate) fn review_content<'a>(
-    mut content: iced_widget::Column<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
-    ws: &'a Workspace,
-    locale: &str,
-) -> iced_widget::Column<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let Some(rv) = &ws.review else {
-        return content;
-    };
-    if let Some(err) = &rv.error {
-        return content.push(
-            text(format!("⚠ {err}"))
-                .size(byteui::theme::font::subtitle())
-                .color(byteui::theme::color::current().red),
-        );
-    }
-    if rv.entries.is_empty() {
-        content = content.push(lh(text(crate::i18n::host_text(
-            "review.no_conversation",
-            "No conversation",
-            locale,
-        ))
-        .size(byteui::theme::font::subtitle())
-        .color(byteui::theme::color::current().dim)));
-    }
-    // 有内容时:真正的渲染由 review_content_pane 区域叠加的 wry webview
-    // 负责(dozer://review-trace/host.html,数据经 dozer://review-trace/
-    // data.json 拉取),这里不再手写 iced Column——2026-08-21 webview
-    // trace 改造,见
-    // docs/superpowers/plans/2026-08-21-review-content-webview-trace.md。
-    // 对话面板 session 详情(2026-08-27):条目渲染走 webview,但"加载更多"
-    // 按钮补在 iced 滚动体末尾——点它发 `ConversationDetailLoadMore`,
-    // dozer-app 的 `update` 用 `spawn_review_load_conversation(append=true)`
-    // 追加下一页回合,而不是替换首屏。
-    let ReviewSource::Conversation(conversation_id) = &rv.source;
-    if !rv.entries.is_empty() {
-        content = content.push(load_more_button(
-            conversation_id,
-            rv.entries.len() as i64,
-            locale,
-        ));
-    }
-    content
-}
 
 #[cfg(test)]
 mod git_snapshot_tests {
@@ -1990,5 +1890,3 @@ mod git_snapshot_tests {
         assert_eq!(remotes, vec!["https://example.com/x.git".to_string()]);
     }
 }
-
-pub use dozer_panel_conversations::snapshot::{ReviewSource, ReviewView};

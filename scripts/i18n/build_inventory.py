@@ -130,6 +130,10 @@ EXCLUDED_FILE_REASON = "测试/黄金值工具/诊断探针/内部常量;非面�
 # 个别 UI 文件里"不是 UI 文案"的具体字符串:面板清单构造器的自检不变量错误——
 # 只在产品组合根 `.expect(...)` 时以 panic 形式暴露,是开发者错误,不给最终用户看。
 NON_UI_STRINGS = {
+    ("crates/dozer-panel-conversations/src/summary.rs", "提交总结任务失败"): "库内诊断日志(`crate::log::*` → tracing);不面向用户(日志保持原文)",
+    ("crates/dozer-panel-conversations/src/summary.rs", "总结任务不存在"): "库内诊断日志(`crate::log::*` → tracing);不面向用户(日志保持原文)",
+    ("crates/dozer-panel-conversations/src/summary.rs", "查询总结任务失败"): "库内诊断日志(`crate::log::*` → tracing);不面向用户(日志保持原文)",
+    ("crates/dozer-panel-conversations/src/update.rs", "对话会话列表查询失败(dozerd 不可用)"): "库内诊断日志(`crate::log::*` → tracing);不面向用户(日志保持原文)",
     ("crates/dozer-app/src/panel_registry.rs", "面板清单为空"): "面板清单构造器不变量错误;仅 `.expect` 时 panic,不面向用户",
     ("crates/dozer-app/src/panel_registry.rs", "面板描述符里有重复的面板"): "面板清单构造器不变量错误;仅 `.expect` 时 panic,不面向用户",
     ("crates/dozer-app/src/panel_registry.rs", "默认布局不合法:两栏都要非空,且恰好覆盖全部已注册面板、不重复、不含未注册面板"): "面板清单构造器不变量错误;仅 `.expect` 时 panic,不面向用户",

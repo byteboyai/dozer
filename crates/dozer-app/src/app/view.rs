@@ -7,7 +7,6 @@ use crate::chrome::tab_widget;
 use crate::chrome::topbar;
 use crate::extensions::browser;
 use crate::extensions::codehealth;
-use crate::extensions::conversations;
 use crate::extensions::database;
 use crate::extensions::files;
 use crate::extensions::footbar;
@@ -943,16 +942,14 @@ pub(crate) fn panel_body<'a>(
                 Length::FillPortion(content_portion),
                 zone_pane_border(zone, lc),
             );
-            let list = conversations::view(
+            let list = dozer_panel_conversations::view::conversations_list(
                 app,
                 &ws.conversations,
-                ws.todo.items(),
-                ws.current_review_conversation_id().as_deref(),
+                &crate::host_adapters::conversations_panel::WorkspaceTodos(ws),
+                dozer_panel_conversations::adapter::ConversationsCapabilities::all(),
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, rc),
-                app.locale.active_locale(),
-            )
-            .map(Message::Conversations);
+            );
             let review_bg = theme::region::review_content_pane()
                 .background
                 .unwrap_or(byteui::theme::color::current().bg);

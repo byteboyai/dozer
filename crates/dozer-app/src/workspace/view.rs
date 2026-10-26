@@ -1,9 +1,7 @@
 //! Workspace 的 view 层:load_more_button、agent 列表与卡片、工作区内容行、
 //! agent picker、review 内容 pane、preview pane 等渲染函数。
 
-use crate::app::{App, HoverId, Message, PanelKind};
-use crate::chrome::homespace::home_panel_head_with_actions;
-use crate::extensions::conversations;
+use crate::app::{App, Message};
 use crate::menu_spec::{MenuSpec, MenuSpecItem};
 use crate::preview::ViewerPanel;
 use crate::theme;
@@ -13,7 +11,7 @@ use byteui::interaction::icons::IconKind;
 use dozer_panel_preview::ViewCtx;
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Element, Length, Padding};
-use iced_widget::{Scrollable, button, column, container, row, scrollable};
+use iced_widget::{Scrollable, button, column, container, scrollable};
 
 use super::*;
 
@@ -23,39 +21,9 @@ pub(crate) use dozer_panel_agent::card::CardCtx;
 /// hover 金边提示,点击追加下一页回合。`after_turn_index` 用 `entries.len()`
 /// 当锚点——`ReviewEntry` 不携带原始 turn index,详情页按整段摊平加载,取
 /// 条数近似下一步起点即可(跳过首尾折叠带来的少量误差在可接受范围)。
-pub(crate) fn load_more_button<'a>(
-    conversation_id: &'a str,
-    after_turn_index: i64,
-    locale: &str,
-) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let btn = iced_widget::button(
-        text(crate::i18n::host_text(
-            "conversations.load_more",
-            "Load more…",
-            locale,
-        ))
-        .size(byteui::theme::font::caption_sm())
-        .color(byteui::theme::color::current().dim),
-    )
-    .on_press(Message::Conversations(
-        conversations::Message::DetailLoadMore(conversation_id.to_string(), after_turn_index),
-    ))
-    .padding(6)
-    .style(|_t, _s| iced_widget::button::Style {
-        background: None,
-        text_color: byteui::theme::color::current().dim,
-        ..iced_widget::button::Style::default()
-    });
-    container(btn)
-        .width(Length::Fill)
-        .align_x(iced_widget::core::Alignment::Center)
-        .into()
-}
-
 /// 对话面板 session 详情的首屏回合页大小(2026-08-27):列表分页
 /// (`extensions::conversations::CONVERSATION_PAGE_SIZE`,20)与详情页分页
 /// (这里,200)含义不同,不要混用。
-pub(crate) use dozer_panel_conversations::filter::CONVERSATION_DETAIL_PAGE_SIZE;
 
 /// Agent 列表面板(右面板区"Agent"视图的列表侧):按 `AgentKind` 分组展示
 /// 当前项目的会话,组内保留 tab 打开顺序;点击一行 = `Message::SelectTab`
@@ -259,133 +227,13 @@ pub(crate) fn review_content_pane<'a>(
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let region = theme::region::review_content_pane();
-    let locale = app.locale.active_locale();
-    // 内容侧标题栏:左侧名字信息面板(会话/agent 态) + 右侧"生成总结"按钮
-    // (会话详情手动生成/重试,spec 2026-09-26 第 8 节)+ "收起/展开列表列"
-    // 按钮(与 Todo/Database/SSH/Agent 内容侧统一)。
-    let collapse_button = app.list_collapse_button(
-        PanelKind::Conversations,
-        app.list_collapsed(PanelKind::Conversations),
-        HoverId::list_collapse(PanelKind::Conversations),
-        crate::i18n::host_text("panel.collapse_list", "Collapse list", locale),
-        crate::i18n::host_text("panel.expand_list", "Expand list", locale),
-        Message::TogglePanelListCollapse(PanelKind::Conversations),
-        move |h| Message::Hover(HoverId::list_collapse(PanelKind::Conversations), h),
-    );
-    let actions: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match ws.review.as_ref().map(|rv| (&rv.source, rv.agent)) {
-            Some((ReviewSource::Conversation(cid), agent)) => {
-                let generating = ws.conversations.summary_generating(cid);
-                let generate = button(
-                    text(if generating {
-                        crate::i18n::host_text("conversations.generating", "Generating…", locale)
-                    } else {
-                        crate::i18n::host_text(
-                            "conversations.generate_summary",
-                            "Generate Summary",
-                            locale,
-                        )
-                    })
-                    .size(byteui::theme::font::label())
-                    .color(byteui::theme::color::current().cream),
-                )
-                .padding([4, 8]);
-                let generate = if generating {
-                    generate
-                } else {
-                    generate.on_press(Message::Conversations(
-                        conversations::Message::SummaryGenerate(cid.clone(), agent),
-                    ))
-                };
-                row![generate, collapse_button].spacing(6).into()
-            }
-            _ => collapse_button,
-        };
-    let header = container(
-        row![home_panel_head_with_actions(
-            IconKind::BotMessageSquare,
-            crate::i18n::host_text("conversations.pane_title", "Conversations", locale),
-            Some(actions),
-        )]
-        .width(Length::Fill),
+    dozer_panel_conversations::view::review_pane(
+        &ws.conversations,
+        app,
+        dozer_panel_conversations::adapter::ConversationsCapabilities::all(),
+        width,
+        outer,
     )
-    .padding(theme::region::project_pane().padding);
-    let mut content = column![header].spacing(region.gap);
-
-    if let Some(error) = ws.review.as_ref().and_then(|rv| match &rv.source {
-        ReviewSource::Conversation(cid) => ws.conversations.summary_error(cid),
-    }) {
-        content = content.push(
-            text(crate::i18n::host_render(error, locale))
-                .size(byteui::theme::font::body())
-                .color(byteui::theme::color::current().red),
-        );
-    }
-
-    match review_pane_state(ws.review.as_ref()) {
-        ReviewPaneState::Empty => {
-            content = content.push(
-                container(lh(text(crate::i18n::host_text(
-                    "conversations.no_review_content",
-                    "No review content—click a conversation in the list on the left to start reviewing",
-                    locale,
-                ))
-                    .size(byteui::theme::font::subtitle())
-                    .color(byteui::theme::color::current().dim)))
-                .width(Length::Fill)
-                .height(Length::Fill),
-            );
-        }
-        ReviewPaneState::Loading => {
-            // 与 Empty 同结构(独占内容区、不渲染 Scrollable),只是文案换成
-            // "加载中",让 webview 隐藏期间这块区域有意义的提示而不是空的可
-            // 滚动区域(同用量面板"统计中…"分支的写法,视觉基调统一)。
-            content = content.push(
-                container(
-                    iced_widget::column![
-                        byteui::feedback::math_curve::view_animated::<Message>(
-                            byteui::feedback::math_curve::Curve::RoseThree,
-                            64.0,
-                        ),
-                        iced_widget::text(crate::i18n::host_text(
-                            "common.loading",
-                            "Loading…",
-                            locale,
-                        ))
-                        .size(byteui::theme::font::body())
-                        .color(byteui::theme::color::current().dim),
-                    ]
-                    .spacing(12)
-                    .align_x(iced_widget::core::alignment::Horizontal::Center),
-                )
-                .center_x(Length::Fill)
-                .center_y(Length::Fill),
-            );
-        }
-        ReviewPaneState::Ready => {
-            let body = review_content(column![].spacing(region.gap), ws, locale);
-            content = content.push(
-                Scrollable::new(body)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .direction(scrollable::Direction::Vertical(
-                        byteui::interaction::scrollbar::scrollbar(),
-                    ))
-                    .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
-            );
-        }
-    }
-
-    container(content.padding(region.padding))
-        .width(width)
-        .height(Length::Fill)
-        .style(move |_theme: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: outer,
-            ..container::Style::default()
-        })
-        .into()
 }
 
 /// 配对视图内部"列表:内容"的 `FillPortion` 权重对。`FillPortion` 在扣掉
@@ -595,5 +443,3 @@ pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64, locale: &str) ->
         )
     }
 }
-
-pub(crate) use dozer_panel_conversations::snapshot::{ReviewPaneState, review_pane_state};
