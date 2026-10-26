@@ -22,7 +22,6 @@ use crate::panel_layouts;
 use crate::preview::WebviewSpec;
 use crate::term::terminal;
 use crate::theme;
-use crate::transcript::ReviewEntry;
 use crate::webview_geometry;
 use crate::workspace::{RestorePayload, ShellIo, Workspace, fetch_project_restore};
 use byteui::interaction::icons;
@@ -45,40 +44,6 @@ pub(crate) const DEFAULT_COLS: u16 = 80;
 
 pub(crate) const DEFAULT_ROWS: u16 = 24;
 
-/// `dozer://review-trace/data.json` 的响应体形状——`crates/dozer-app/web/
-/// review-trace`(Preact host,2026-09-25 起)按这个结构消费
-/// (`entries`/`agent_label`/`summary_title`/`summary_text`/`summary_time`
-/// 顶层字段,对应该 crate 的 `src/types.ts::TraceData`)。总结区(标题/
-/// 全文/时间)只在本会话详情里非空,活会话 `None`。
-#[derive(serde::Serialize)]
-pub(crate) struct ReviewSnapshot<'a> {
-    pub(crate) entries: &'a [ReviewEntry],
-    /// `AgentKind::label()`(如 `"claude"`)——AI 气泡的头像名字标签用它
-    /// 替代写死的"AI"。
-    pub(crate) agent_label: &'static str,
-    /// session 详情顶部总结区标题/全文/相对时间(2026-08-27 起标题/全文;
-    /// 2026-08-28 加时间;活会话审阅为 `None`)。
-    pub(crate) summary_title: Option<String>,
-    pub(crate) summary_text: Option<String>,
-    pub(crate) summary_time: Option<String>,
-}
-
-/// `Message::ReviewLoaded` 落地新一页回合时,决定是替换还是追加进已有
-/// `entries`。`append == true`("加载更多")必须真的累加,不能让调用方
-/// 在这一步完成之前就拿刚到手的这一页去建 webview 快照——那样会把之前
-/// 已经展示的内容整个换掉,只剩最新这一页(2026-08-27 修正的真实 bug,
-/// 抽成纯函数方便 headless 单测覆盖这条语义,不依赖 App 级测试夹具)。
-pub(crate) fn merge_review_entries(
-    existing: &mut Vec<ReviewEntry>,
-    new: Vec<ReviewEntry>,
-    append: bool,
-) {
-    if append {
-        existing.extend(new);
-    } else {
-        *existing = new;
-    }
-}
 #[cfg(target_os = "macos")]
 pub(crate) fn project_link_menu_items(
     target: project::links::LinkTarget,
@@ -4054,7 +4019,7 @@ impl App {
                     PROJECT_PREVIEW_ID_OFFSET,
                 ),
                 PanelKind::Conversations => (
-                    crate::workspace::review_webview_spec(ws.review.as_ref(), locale),
+                    crate::workspace::review_webview_spec(ws.conversations.review.as_ref(), locale),
                     CONVERSATION_REVIEW_ID_OFFSET,
                 ),
                 _ => continue,
@@ -4746,48 +4711,6 @@ mod tests {
             std::time::Duration::from_secs(2),
         ));
         assert!(start.elapsed() < std::time::Duration::from_millis(100));
-    }
-
-    #[test]
-    fn merge_review_entries_append_true_accumulates_instead_of_replacing() {
-        let mut existing = vec![ReviewEntry::Human {
-            text: "第一页第一条".into(),
-        }];
-        let new = vec![ReviewEntry::Human {
-            text: "第二页第一条".into(),
-        }];
-        merge_review_entries(&mut existing, new, true);
-        assert_eq!(existing.len(), 2, "加载更多应该追加,不该丢掉已有内容");
-        assert_eq!(
-            existing[0],
-            ReviewEntry::Human {
-                text: "第一页第一条".into()
-            }
-        );
-        assert_eq!(
-            existing[1],
-            ReviewEntry::Human {
-                text: "第二页第一条".into()
-            }
-        );
-    }
-
-    #[test]
-    fn merge_review_entries_append_false_replaces() {
-        let mut existing = vec![ReviewEntry::Human {
-            text: "旧内容".into(),
-        }];
-        let new = vec![ReviewEntry::Human {
-            text: "首次加载的新内容".into(),
-        }];
-        merge_review_entries(&mut existing, new, false);
-        assert_eq!(existing.len(), 1);
-        assert_eq!(
-            existing[0],
-            ReviewEntry::Human {
-                text: "首次加载的新内容".into()
-            }
-        );
     }
 
     fn loaded_slot(marker: &str) -> WorkspaceSlot {

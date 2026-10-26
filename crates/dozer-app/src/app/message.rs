@@ -11,8 +11,7 @@ use crate::extensions::{
     project_create, search, settings, ssh, toast, todo, usage,
 };
 use crate::term::terminal;
-use crate::transcript::ReviewEntry;
-use crate::workspace::{PickerLaunch, RestorePayload, ReviewSource};
+use crate::workspace::{PickerLaunch, RestorePayload};
 
 use super::layout::{Divider, ProjectId, RowDivider, TabGroup};
 use super::state::{HoverId, PanelKind, Side, TextInputTarget};
@@ -35,15 +34,6 @@ pub enum Message {
     TermOutput(ProjectId, usize, Vec<u8>),
     /// 对应 tab 的会话已退出（PTY 子进程退出或 daemon 断连）。
     SessionExited(ProjectId, usize),
-    /// 会话审阅:解析完成（来源, 追加标记, 条目 / 错误文案）。`append`
-    /// 为 `true` 时新条目应追加进现有 `entries`(详情"加载更多"),`false`
-    /// 时整段替换(首次打开/活会话刷新)。
-    ReviewLoaded(
-        ProjectId,
-        ReviewSource,
-        bool,
-        Result<Vec<ReviewEntry>, String>,
-    ),
     /// `GetTodoDetail` 异步结果:`usize` 是打开弹窗时记录的卡片下标(用来
     /// 校验弹窗还开着同一个任务,不是用 id 找——`items()` 下标和渲染时
     /// 用的下标必须一致,同 `todo::Message` 全线用下标寻址任务的既有约定)。
@@ -52,10 +42,7 @@ pub enum Message {
     Usage(usage::Message),
     /// 代码健康度面板的全部消息,内核只转发不解读——见 `extensions::codehealth::Message`。
     CodeHealth(codehealth::Message),
-    /// 对话(Conversations)面板列表侧的全部消息,内核只转发不解读——见
-    /// `extensions::conversations::Message`。其中 `SessionOpen`/
-    /// `DetailLoadMore`/`Hover`/`TextInputMenuOpen` 四种由内核直接拦截处理,
-    /// 不会到达 `conversations::update`。
+    /// Shared conversations panel messages; desktop facilities are adapted by the host.
     Conversations(conversations::Message),
     /// 一次"删除项目"执行完成。`errors` 是文件系统步骤各自独立的
     /// 失败原因(空 = 全部成功);dozerd 侧两步(登记/agent 历史)任一失败

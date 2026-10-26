@@ -19,6 +19,7 @@ pub(crate) fn services_for(client: &Client) -> Services {
         memory: Arc::new(client.clone()),
         group_chat: Arc::new(client.clone()),
         conversation: Arc::new(client.clone()),
+        summary: Arc::new(client.clone()),
         codehealth: Arc::new(client.clone()),
         context: Arc::new(client.clone()),
         edit_history: Arc::new(client.clone()),

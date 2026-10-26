@@ -2001,6 +2001,7 @@ dependencies = [
  "dozer-mcp",
  "dozer-model",
  "dozer-panel-agent",
+ "dozer-panel-conversations",
  "dozer-panel-files",
  "dozer-panel-host",
  "dozer-panel-preview",
@@ -2034,6 +2035,7 @@ dependencies = [
  "russh-sftp",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "sysinfo",
  "tempfile",
@@ -2166,6 +2168,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "dozer-panel-conversations"
+version = "0.1.0"
+dependencies = [
+ "bytehost-core",
+ "byteui",
+ "dozer-i18n",
+ "dozer-model",
+ "dozer-panel-host",
+ "dozer-services",
+ "iced_renderer",
+ "iced_widget",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "dozer-panel-files"
 version = "0.1.0"
 dependencies = [
@@ -2205,6 +2226,7 @@ dependencies = [
  "csv",
  "dozer-i18n",
  "dozer-model",
+ "dozer-panel-conversations",
  "dozer-preview-core",
  "iced_renderer",
  "iced_widget",

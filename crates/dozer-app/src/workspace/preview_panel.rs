@@ -16,6 +16,8 @@ use super::*;
 use crate::app::{Message, PanelKind};
 use crate::preview_state;
 
+dozer_core::scope!(PREVIEW_LOG, module, "preview");
+
 /// Dozer 开启全部预览后端(Digger 第一批只开一部分)。
 fn dozer_caps() -> PreviewCapabilities {
     PreviewCapabilities::all()
@@ -230,7 +232,7 @@ impl Workspace {
         io.handle.spawn(async move {
             use dozer_panel_preview::PreviewPersistence;
             if let Err(e) = persistence.save(project_id, &state) {
-                tracing::warn!(target: "dozer::module::preview", "预览 tab 状态写盘失败: {e}");
+                dozer_core::log_warn!(PREVIEW_LOG, "预览 tab 状态写盘失败: {e}");
             }
         });
     }

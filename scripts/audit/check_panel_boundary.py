@@ -20,7 +20,7 @@
 基线:scripts/audit/panel-boundary.baseline.json,格式 {"<文件>": {"R-APP": n, "R-WS": n, "R-PANE-PICK": n}}。
 测试代码里的引用同样计入:H0 阶段不区分生产与测试,迁移完成后再评估是否放宽测试。
 """
-import collections, importlib.util, json, os, re, sys
+import collections, importlib.util, json, os, re, sys, tomllib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location("edges", os.path.join(HERE, "edges.py"))
@@ -233,7 +233,28 @@ def load_sources():
     return files
 
 
+def check_conversations_dependencies():
+    """The shared conversation library must not import product or native-window crates."""
+    manifest = os.path.join(edges.ROOT, "crates", "dozer-panel-conversations", "Cargo.toml")
+    with open(manifest, "rb") as f:
+        package = tomllib.load(f)
+    forbidden = {"dozer-app", "dozer-client", "dozer-core", "dozerd", "wry", "winit"}
+    sections = [package, *package.get("target", {}).values()]
+    problems = []
+    for section in sections:
+        for kind in ("dependencies", "dev-dependencies", "build-dependencies"):
+            for name, dependency in section.get(kind, {}).items():
+                actual = dependency.get("package", name) if isinstance(dependency, dict) else name
+                if actual in forbidden:
+                    problems.append(f"dozer-panel-conversations: forbidden {kind} {actual}")
+    return problems
+
+
 def main(argv):
+    dependency_problems = check_conversations_dependencies()
+    if dependency_problems:
+        print("\n".join(dependency_problems), file=sys.stderr)
+        return 1
     current = scan(load_sources())
     if "--update" in argv:
         with open(BASELINE, "w", encoding="utf-8") as f:

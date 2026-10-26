@@ -86,3 +86,6 @@ pub use message::Message;
 pub use panel::PreviewPanelState;
 pub use update::{PanelBehavior, UpdateCtx, load_preview_tab, restore_tabs, update};
 pub use view::ViewCtx;
+
+// Compatibility for the shared host IPC classifier. Review parsing belongs to conversations.
+pub use dozer_panel_conversations::assets::{ReviewTraceEvent, parse_review_trace_event};

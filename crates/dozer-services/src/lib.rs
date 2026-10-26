@@ -6,7 +6,8 @@ use dozer_model::{
     CodeHealthReportInfo, ContextItemInfo, ConversationSummary, FileEditHistoryInfo,
     GroupCancelScope, GroupInfo, GroupMessageInfo, LocalePreference, LocaleSnapshot,
     LocaleWriteOutcome, MemoryDetail, MemoryInfo, MutationOutcome, ProjectInfo, SessionEvent,
-    SessionInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
+    SessionInfo, SessionSummaryPayload, SummaryBatchInfo, SummaryJobInfo, TodoInfo,
+    TodoStoredStatus, TurnRecord, UsagePayload,
 };
 use std::fmt;
 use std::future::Future;
@@ -234,8 +235,17 @@ pub trait GroupChatService: Send + Sync {
 /// `list_conversations_with_summaries` 的结果:每行一个会话及其可选的总结。
 pub type ConversationRows = Vec<(ConversationSummary, Option<SessionSummaryPayload>)>;
 
-/// 会话列表面板的读取。参数按值传。目前只有这一个方法;host 侧的会话相关调用随各自迁移再加入。
+/// 会话列表与审阅详情的读取。参数按值传。
 pub trait ConversationService: Send + Sync {
+    /// Keyset 分页:`turn_index > after_turn_index`,按索引升序,最多 `limit` 条。
+    /// `after_turn_index = -1` 从第一条开始。
+    fn get_conversation_turns(
+        &self,
+        conversation_id: String,
+        after_turn_index: i64,
+        limit: u32,
+    ) -> BoxFuture<'_, Result<Vec<TurnRecord>, ServiceError>>;
+
     fn list_conversations_with_summaries(
         &self,
         cwd: String,
@@ -243,6 +253,20 @@ pub trait ConversationService: Send + Sync {
         limit: u32,
         offset: u32,
     ) -> BoxFuture<'_, Result<ConversationRows, ServiceError>>;
+}
+
+/// 会话总结任务:提交固定为 Manual,source_session_id/provider/model 均为 None。
+/// 产品不需要了解守护进程的队列协议,`force` 按调用方原值传递。
+pub trait SummaryService: Send + Sync {
+    fn submit_summary_job(
+        &self,
+        conversation_id: String,
+        force: bool,
+    ) -> BoxFuture<'_, Result<i64, ServiceError>>;
+    fn get_summary_job(
+        &self,
+        job_id: i64,
+    ) -> BoxFuture<'_, Result<Option<SummaryJobInfo>, ServiceError>>;
 }
 
 /// 代码健康度面板的落盘读写。参数按值传。
@@ -400,6 +424,7 @@ pub struct Services {
     pub memory: Arc<dyn MemoryService>,
     pub group_chat: Arc<dyn GroupChatService>,
     pub conversation: Arc<dyn ConversationService>,
+    pub summary: Arc<dyn SummaryService>,
     pub codehealth: Arc<dyn CodeHealthService>,
     pub context: Arc<dyn ContextService>,
     pub edit_history: Arc<dyn EditHistoryService>,
@@ -467,6 +492,7 @@ mod tests {
             memory: Arc::new(MemMemory(Ok(vec![]))),
             group_chat: Arc::new(MemGroupChat(Ok(vec![]))),
             conversation: Arc::new(MemConversation(Ok(vec![]))),
+            summary: Arc::new(MemSummary),
             codehealth: Arc::new(MemCodeHealth(Ok(None))),
             context: Arc::new(MemContext(Ok(vec![]))),
             edit_history: Arc::new(MemEditHistory(Ok(vec![]))),
@@ -487,6 +513,7 @@ mod tests {
         assert!(Arc::ptr_eq(&s.memory, &t.memory));
         assert!(Arc::ptr_eq(&s.group_chat, &t.group_chat));
         assert!(Arc::ptr_eq(&s.conversation, &t.conversation));
+        assert!(Arc::ptr_eq(&s.summary, &t.summary));
         assert!(Arc::ptr_eq(&s.codehealth, &t.codehealth));
         assert!(Arc::ptr_eq(&s.context, &t.context));
         assert!(Arc::ptr_eq(&s.edit_history, &t.edit_history));
@@ -875,6 +902,15 @@ mod tests {
     struct MemConversation(Result<ConversationRows, ServiceError>);
 
     impl ConversationService for MemConversation {
+        fn get_conversation_turns(
+            &self,
+            _conversation_id: String,
+            _after_turn_index: i64,
+            _limit: u32,
+        ) -> BoxFuture<'_, Result<Vec<TurnRecord>, ServiceError>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+
         fn list_conversations_with_summaries(
             &self,
             _cwd: String,
@@ -922,6 +958,23 @@ mod tests {
                 .kind,
             ServiceErrorKind::Unavailable
         );
+    }
+
+    struct MemSummary;
+    impl SummaryService for MemSummary {
+        fn submit_summary_job(
+            &self,
+            _conversation_id: String,
+            _force: bool,
+        ) -> BoxFuture<'_, Result<i64, ServiceError>> {
+            Box::pin(async { Ok(17) })
+        }
+        fn get_summary_job(
+            &self,
+            _job_id: i64,
+        ) -> BoxFuture<'_, Result<Option<SummaryJobInfo>, ServiceError>> {
+            Box::pin(async { Ok(None) })
+        }
     }
 
     // ---- CodeHealthService 契约 ----

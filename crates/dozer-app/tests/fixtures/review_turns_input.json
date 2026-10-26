@@ -1,0 +1,95 @@
+[
+  {
+    "turn_index": 0,
+    "role": "tool_result",
+    "content": "孤儿 �\n​",
+    "thinking": false,
+    "ts": null,
+    "is_error": true,
+    "tool_result_call_id": "orphan"
+  },
+  {
+    "turn_index": 1,
+    "role": "human",
+    "content": "你好 👋\n检查工具",
+    "thinking": false,
+    "ts": null
+  },
+  {
+    "turn_index": 2,
+    "role": "ai",
+    "content": "",
+    "thinking": true,
+    "ts": null,
+    "thinking_text": "思考一​",
+    "tool_calls": [
+      {
+        "summary": "Read 文档",
+        "input_json": "{\"file_path\":\"说明.md\"}",
+        "id": "read-1"
+      }
+    ],
+    "tokens_in": 10,
+    "tokens_out": 2,
+    "tokens_cache_read": 3,
+    "tokens_cache_write": 4
+  },
+  {
+    "turn_index": 3,
+    "role": "tool_result",
+    "content": "读取成功\n第二行",
+    "thinking": false,
+    "ts": null,
+    "tool_result_call_id": "read-1"
+  },
+  {
+    "turn_index": 4,
+    "role": "ai",
+    "content": "",
+    "thinking": false,
+    "ts": null,
+    "thinking_text": "思考二",
+    "tool_calls": [
+      {
+        "summary": "测试",
+        "input_json": null,
+        "id": "test-2"
+      }
+    ],
+    "tokens_in": 20,
+    "tokens_out": 5
+  },
+  {
+    "turn_index": 5,
+    "role": "tool_result",
+    "content": "测试成功",
+    "thinking": false,
+    "ts": null,
+    "tool_result_call_id": "test-2"
+  },
+  {
+    "turn_index": 6,
+    "role": "ai",
+    "content": "完成 ✅\n总结",
+    "thinking": false,
+    "ts": null,
+    "tokens_in": 30,
+    "tokens_out": 7
+  },
+  {
+    "turn_index": 7,
+    "role": "ai",
+    "content": "独立回复",
+    "thinking": false,
+    "ts": null,
+    "tokens_out": 1
+  },
+  {
+    "turn_index": 8,
+    "role": "token_usage",
+    "content": "不会显示",
+    "thinking": false,
+    "ts": null,
+    "tokens_in": 999
+  }
+]

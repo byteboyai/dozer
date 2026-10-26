@@ -505,6 +505,15 @@ impl dozer_services::GroupChatService for NoopGroupChat {
 
 struct NoopConversation;
 impl dozer_services::ConversationService for NoopConversation {
+    fn get_conversation_turns(
+        &self,
+        _conversation_id: String,
+        _after_turn_index: i64,
+        _limit: u32,
+    ) -> BoxFuture<'_, Result<Vec<dozer_model::TurnRecord>, ServiceError>> {
+        never()
+    }
+
     fn list_conversations_with_summaries(
         &self,
         _cwd: String,
@@ -512,6 +521,23 @@ impl dozer_services::ConversationService for NoopConversation {
         _limit: u32,
         _offset: u32,
     ) -> BoxFuture<'_, Result<dozer_services::ConversationRows, ServiceError>> {
+        never()
+    }
+}
+
+struct NoopSummary;
+impl dozer_services::SummaryService for NoopSummary {
+    fn submit_summary_job(
+        &self,
+        _conversation_id: String,
+        _force: bool,
+    ) -> BoxFuture<'_, Result<i64, ServiceError>> {
+        never()
+    }
+    fn get_summary_job(
+        &self,
+        _job_id: i64,
+    ) -> BoxFuture<'_, Result<Option<dozer_model::SummaryJobInfo>, ServiceError>> {
         never()
     }
 }
@@ -683,6 +709,7 @@ pub(crate) fn base_services() -> Services {
         memory: Arc::new(FakeMemory::default()),
         group_chat: Arc::new(NoopGroupChat),
         conversation: Arc::new(NoopConversation),
+        summary: Arc::new(NoopSummary),
         codehealth: Arc::new(NoopCodeHealth),
         context: Arc::new(NoopContext),
         edit_history: Arc::new(NoopEditHistory),

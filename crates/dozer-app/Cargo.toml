@@ -12,6 +12,7 @@ path = "src/main.rs"
 default = []
 
 [dependencies]
+dozer-panel-conversations = { path = "../dozer-panel-conversations" }
 dozer-core = { path = "../dozer-core", features = ["logging"] }
 dozer-model = { path = "../dozer-model" }
 dozer-i18n = { path = "../dozer-i18n" }
@@ -116,6 +117,7 @@ memchr = "2"
 dozer-panel-preview = { path = "../dozer-panel-preview", features = ["tabular-loader"] }
 
 [dev-dependencies]
+sha2 = "0.10"
 tracing-subscriber.workspace = true
 tempfile = "3"
 # 面板单元测试用 `TempRepo` 造真实仓库。

@@ -1,21 +1,17 @@
 //! Workspace 的 view 层:load_more_button、agent 列表与卡片、工作区内容行、
 //! agent picker、review 内容 pane、preview pane 等渲染函数。
 
-use crate::app::{App, HoverId, Message, PanelKind};
-use crate::chrome::homespace::home_panel_head_with_actions;
-use crate::extensions::conversations;
+use crate::app::{App, Message};
 use crate::menu_spec::{MenuSpec, MenuSpecItem};
 use crate::preview::ViewerPanel;
 use crate::theme;
 use crate::theme::terminal_font;
 use crate::ui_text::text;
 use byteui::interaction::icons::IconKind;
-#[cfg(test)]
-use dozer_core::protocol::AgentKind;
 use dozer_panel_preview::ViewCtx;
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Element, Length, Padding};
-use iced_widget::{Scrollable, button, column, container, row, scrollable};
+use iced_widget::{Scrollable, button, column, container, scrollable};
 
 use super::*;
 
@@ -25,39 +21,9 @@ pub(crate) use dozer_panel_agent::card::CardCtx;
 /// hover 金边提示,点击追加下一页回合。`after_turn_index` 用 `entries.len()`
 /// 当锚点——`ReviewEntry` 不携带原始 turn index,详情页按整段摊平加载,取
 /// 条数近似下一步起点即可(跳过首尾折叠带来的少量误差在可接受范围)。
-pub(crate) fn load_more_button<'a>(
-    conversation_id: &'a str,
-    after_turn_index: i64,
-    locale: &str,
-) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let btn = iced_widget::button(
-        text(crate::i18n::host_text(
-            "conversations.load_more",
-            "Load more…",
-            locale,
-        ))
-        .size(byteui::theme::font::caption_sm())
-        .color(byteui::theme::color::current().dim),
-    )
-    .on_press(Message::Conversations(
-        conversations::Message::DetailLoadMore(conversation_id.to_string(), after_turn_index),
-    ))
-    .padding(6)
-    .style(|_t, _s| iced_widget::button::Style {
-        background: None,
-        text_color: byteui::theme::color::current().dim,
-        ..iced_widget::button::Style::default()
-    });
-    container(btn)
-        .width(Length::Fill)
-        .align_x(iced_widget::core::Alignment::Center)
-        .into()
-}
-
 /// 对话面板 session 详情的首屏回合页大小(2026-08-27):列表分页
 /// (`extensions::conversations::CONVERSATION_PAGE_SIZE`,20)与详情页分页
 /// (这里,200)含义不同,不要混用。
-pub(crate) const CONVERSATION_DETAIL_PAGE_SIZE: u32 = 200;
 
 /// Agent 列表面板(右面板区"Agent"视图的列表侧):按 `AgentKind` 分组展示
 /// 当前项目的会话,组内保留 tab 打开顺序;点击一行 = `Message::SelectTab`
@@ -236,53 +202,20 @@ pub(crate) fn review_webview_spec(
     review: Option<&ReviewView>,
     locale: &str,
 ) -> Vec<crate::preview::WebviewSpec> {
-    let Some(rv) = review else {
-        return Vec::new();
-    };
-    if rv.error.is_some() || rv.entries.is_empty() {
-        return Vec::new();
-    }
-    let loaded = rv.loaded_nonce == Some(rv.nonce);
-    vec![crate::preview::WebviewSpec {
-        id: 0,
-        url: format!(
-            "dozer://review-trace/host.html?_r={}&locale={}",
-            rv.nonce, locale
-        ),
-        visible: loaded,
-        editor_binding: None,
-        reserve: None,
-        loading_generation: None,
-        surface: None,
-        // review-trace 是同款「未就绪先创建」的 Rendered 宿主(Preact 渲染),
-        // 未就绪时离屏停放,避免 hidden 下 rAF 被挂起拖慢/卡住首帧。
-        park_offscreen: !loaded,
-        display_i18n: None,
-    }]
-}
-
-/// `review_content_pane` 该渲染哪一态(空/loading/内容三态)。抽成纯函数
-/// 供 headless 单测——视图函数本身只管把结果画出来。
-#[derive(Debug, PartialEq)]
-pub(crate) enum ReviewPaneState {
-    Empty,
-    Loading,
-    Ready,
-}
-
-pub(crate) fn review_pane_state(rv: Option<&ReviewView>) -> ReviewPaneState {
-    let Some(rv) = rv else {
-        return ReviewPaneState::Empty;
-    };
-    // error / 空 entries 两种情况下 `review_webview_spec` 会销毁 webview
-    // (永远等不到 `document_loaded`),`loaded_nonce` 永远是 None——必须归入
-    // Ready 让 `review_content` 显示"⚠ 错误" / "暂无对话"文案,否则会永久
-    // 卡在"加载中…"占位。这跟"根本没有数据"、"正在加载"是两回事。
-    if rv.error.is_some() || rv.entries.is_empty() || rv.loaded_nonce == Some(rv.nonce) {
-        ReviewPaneState::Ready
-    } else {
-        ReviewPaneState::Loading
-    }
+    dozer_panel_conversations::snapshot::review_webview_spec(review, locale, "dozer")
+        .into_iter()
+        .map(|spec| crate::preview::WebviewSpec {
+            id: 0,
+            url: spec.url,
+            visible: spec.visible,
+            park_offscreen: spec.park_offscreen,
+            editor_binding: None,
+            reserve: None,
+            loading_generation: None,
+            surface: None,
+            display_i18n: None,
+        })
+        .collect()
 }
 
 /// 会话审阅内容面板(右面板区"对话"视图的内容侧):直接读 `ws.review`,
@@ -294,134 +227,13 @@ pub(crate) fn review_content_pane<'a>(
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let region = theme::region::review_content_pane();
-    let locale = app.locale.active_locale();
-    // 内容侧标题栏:左侧名字信息面板(会话/agent 态) + 右侧"生成总结"按钮
-    // (会话详情手动生成/重试,spec 2026-09-26 第 8 节)+ "收起/展开列表列"
-    // 按钮(与 Todo/Database/SSH/Agent 内容侧统一)。
-    let collapse_button = app.list_collapse_button(
-        PanelKind::Conversations,
-        app.list_collapsed(PanelKind::Conversations),
-        HoverId::list_collapse(PanelKind::Conversations),
-        crate::i18n::host_text("panel.collapse_list", "Collapse list", locale),
-        crate::i18n::host_text("panel.expand_list", "Expand list", locale),
-        Message::TogglePanelListCollapse(PanelKind::Conversations),
-        move |h| Message::Hover(HoverId::list_collapse(PanelKind::Conversations), h),
-    );
-    let actions: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match ws.review.as_ref().map(|rv| (&rv.source, rv.agent)) {
-            Some((ReviewSource::Conversation(cid), agent)) => {
-                let generating = ws.conversations.summary_generating(cid);
-                let generate = button(
-                    text(if generating {
-                        crate::i18n::host_text("conversations.generating", "Generating…", locale)
-                    } else {
-                        crate::i18n::host_text(
-                            "conversations.generate_summary",
-                            "Generate Summary",
-                            locale,
-                        )
-                    })
-                    .size(byteui::theme::font::label())
-                    .color(byteui::theme::color::current().cream),
-                )
-                .padding([4, 8]);
-                let generate = if generating {
-                    generate
-                } else {
-                    generate.on_press(Message::Conversations(
-                        conversations::Message::SummaryGenerate(cid.clone(), agent),
-                    ))
-                };
-                row![generate, collapse_button].spacing(6).into()
-            }
-            _ => collapse_button,
-        };
-    let header = container(
-        row![home_panel_head_with_actions(
-            IconKind::BotMessageSquare,
-            crate::i18n::host_text("conversations.pane_title", "Conversations", locale),
-            Some(actions),
-        )]
-        .width(Length::Fill),
+    dozer_panel_conversations::view::review_pane(
+        &ws.conversations,
+        app,
+        dozer_panel_conversations::adapter::ConversationsCapabilities::all(),
+        width,
+        outer,
     )
-    .padding(theme::region::project_pane().padding);
-    let mut content = column![header].spacing(region.gap);
-
-    if let Some(error) = ws.review.as_ref().and_then(|rv| match &rv.source {
-        ReviewSource::Conversation(cid) => ws.conversations.summary_error(cid),
-        ReviewSource::Session(_) => None,
-    }) {
-        content = content.push(
-            text(crate::i18n::host_render(error, locale))
-                .size(byteui::theme::font::body())
-                .color(byteui::theme::color::current().red),
-        );
-    }
-
-    match review_pane_state(ws.review.as_ref()) {
-        ReviewPaneState::Empty => {
-            content = content.push(
-                container(lh(text(crate::i18n::host_text(
-                    "conversations.no_review_content",
-                    "No review content—click a conversation in the list on the left to start reviewing",
-                    locale,
-                ))
-                    .size(byteui::theme::font::subtitle())
-                    .color(byteui::theme::color::current().dim)))
-                .width(Length::Fill)
-                .height(Length::Fill),
-            );
-        }
-        ReviewPaneState::Loading => {
-            // 与 Empty 同结构(独占内容区、不渲染 Scrollable),只是文案换成
-            // "加载中",让 webview 隐藏期间这块区域有意义的提示而不是空的可
-            // 滚动区域(同用量面板"统计中…"分支的写法,视觉基调统一)。
-            content = content.push(
-                container(
-                    iced_widget::column![
-                        byteui::feedback::math_curve::view_animated::<Message>(
-                            byteui::feedback::math_curve::Curve::RoseThree,
-                            64.0,
-                        ),
-                        iced_widget::text(crate::i18n::host_text(
-                            "common.loading",
-                            "Loading…",
-                            locale,
-                        ))
-                        .size(byteui::theme::font::body())
-                        .color(byteui::theme::color::current().dim),
-                    ]
-                    .spacing(12)
-                    .align_x(iced_widget::core::alignment::Horizontal::Center),
-                )
-                .center_x(Length::Fill)
-                .center_y(Length::Fill),
-            );
-        }
-        ReviewPaneState::Ready => {
-            let body = review_content(column![].spacing(region.gap), ws, locale);
-            content = content.push(
-                Scrollable::new(body)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .direction(scrollable::Direction::Vertical(
-                        byteui::interaction::scrollbar::scrollbar(),
-                    ))
-                    .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
-            );
-        }
-    }
-
-    container(content.padding(region.padding))
-        .width(width)
-        .height(Length::Fill)
-        .style(move |_theme: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: outer,
-            ..container::Style::default()
-        })
-        .into()
 }
 
 /// 配对视图内部"列表:内容"的 `FillPortion` 权重对。`FillPortion` 在扣掉
@@ -629,73 +441,5 @@ pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64, locale: &str) ->
             locale,
             &[("n", &(ago / 86400).to_string())],
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    mod review_pane_state_tests {
-        use super::*;
-        use crate::transcript::ReviewEntry;
-
-        fn rv(nonce: u64, loaded_nonce: Option<u64>) -> ReviewView {
-            ReviewView {
-                source: ReviewSource::Conversation("c1".into()),
-                entries: vec![ReviewEntry::Human { text: "hi".into() }],
-                error: None,
-                agent: AgentKind::Claude,
-                nonce,
-                summary_title: None,
-                summary_text: None,
-                summary_time: None,
-                loaded_nonce,
-            }
-        }
-
-        #[test]
-        fn none_is_empty() {
-            assert_eq!(review_pane_state(None), ReviewPaneState::Empty);
-        }
-
-        #[test]
-        fn unloaded_nonce_is_loading() {
-            assert_eq!(
-                review_pane_state(Some(&rv(3, None))),
-                ReviewPaneState::Loading
-            );
-            assert_eq!(
-                review_pane_state(Some(&rv(3, Some(2)))),
-                ReviewPaneState::Loading
-            );
-        }
-
-        #[test]
-        fn matching_nonce_is_ready() {
-            assert_eq!(
-                review_pane_state(Some(&rv(3, Some(3)))),
-                ReviewPaneState::Ready
-            );
-        }
-
-        /// 首次加载失败:`review_webview_spec` 会销毁 webview(永远等不到
-        /// `document_loaded`),`loaded_nonce` 停在 None——必须走 Ready 让
-        /// `review_content` 显示"⚠ 错误"文案,不能永久卡在"加载中…"。
-        #[test]
-        fn error_is_ready_even_without_loaded_nonce() {
-            let mut r = rv(3, None);
-            r.error = Some("transcript 解析失败".into());
-            assert_eq!(review_pane_state(Some(&r)), ReviewPaneState::Ready);
-        }
-
-        /// 首次加载成功但会话为空:同样销毁 webview、无事件回传,必须走
-        /// Ready 显示"暂无对话",不能卡在"加载中…"。
-        #[test]
-        fn empty_entries_is_ready_even_without_loaded_nonce() {
-            let mut r = rv(3, None);
-            r.entries = Vec::new();
-            assert_eq!(review_pane_state(Some(&r)), ReviewPaneState::Ready);
-        }
     }
 }

@@ -13,6 +13,7 @@ default = []
 tabular-loader = ["dep:calamine", "dep:csv"]
 
 [dependencies]
+dozer-panel-conversations = { path = "../dozer-panel-conversations" }
 dozer-preview-core = { path = "../dozer-preview-core" }
 dozer-i18n = { path = "../dozer-i18n" }
 dozer-model = { path = "../dozer-model" }

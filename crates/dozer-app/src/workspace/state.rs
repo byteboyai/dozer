@@ -17,11 +17,10 @@ use crate::osc::OscScanner;
 use crate::preview::PreviewPane;
 use crate::project::FileTree;
 use crate::term::term_model::TerminalModel;
-use crate::transcript::ReviewEntry;
-use crate::ui_text::text;
 use byteui::interaction::tab_strip::tab_window_reveal;
 use dozer_client::Client;
 use dozer_core::protocol::{AgentKind, ProjectInfo, SessionInfo};
+pub use dozer_panel_conversations::snapshot::ReviewView;
 
 dozer_core::scope!(LOG, module, "shell");
 
@@ -117,73 +116,6 @@ impl std::fmt::Debug for RestorePayload {
 }
 
 pub(crate) use dozer_panel_agent::launch::PickerLaunch;
-
-/// 审阅内容的来源（P1j）：活会话 tab（回合结束刷新）或对话面板的
-/// session 详情(2026-08-27，整段摊平加载)。原 `ReviewSource::FileRange`
-/// (历史对话文件里某个回合区间)已随会话树改造一并移除。
-#[derive(Debug, Clone, PartialEq)]
-pub enum ReviewSource {
-    Session(usize),
-    /// 对话面板的 session 详情:`conversation_id`,整段摊平加载,不再有
-    /// "回合区间"概念(2026-08-27,取代 `FileRange`)。
-    Conversation(String),
-}
-
-/// 回合结束时该审阅视图是否应重解析：仅当它是该会话的活审阅。
-pub(crate) fn review_should_refresh_on_turn(source: &ReviewSource, tab_id: usize) -> bool {
-    matches!(source, ReviewSource::Session(id) if *id == tab_id)
-}
-
-/// 一份 `ReviewSource` 对应的 conversation_id。`Conversation` 本身就是
-/// id；`Session` 要反查该 tab 的 transcript 路径取 `file_stem()`，和对话
-/// 面板列表按 conversation_id 匹配行时用的是同一套路径解析规则
-/// (2026-08-27 起，session 的 transcript 文件名 stem 就是 conversation_id)。
-/// 抽成纯函数(不直接吃 `&Workspace`)方便 headless 单测——
-/// `Workspace::current_review_conversation_id` 只是签出字段喂给它的薄
-/// 封装。
-pub(crate) fn review_source_conversation_id<'a>(
-    source: &ReviewSource,
-    transcript_path_for_tab: impl FnOnce(usize) -> Option<&'a str>,
-) -> Option<String> {
-    match source {
-        ReviewSource::Conversation(id) => Some(id.clone()),
-        ReviewSource::Session(tab_id) => {
-            let path = transcript_path_for_tab(*tab_id)?;
-            std::path::Path::new(path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .map(str::to_string)
-        }
-    }
-}
-
-/// 会话审阅 tab 的内容（P1i）。
-pub struct ReviewView {
-    pub source: ReviewSource,
-    pub entries: Vec<ReviewEntry>,
-    pub error: Option<String>,
-    /// 这份 transcript 归属的 agent——面板里"AI"气泡的头像/名字标签用它
-    /// 而不是写死的"AI"(P2b 多 agent 支持)。
-    pub agent: AgentKind,
-    /// 审阅 webview 的重新加载水位:每次 `ReviewLoaded` 成功都从
-    /// `Workspace.review_nonce` 拷一份新值,写进 `dozer://review-trace/
-    /// host.html?_r=<nonce>` 的查询参数,逼 wry 在内容变化时重新导航
-    /// 拉取(同 `preview.rs::PreviewTab.reload_nonce` 的手法)。
-    pub nonce: u64,
-    /// session 总结标题/全文(有则展示,无则详情页只显示回合列表)。
-    /// 数据来自打开详情时已加载好的 `SessionRow`,不为此单独发请求。
-    pub summary_title: Option<String>,
-    pub summary_text: Option<String>,
-    /// 总结区展示的相对时间(如 "3 分钟前"),打开详情那一刻用
-    /// `SessionRow.last_ts` 算一次定格,不随详情页停留时长实时跳字
-    /// (2026-08-28 新增)。
-    pub summary_time: Option<String>,
-    /// 当前 `nonce` 对应的内容是否已经被 review-trace webview 报回
-    /// `ReviewTraceEvent::DocumentLoaded`——`None`/不等于 `nonce` 都算"未
-    /// loaded"。换审阅目标时 `nonce` 自增,这个字段不需要显式清空,天然因
-    /// 为不等于新 `nonce` 而回到"未 loaded"(见 `review_webview_spec`)。
-    pub loaded_nonce: Option<u64>,
-}
 
 #[allow(unused_imports)]
 pub(crate) use dozer_panel_agent::card::{
@@ -333,26 +265,7 @@ pub struct Workspace {
     /// `dozer://flyfish/__file__` 端点的文件白名单;与 main.rs 的协议
     /// 闭包共享(Arc),打开文件时插入.
     pub(crate) allowed_files: Arc<Mutex<dozer_panel_preview::assets::AllowedFiles>>,
-    /// 进行中的会话审阅（审阅 tab 内容;None=未打开;P1i）。
-    pub(crate) review: Option<ReviewView>,
-    /// `dozer://review-trace/data.json` 协议端点回显的当前审阅内容快照
-    /// (JSON 字符串)。**per-project**——`Message::ReviewLoaded` 只在
-    /// `rv.source == source`(未过期)时才会写(见该处理分支),协议闭包
-    /// 在 webview 创建时按当前聚焦项目捕获这个 `Arc`(同 `allowed_files`
-    /// 的手法),天然避免"过期加载结果覆盖当前内容"与"跨项目串数据"
-    /// 两个问题——不能像最初实现那样用 main.rs 里的裸 `static`(那样会绕开
-    /// `rv.source == source` 的过期结果过滤,也没有 per-project 隔离)。见
-    /// docs/superpowers/plans/2026-08-21-review-content-webview-trace.md
-    /// 审阅记录。
-    pub(crate) review_snapshot: Arc<Mutex<Option<String>>>,
-    /// 全局单调递增的审阅内容加载水位,每次 `Message::ReviewLoaded`
-    /// 成功一次就 +1(与具体加载了哪个回合区间无关)——保证连续点开
-    /// 两个不同回合、恰好都是"该 source 第一次加载"时,`ReviewView.nonce`
-    /// 也不会撞成同一个值(如果各自从 0 起独立计数会撞)。见
-    /// docs/superpowers/plans/2026-08-21-review-content-webview-trace.md
-    /// Task 2。
-    pub(crate) review_nonce: u64,
-    /// 对话(Conversations)面板列表侧的本地状态——见
+    /// 对话面板列表、详情、总结与请求状态——见
     /// `extensions::conversations::WorkspaceState`(2026-09-15 从 `Workspace`
     /// 上平铺的 7 个 `conversation_*` 字段收拢而来)。
     pub(crate) conversations: conversations::WorkspaceState,
@@ -593,9 +506,6 @@ impl Workspace {
             browser: browser::State::default(),
             agent_context: Default::default(),
             allowed_files: Arc::new(Mutex::new(dozer_panel_preview::assets::AllowedFiles::new())),
-            review: None,
-            review_snapshot: Arc::new(Mutex::new(None)),
-            review_nonce: 0,
             conversations: conversations::WorkspaceState::default(),
             usage: usage::WorkspaceState::default(),
             codehealth: codehealth::WorkspaceState::default(),
@@ -751,88 +661,6 @@ impl Workspace {
     /// 用完即改写的空壳上,那里不发起任何异步任务。
     pub(crate) fn project_id(&self) -> Option<ProjectId> {
         self.project.as_ref().map(|p| p.id)
-    }
-
-    /// 审阅面板当前正在查看的那一条会话的 conversation_id（单一值——一次
-    /// 只有一条"当前"，不是"全部打开的 Agent tab"；2026-09-25 前的实现是
-    /// 后者，导致同时开几个 tab 就有几行同时被标"● 当前"，见对话面板列表
-    /// 走查)。核心判据是纯函数 [`review_source_conversation_id`]，这里只是
-    /// 签出 `self.review`/`self.tabs` 喂给它的薄封装。供对话面板列表判
-    /// "● 当前"用 (`extensions::conversations::view`)。
-    pub fn current_review_conversation_id(&self) -> Option<String> {
-        let review = self.review.as_ref()?;
-        review_source_conversation_id(&review.source, |tab_id| {
-            self.tabs
-                .get(tab_id)
-                .and_then(|t| t.transcript_path.as_deref())
-        })
-    }
-
-    /// 异步查回合明细 → ReviewLoaded（改走 dozerd；P1i/P1j/P2b 按源）。
-    /// `after_turn_index`/`limit` 由调用方按 `source` 算好传入——
-    /// `ReviewSource::FileRange` 传精确区间(只拿这一个回合分组的内容)，
-    /// 其余两个 source 继续传 `(-1, 10_000)` 全量拉取(既有行为不变)。
-    pub(crate) fn spawn_review_load(
-        &self,
-        io: &ShellIo,
-        source: ReviewSource,
-        path: String,
-        _agent: AgentKind,
-        after_turn_index: i64,
-        limit: u32,
-    ) {
-        let Some(project) = self.project.as_ref() else {
-            return;
-        };
-        let project_id = project.id;
-        let client = io.client.clone();
-        let proxy = io.proxy.clone();
-        // conversation_id 是文件名(不含扩展名)——与 dozerd 摄取时的派生
-        // 规则一致(见 TranscriptStore::ingest_session)。
-        let conversation_id = std::path::Path::new(&path)
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        io.handle.spawn(async move {
-            let result = client
-                .get_conversation_turns(&conversation_id, after_turn_index, limit)
-                .await
-                .map(|turns| crate::transcript::review_entries_from_turns(&turns))
-                .map_err(|e| e.to_string());
-            let _ = proxy.send_event(Message::ReviewLoaded(project_id, source, false, result));
-        });
-    }
-
-    /// session 详情整段加载/"加载更多"追加(2026-08-27)。`append` 为
-    /// `true` 时结果应追加进现有 `entries`(加载更多),`false` 时替换
-    /// (首次打开)——原样透传进 `Message::ReviewLoaded` 的第三个参数,
-    /// 实际的追加/替换逻辑在 `update()` 里处理,这里只负责发请求带上
-    /// 这个标记。**`Message::ReviewLoaded` 的签名要在 Task 8 扩到 4 元组
-    /// `(ProjectId, ReviewSource, bool, Result<...>)` 才能接住这里传的
-    /// `append`——本任务落地后 `dozer-app` 暂时编译不过是预期状态**。
-    pub(crate) fn spawn_review_load_conversation(
-        &self,
-        io: &ShellIo,
-        conversation_id: String,
-        after_turn_index: i64,
-        limit: u32,
-        append: bool,
-    ) {
-        let Some(project) = self.project.as_ref() else {
-            return;
-        };
-        let project_id = project.id;
-        let client = io.client.clone();
-        let proxy = io.proxy.clone();
-        let source = ReviewSource::Conversation(conversation_id.clone());
-        io.handle.spawn(async move {
-            let result = client
-                .get_conversation_turns(&conversation_id, after_turn_index, limit)
-                .await
-                .map(|turns| crate::transcript::review_entries_from_turns(&turns))
-                .map_err(|e| e.to_string());
-            let _ = proxy.send_event(Message::ReviewLoaded(project_id, source, append, result));
-        });
     }
 
     /// 项目切换清理：关掉所有终端 tab（=结束会话，同 CloseTab 语义）与
@@ -1842,7 +1670,7 @@ impl Workspace {
 
     /// 协议闭包共享的审阅内容快照句柄,同 `allowed_files` 的手法。
     pub fn review_snapshot(&self) -> Arc<Mutex<Option<String>>> {
-        Arc::clone(&self.review_snapshot)
+        self.conversations.review_snapshot()
     }
 
     /// 当前激活 tab 是否处于 application cursor mode（DECCKM）。
@@ -1945,54 +1773,6 @@ pub(crate) fn spawn_disk_usage_refresh(project_id: i64, repo_path: PathBuf, io: 
 }
 
 pub(crate) use dozer_panel_agent::tabs::exited_marker;
-
-/// 验收 tab 内容（spec P1f D8）:目标 + 标准勾选 + 变更文件 + 意见 + 双动作。
-/// iced 直绘（验收 tab 激活时 webview 全隐藏，不抢层）。
-/// 会话审阅 tab 内容（P1i）：人类锚点 + AI 回合折叠（正文/过程）。
-pub(crate) fn review_content<'a>(
-    mut content: iced_widget::Column<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
-    ws: &'a Workspace,
-    locale: &str,
-) -> iced_widget::Column<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let Some(rv) = &ws.review else {
-        return content;
-    };
-    if let Some(err) = &rv.error {
-        return content.push(
-            text(format!("⚠ {err}"))
-                .size(byteui::theme::font::subtitle())
-                .color(byteui::theme::color::current().red),
-        );
-    }
-    if rv.entries.is_empty() {
-        content = content.push(lh(text(crate::i18n::host_text(
-            "review.no_conversation",
-            "No conversation",
-            locale,
-        ))
-        .size(byteui::theme::font::subtitle())
-        .color(byteui::theme::color::current().dim)));
-    }
-    // 有内容时:真正的渲染由 review_content_pane 区域叠加的 wry webview
-    // 负责(dozer://review-trace/host.html,数据经 dozer://review-trace/
-    // data.json 拉取),这里不再手写 iced Column——2026-08-21 webview
-    // trace 改造,见
-    // docs/superpowers/plans/2026-08-21-review-content-webview-trace.md。
-    // 对话面板 session 详情(2026-08-27):条目渲染走 webview,但"加载更多"
-    // 按钮补在 iced 滚动体末尾——点它发 `ConversationDetailLoadMore`,
-    // dozer-app 的 `update` 用 `spawn_review_load_conversation(append=true)`
-    // 追加下一页回合,而不是替换首屏。
-    if let ReviewSource::Conversation(conversation_id) = &rv.source
-        && !rv.entries.is_empty()
-    {
-        content = content.push(load_more_button(
-            conversation_id,
-            rv.entries.len() as i64,
-            locale,
-        ));
-    }
-    content
-}
 
 #[cfg(test)]
 mod git_snapshot_tests {

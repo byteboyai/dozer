@@ -64,6 +64,7 @@ FILE_TASK = [
     ("crates/dozer-app/src/extensions/todo/", "09"),
     ("crates/dozer-panel-usage/", "09"),
     ("crates/dozer-panel-todo/", "09"),
+    ("crates/dozer-panel-conversations/src/", "10"),
     # 共享终端控件库(S6b):模型/视图,当前无 UI 文案;归在 Agent 面板这批。
     ("crates/dozer-panel-term/", "09"),
     ("crates/dozer-app/src/extensions/codehealth/", "09"),
@@ -95,7 +96,7 @@ FILE_TASK = [
     ("crates/dozer-app/web/editor/", "11"),
     ("crates/dozer-app/web/json-editor/", "11"),
     ("crates/dozer-app/web/tabular-host/", "11"),
-    ("crates/dozer-app/web/review-trace/", "11"),
+    ("crates/dozer-panel-conversations/web/review-trace/", "11"),
     ("crates/dozer-app/web/flyfish/", "11"),
     ("crates/dozer-app/web/plantuml-viewer/", "11"),
     ("crates/dozer-app/src/tabular/mod.rs", "11"),
@@ -129,6 +130,10 @@ EXCLUDED_FILE_REASON = "测试/黄金值工具/诊断探针/内部常量;非面�
 # 个别 UI 文件里"不是 UI 文案"的具体字符串:面板清单构造器的自检不变量错误——
 # 只在产品组合根 `.expect(...)` 时以 panic 形式暴露,是开发者错误,不给最终用户看。
 NON_UI_STRINGS = {
+    ("crates/dozer-panel-conversations/src/summary.rs", "提交总结任务失败"): "库内诊断日志(`crate::log::*` → tracing);不面向用户(日志保持原文)",
+    ("crates/dozer-panel-conversations/src/summary.rs", "总结任务不存在"): "库内诊断日志(`crate::log::*` → tracing);不面向用户(日志保持原文)",
+    ("crates/dozer-panel-conversations/src/summary.rs", "查询总结任务失败"): "库内诊断日志(`crate::log::*` → tracing);不面向用户(日志保持原文)",
+    ("crates/dozer-panel-conversations/src/update.rs", "对话会话列表查询失败(dozerd 不可用)"): "库内诊断日志(`crate::log::*` → tracing);不面向用户(日志保持原文)",
     ("crates/dozer-app/src/panel_registry.rs", "面板清单为空"): "面板清单构造器不变量错误;仅 `.expect` 时 panic,不面向用户",
     ("crates/dozer-app/src/panel_registry.rs", "面板描述符里有重复的面板"): "面板清单构造器不变量错误;仅 `.expect` 时 panic,不面向用户",
     ("crates/dozer-app/src/panel_registry.rs", "默认布局不合法:两栏都要非空,且恰好覆盖全部已注册面板、不重复、不含未注册面板"): "面板清单构造器不变量错误;仅 `.expect` 时 panic,不面向用户",
@@ -138,6 +143,9 @@ NON_UI_STRINGS = {
     ("crates/dozer-app/src/app/state.rs", "未知面板 {name:?}"): "布局持久化反序列化错误;`serde::de::Error::custom`,损坏数据诊断,不面向用户",
     ("crates/dozer-app/src/workspace/state.rs", "找不到该路径对应的预览 tab"): "`PreviewCommandOutcome::NotFound` 的协议诊断 detail,回传给外部 MCP/CLI 调用方,非 GUI 文案",
     ("crates/dozer-app/src/app/update.rs", "空白"): "SSH tab 栏宽度估算用的固定占位文本(只为对齐首个空白占位 tab 的宽度),不渲染给用户",
+    ("crates/dozer-panel-conversations/src/assets.rs", "消息过大({bytes} 字节)"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
+    ("crates/dozer-panel-conversations/src/assets.rs", "消息非合法 JSON: {e}"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
+    ("crates/dozer-panel-conversations/src/assets.rs", "未知 payload kind: {k}"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
     ("crates/dozer-app/src/preview/webview_protocol.rs", "消息过大({bytes} 字节)"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
     ("crates/dozer-app/src/preview/webview_protocol.rs", "消息非合法 JSON: {e}"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
     ("crates/dozer-app/src/preview/webview_protocol.rs", "协议版本不匹配(收到 {got},期望 {expected})"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",

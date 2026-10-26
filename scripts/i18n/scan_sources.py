@@ -47,6 +47,8 @@ CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
 
 # ---- 扫描根(相对仓库根)。assets/ 是构建产物(见 spec §1.2),不列;由 build 从 web/ 派生。----
 SRC_ROOTS = [
+    "crates/dozer-panel-conversations/src",
+    "crates/dozer-panel-conversations/web",
     "crates/dozer-app/src",
     "crates/dozer-app/web",               # TS/TSX/JS 源 + html 模板
     "crates/dozer-app/src/html_host.html",
@@ -79,6 +81,8 @@ SOURCE_SUFFIXES = [".rs", ".ts", ".tsx", ".js", ".mjs", ".jsx", ".html"]
 
 # ---- owner 粗判(路径 → owner_id)。最终 owner 由注册来源绑定,这里只给初值。----
 OWNER_RULES = [
+    ("crates/dozer-panel-conversations/web/review-trace/", "dozer.agent"),
+    ("crates/dozer-panel-conversations/", "dozer.conversations"),
     ("crates/dozer-panel-usage/", "dozer.usage"),
     ("crates/dozer-panel-todo/", "dozer.todo"),
     ("crates/dozer-panel-project/", "dozer.project"),
@@ -108,7 +112,7 @@ OWNER_RULES = [
     ("crates/dozer-app/web/plantuml-viewer/", "dozer.preview"),
     ("crates/dozer-app/web/codehealth-content/", "dozer.codehealth"),
     ("crates/dozer-app/web/group-chat-content/", "dozer.group_chat"),
-    ("crates/dozer-app/web/review-trace/", "dozer.agent"),
+    ("crates/dozer-panel-conversations/web/review-trace/", "dozer.agent"),
     ("crates/dozer-app/src/preview/", "dozer.preview"),
     ("crates/dozerd/", "dozer.host"),
     ("crates/dozer-app/", "dozer.host"),

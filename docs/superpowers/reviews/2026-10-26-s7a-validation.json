@@ -1,0 +1,253 @@
+{
+  "archive": "/private/tmp/s7a-clean-20261026.9qo1um",
+  "source_commit": "31540e09",
+  "steps": [
+    {
+      "name": "metadata",
+      "command": [
+        "cargo",
+        "metadata",
+        "--format-version=1",
+        "--no-deps"
+      ],
+      "cwd": "/private/tmp/s7a-clean-20261026.9qo1um",
+      "exit": 0,
+      "log": "/private/tmp/s7a-archive-metadata.log"
+    },
+    {
+      "name": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--workspace"
+      ],
+      "cwd": "/private/tmp/s7a-clean-20261026.9qo1um",
+      "exit": 0,
+      "log": "/private/tmp/s7a-archive-build.log"
+    },
+    {
+      "name": "tests",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--no-fail-fast"
+      ],
+      "cwd": "/private/tmp/s7a-clean-20261026.9qo1um",
+      "exit": 0,
+      "log": "/private/tmp/s7a-archive-tests.log"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets"
+      ],
+      "cwd": "/private/tmp/s7a-clean-20261026.9qo1um",
+      "exit": 0,
+      "log": "/private/tmp/s7a-archive-clippy.log"
+    },
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--check"
+      ],
+      "cwd": "/private/tmp/s7a-clean-20261026.9qo1um",
+      "exit": 0,
+      "log": "/private/tmp/s7a-archive-fmt.log"
+    },
+    {
+      "name": "i18n",
+      "command": [
+        "bash",
+        "scripts/check-i18n.sh"
+      ],
+      "cwd": "/private/tmp/s7a-clean-20261026.9qo1um",
+      "exit": 0,
+      "log": "/private/tmp/s7a-archive-i18n.log"
+    },
+    {
+      "name": "boundary",
+      "command": [
+        "python3",
+        "scripts/audit/check_panel_boundary.py"
+      ],
+      "cwd": "/private/tmp/s7a-clean-20261026.9qo1um",
+      "exit": 0,
+      "log": "/private/tmp/s7a-archive-boundary.log"
+    },
+    {
+      "name": "shared-deps",
+      "command": [
+        "bash",
+        "scripts/check-shared-deps.sh"
+      ],
+      "cwd": "/private/tmp/s7a-clean-20261026.9qo1um",
+      "exit": 0,
+      "log": "/private/tmp/s7a-archive-shared-deps.log"
+    },
+    {
+      "name": "log-scope",
+      "command": [
+        "bash",
+        "scripts/check-log-scope.sh"
+      ],
+      "cwd": "/private/tmp/s7a-clean-20261026.9qo1um",
+      "exit": 0,
+      "log": "/private/tmp/s7a-archive-log-scope.log"
+    },
+    {
+      "name": "npm-ci",
+      "command": [
+        "npm",
+        "ci",
+        "--cache",
+        "/private/tmp/s7a-npm-cache"
+      ],
+      "cwd": "/private/tmp/s7a-clean-20261026.9qo1um/crates/dozer-panel-conversations/web/review-trace",
+      "exit": 0,
+      "log": "/private/tmp/s7a-archive-npm-ci.log"
+    },
+    {
+      "name": "npm-test",
+      "command": [
+        "npm",
+        "test"
+      ],
+      "cwd": "/private/tmp/s7a-clean-20261026.9qo1um/crates/dozer-panel-conversations/web/review-trace",
+      "exit": 0,
+      "log": "/private/tmp/s7a-archive-npm-test.log"
+    },
+    {
+      "name": "npm-build",
+      "command": [
+        "npm",
+        "run",
+        "build"
+      ],
+      "cwd": "/private/tmp/s7a-clean-20261026.9qo1um/crates/dozer-panel-conversations/web/review-trace",
+      "exit": 0,
+      "log": "/private/tmp/s7a-archive-npm-build.log"
+    },
+    {
+      "name": "diff",
+      "command": [
+        "git",
+        "diff",
+        "--exit-code"
+      ],
+      "cwd": "/private/tmp/s7a-clean-20261026.9qo1um",
+      "exit": 0,
+      "log": "/private/tmp/s7a-archive-diff.log"
+    },
+    {
+      "name": "tree",
+      "command": [
+        "cargo",
+        "tree",
+        "-p",
+        "dozer-panel-conversations"
+      ],
+      "cwd": "/private/tmp/s7a-clean-20261026.9qo1um",
+      "exit": 0,
+      "log": "/private/tmp/s7a-archive-tree.log"
+    }
+  ],
+  "own_target": "/private/tmp/s7a-clean-20261026.9qo1um/target",
+  "tests": {
+    "passed": 3548,
+    "failed": 0,
+    "ignored": 5,
+    "result_lines": 80
+  },
+  "forbidden_dependencies": [],
+  "goldens": {
+    "crates/dozer-app/tests/fixtures/review_snapshot_golden.json": "8ffcb55a1ed8a758f8c441d2de1e0ea792cae52e3272c40741f1693120b8b492",
+    "crates/dozer-app/tests/fixtures/review_trace_serve_golden.txt": "cf4fdfc1cd0997463e60d47b47df5b0434b70989f18f30e1932a00208da47739",
+    "crates/dozer-client/tests/fixtures/conversation_protocol_golden.txt": "f46edcfc931d0a67a18ea08fb7ffa2641f0a4eaeb9b8735d08ca013b33cfe51c",
+    "crates/dozer-app/tests/fixtures/session_stream_golden.txt": "7579e6f093f0251e07cde7a9182edc870c67191726159feaf60d8f003da25b2d",
+    "crates/dozer-app/tests/fixtures/preview_webview_specs_golden.txt": "c5a045f0ec540ebd653aa3112987fecac7a76e762d82db820598648929b03184"
+  },
+  "embedded_resources": {
+    "binary": "/private/tmp/s7a-clean-20261026.9qo1um/target/aarch64-apple-darwin/debug/dozer",
+    "assets": {
+      "host.html": {
+        "bytes": 385,
+        "sha256": "655b9188df84be2f6dd6b8874ae3313a0b5148ef10026352056b125fc88eda18",
+        "binary_offset": 135730655
+      },
+      "review-trace.js": {
+        "bytes": 31970,
+        "sha256": "75dc97901c2272d4b2e5328858dbd5408dc4c9e5b2843da79fbca82c81f29491",
+        "binary_offset": 135698676
+      },
+      "review-trace.css": {
+        "bytes": 5090,
+        "sha256": "108f1f9784b07967d1e1f280c6ffda68bfd0bbea80ad9e84c712c91b6f4634cb",
+        "binary_offset": 135693571
+      }
+    }
+  },
+  "focus_update_guard": "no search_focused references in update.rs or summary.rs",
+  "initial_archive_tests": {
+    "passed": 3547,
+    "failed": 1,
+    "ignored": 5,
+    "exit": 101,
+    "failure": "extensions::git_log::tests::build_respects_max_count",
+    "reason": "Archive Git fixture had only one commit; source unchanged when history metadata restored"
+  },
+  "history_fixture": {
+    "binary": "/private/tmp/s7a-clean-20261026.9qo1um/target/aarch64-apple-darwin/debug/deps/dozer-c8acf0ec098a4814",
+    "before_exits": [
+      101,
+      101,
+      101
+    ],
+    "after_exits": [
+      0,
+      0,
+      0
+    ],
+    "fix": "Only fetch/reset local Git metadata to source31540e09; exported source bytes unchanged"
+  },
+  "mutation_sensitivity": [
+    {
+      "mutation": "request_guard",
+      "command": "cargo test -p dozer-panel-conversations --lib task3_tests::append_finishing_after_switch_is_dropped_even_if_the_source_is_reopened -- --exact",
+      "exit": 101,
+      "assertion_failure": true
+    },
+    {
+      "mutation": "summary_capability",
+      "command": "cargo test -p dozer-panel-conversations --lib task3_tests::summary_generate_is_ignored_without_the_capability -- --exact",
+      "exit": 101,
+      "assertion_failure": true
+    },
+    {
+      "mutation": "terminal_mapping",
+      "command": "cargo test -p dozer-panel-conversations --lib task3_tests::summary_failed_without_detail_maps_to_the_legacy_text -- --exact",
+      "exit": 101,
+      "assertion_failure": true
+    }
+  ],
+  "baseline_tests": {
+    "passed": 3503,
+    "failed": 0,
+    "ignored": 5,
+    "exit": 0
+  },
+  "test_accounting": "3503 - 4 + 3 + 4 + 9 + 3 + 30 = 3548",
+  "source_checks": {
+    "original_inventory": 66,
+    "retained": 62,
+    "authorized_deletions": 4,
+    "window_events_changed": false,
+    "library_update_uses_search_focused": false
+  },
+  "main_status": " M Cargo.lock\n"
+}

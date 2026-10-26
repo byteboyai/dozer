@@ -46,12 +46,6 @@ fn bundle_resources_root(exe: &Path) -> Option<PathBuf> {
     None
 }
 
-/// review-trace host(会话审阅 trace 时间线)静态资源根 = flyfish 根的
-/// 兄弟目录 `review-trace`。同 `editor_root_for`,dev 与打包态同构。
-fn review_trace_root_for(flyfish_root: &Path) -> PathBuf {
-    flyfish_root.with_file_name("review-trace")
-}
-
 /// usage-content host(用量面板内容侧图表)静态资源根。产物唯一来源在
 /// `dozer-panel-usage` crate(Task 19 起);打包分发时 `build-macos-app.sh`
 /// 把它拷进 `Contents/Resources/usage-content`,此时 `flyfish_root` 的兄弟
@@ -125,22 +119,16 @@ pub fn handle_protocol(
     };
     let rest = rest.split('?').next().unwrap_or(rest);
 
-    // 审阅面板 trace 页面(2026-09-25 起 Preact 离线打包产物,从磁盘服务,
-    // 同 editor/json-editor):数据端点回显调用方注入的当前审阅内容快照
-    // ——没有快照(还没加载过审阅内容)时 404,判断顺序在 serve_vendored
-    // 之前,不受影响。
+    // 审阅 trace 的离线资源由共享库嵌入;数据端点回显当前快照,缺省时 404。
     if let Some(path) = rest.strip_prefix("review-trace/") {
-        if path == "data.json" {
-            return match review_data {
-                Some(json) => ProtocolReply {
-                    status: 200,
-                    mime: "application/json",
-                    body: json.as_bytes().to_vec(),
-                },
-                None => not_found(),
-            };
-        }
-        return serve_vendored(&review_trace_root_for(assets_root), path);
+        return match dozer_panel_conversations::assets::serve_review_trace(path, review_data) {
+            Some((mime, body)) => ProtocolReply {
+                status: 200,
+                mime,
+                body,
+            },
+            None => not_found(),
+        };
     }
 
     // usage-content host(用量面板内容侧图表):没有 data.json 特判——数据
@@ -235,54 +223,6 @@ mod tests {
         fs::write(dir.join("host.html"), b"<html>").unwrap();
         fs::write(dir.join("sub").join("a.js"), b"js").unwrap();
         dir
-    }
-
-    /// 提交的 review-trace 产物必须齐全(防止忘记 `npm run build` 就提交)。
-    #[test]
-    fn review_trace_bundle_assets_are_present() {
-        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/review-trace"));
-        for f in ["host.html", "review-trace.js", "review-trace.css"] {
-            let p = root.join(f);
-            assert!(p.is_file(), "缺少 review-trace 产物 {f}: {}", p.display());
-            assert!(
-                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
-                "review-trace 产物为空: {f}"
-            );
-        }
-    }
-
-    /// 严格 CSP + 无网络:host.html 不得引用任何外部 URL,且带 `default-src 'none'`。
-    #[test]
-    fn review_trace_host_has_strict_csp_and_no_external_refs() {
-        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/review-trace"));
-        let html = std::fs::read_to_string(root.join("host.html")).expect("读 host.html");
-        assert!(
-            html.contains("Content-Security-Policy"),
-            "host.html 必须声明 CSP"
-        );
-        assert!(
-            html.contains("default-src 'none'"),
-            "CSP 必须以 default-src 'none' 起步"
-        );
-        assert!(html.contains("script-src 'self'"), "脚本仅 self");
-        assert!(html.contains("connect-src 'self'"), "仅允许同源 fetch");
-        assert!(
-            !html.contains("http://") && !html.contains("https://"),
-            "review-trace host.html 不得引用外部 URL(离线约束)"
-        );
-        assert!(html.contains("review-trace.js") && html.contains("review-trace.css"));
-    }
-
-    /// 打包产物不得泄漏本机绝对路径或 sourcemap 引用。
-    #[test]
-    fn review_trace_js_has_no_absolute_paths_or_sourcemap() {
-        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/review-trace"));
-        let js = std::fs::read_to_string(root.join("review-trace.js")).expect("读 review-trace.js");
-        assert!(!js.contains("sourceMappingURL"), "不应有 sourcemap 引用");
-        assert!(
-            !js.contains(env!("CARGO_MANIFEST_DIR")),
-            "不应含源码树绝对路径"
-        );
     }
 
     #[test]
@@ -647,3 +587,49 @@ mod tests {
 
 pub mod clipboard_image;
 pub mod fonts;
+
+#[cfg(test)]
+mod review_serve_golden_tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn review_trace_serve_matches_the_golden() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/flyfish"));
+        let snapshot = include_str!("../tests/fixtures/review_snapshot_golden.json");
+        let mut actual = String::new();
+        for name in [
+            "host.html",
+            "review-trace.js",
+            "review-trace.css",
+            "data.json",
+        ] {
+            let reply = handle_protocol(
+                root,
+                &dozer_panel_preview::assets::AllowedFiles::new(),
+                Some(snapshot),
+                &format!("dozer://review-trace/{name}"),
+            );
+            assert_eq!(reply.status, 200, "{name}");
+            actual.push_str(&format!(
+                "{name}\t{}\t{}\t{:x}\n",
+                reply.mime,
+                reply.body.len(),
+                Sha256::digest(&reply.body)
+            ));
+        }
+        let missing = handle_protocol(
+            root,
+            &dozer_panel_preview::assets::AllowedFiles::new(),
+            None,
+            "dozer://review-trace/data.json",
+        );
+        assert_eq!(missing.status, 404);
+        actual.push_str("data.json without snapshot\t404\n");
+        actual.push_str(snapshot);
+        assert_eq!(
+            actual,
+            include_str!("../tests/fixtures/review_trace_serve_golden.txt")
+        );
+    }
+}

@@ -1,0 +1,6 @@
+{"type":"get_conversation_turns","conversation_id":"会话-1","after_turn_index":2,"limit":200}
+{"type":"submit_summary_job","conversation_id":"会话-1","source_session_id":null,"trigger":"manual","provider":null,"model":null,"force":true}
+{"type":"get_summary_job","job_id":17}
+{"type":"conversation_turns","conversation_id":"会话-1","turns":[{"turn_index":3,"role":"human","content":"你好 👋\n第二行","tool_calls":[],"thinking":false,"thinking_text":null,"ts":42,"is_error":false,"tool_result_call_id":null,"tokens_in":0,"tokens_out":0,"tokens_cache_read":0,"tokens_cache_write":0}]}
+{"type":"summary_job_submitted","job_id":17}
+{"type":"summary_job","job":{"job_id":17,"conversation_id":"会话-1","source_session_id":null,"trigger":"manual","provider":"claude","requested_model":null,"source_revision":"revision-2","pipeline_version":"v2","generation":1,"status":"failed","attempt":2,"error_kind":"timeout","error_detail":"超时\n请重试","created_ts_ms":100,"updated_ts_ms":200,"phase":"extract:1/2"}}
