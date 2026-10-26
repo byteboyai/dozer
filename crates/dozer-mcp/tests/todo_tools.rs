@@ -150,3 +150,127 @@ async fn list_todos_errors_for_unknown_session() {
         .unwrap_err();
     assert!(err.message.contains("会话不存在"));
 }
+
+async fn listed(server: &DozerMcpServer) -> Vec<serde_json::Value> {
+    server
+        .list_todos(Parameters(NoParams {}))
+        .await
+        .unwrap()
+        .structured_content
+        .expect("结构化内容")["todos"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+#[tokio::test]
+async fn blank_text_is_rejected_when_adding_and_creates_no_task() {
+    let (sock, _guard) = start_daemon().await;
+    let session_id = session_with_project(&sock, 1).await;
+    let server = DozerMcpServer::new(Client::new(sock), session_id);
+    for text in ["", "   ", " \n\t "] {
+        let err = server
+            .add_todo(Parameters(AddTodoParams { text: text.into() }))
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("不能为空"),
+            "{text:?}: {}",
+            err.message
+        );
+    }
+    assert!(listed(&server).await.is_empty(), "空白文字不得产生任务");
+}
+
+#[tokio::test]
+async fn blank_text_is_rejected_when_editing_and_keeps_the_old_text() {
+    let (sock, _guard) = start_daemon().await;
+    let session_id = session_with_project(&sock, 1).await;
+    let server = DozerMcpServer::new(Client::new(sock), session_id);
+    let added = server
+        .add_todo(Parameters(AddTodoParams {
+            text: "原文".into(),
+        }))
+        .await
+        .unwrap();
+    let id = added.structured_content.unwrap()["id"].as_i64().unwrap();
+    for text in ["", "  \n "] {
+        let err = server
+            .edit_todo_text(Parameters(EditTodoTextParams {
+                id,
+                text: text.into(),
+            }))
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("不能为空"),
+            "{text:?}: {}",
+            err.message
+        );
+    }
+    assert_eq!(listed(&server).await[0]["text"], "原文");
+}
+
+#[tokio::test]
+async fn text_with_surrounding_whitespace_is_still_accepted_as_given() {
+    // 只拒绝"全是空白";有内容的文字原样保存,不替 agent 改写。
+    let (sock, _guard) = start_daemon().await;
+    let session_id = session_with_project(&sock, 1).await;
+    let server = DozerMcpServer::new(Client::new(sock), session_id);
+    let added = server
+        .add_todo(Parameters(AddTodoParams {
+            text: "  两侧有空格  ".into(),
+        }))
+        .await
+        .unwrap();
+    assert_eq!(added.structured_content.unwrap()["text"], "  两侧有空格  ");
+}
+
+#[tokio::test]
+async fn a_session_cannot_toggle_or_edit_another_projects_todo() {
+    let (sock, _guard) = start_daemon().await;
+    let session_a = session_with_project(&sock, 1).await;
+    let a = DozerMcpServer::new(Client::new(sock.clone()), session_a);
+    let other = Client::new(sock.clone())
+        .add_todo(2, "别的项目的任务")
+        .await
+        .unwrap();
+
+    let err = a
+        .toggle_todo(Parameters(ToggleTodoParams {
+            id: other.id,
+            done: true,
+        }))
+        .await
+        .unwrap_err();
+    assert!(err.message.contains("不属于当前项目"), "{}", err.message);
+    let err = a
+        .edit_todo_text(Parameters(EditTodoTextParams {
+            id: other.id,
+            text: "被改了".into(),
+        }))
+        .await
+        .unwrap_err();
+    assert!(err.message.contains("不属于当前项目"), "{}", err.message);
+
+    // 别的项目的任务原样未动。
+    let still = Client::new(sock).list_todos(2).await.unwrap();
+    assert_eq!(still.len(), 1);
+    assert_eq!(still[0].text, "别的项目的任务");
+    assert!(!still[0].done);
+}
+
+#[tokio::test]
+async fn a_todo_id_that_does_not_exist_is_a_readable_error() {
+    let (sock, _guard) = start_daemon().await;
+    let session_id = session_with_project(&sock, 1).await;
+    let server = DozerMcpServer::new(Client::new(sock), session_id);
+    let err = server
+        .toggle_todo(Parameters(ToggleTodoParams {
+            id: 9_999_999,
+            done: true,
+        }))
+        .await
+        .unwrap_err();
+    assert!(err.message.contains("不属于当前项目"), "{}", err.message);
+}
