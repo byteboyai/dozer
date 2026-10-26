@@ -647,3 +647,49 @@ mod tests {
 
 pub mod clipboard_image;
 pub mod fonts;
+
+#[cfg(test)]
+mod review_serve_golden_tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn review_trace_serve_matches_the_golden() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/flyfish"));
+        let snapshot = include_str!("../tests/fixtures/review_snapshot_golden.json");
+        let mut actual = String::new();
+        for name in [
+            "host.html",
+            "review-trace.js",
+            "review-trace.css",
+            "data.json",
+        ] {
+            let reply = handle_protocol(
+                root,
+                &dozer_panel_preview::assets::AllowedFiles::new(),
+                Some(snapshot),
+                &format!("dozer://review-trace/{name}"),
+            );
+            assert_eq!(reply.status, 200, "{name}");
+            actual.push_str(&format!(
+                "{name}\t{}\t{}\t{:x}\n",
+                reply.mime,
+                reply.body.len(),
+                Sha256::digest(&reply.body)
+            ));
+        }
+        let missing = handle_protocol(
+            root,
+            &dozer_panel_preview::assets::AllowedFiles::new(),
+            None,
+            "dozer://review-trace/data.json",
+        );
+        assert_eq!(missing.status, 404);
+        actual.push_str("data.json without snapshot\t404\n");
+        actual.push_str(snapshot);
+        assert_eq!(
+            actual,
+            include_str!("../tests/fixtures/review_trace_serve_golden.txt")
+        );
+    }
+}

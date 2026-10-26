@@ -563,3 +563,28 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod review_golden_tests {
+    use super::*;
+
+    #[test]
+    fn review_snapshot_matches_the_golden() {
+        let turns: Vec<TurnRecord> =
+            serde_json::from_str(include_str!("../tests/fixtures/review_turns_input.json"))
+                .unwrap();
+        let entries = review_entries_from_turns(&turns);
+        let snapshot = crate::app::ReviewSnapshot {
+            entries: &entries,
+            agent_label: dozer_model::AgentKind::Claude.label(),
+            summary_title: Some("审阅 👋".into()),
+            summary_text: Some("第一行\n第二行 �\u{200b}".into()),
+            summary_time: Some("3 分钟前".into()),
+        };
+        let actual = serde_json::to_string(&snapshot).unwrap();
+        assert_eq!(
+            actual,
+            include_str!("../tests/fixtures/review_snapshot_golden.json")
+        );
+    }
+}

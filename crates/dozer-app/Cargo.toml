@@ -141,3 +141,4 @@ objc2-web-kit = { version = "=0.3.2", default-features = false, features = [
 # 预览 webview 原生查找条的 completion handler 用 `RcBlock` 构造(nil block
 # 也要一个真实 block 对象)。版本与 objc2-web-kit 传递依赖一致。
 block2 = "0.6"
+sha2 = "0.10"

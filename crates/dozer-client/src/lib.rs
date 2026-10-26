@@ -3681,3 +3681,63 @@ mod session_service_tests {
         let _ = std::fs::remove_file(&sock);
     }
 }
+
+#[cfg(test)]
+mod conversation_protocol_golden {
+    use super::*;
+    use dozer_core::protocol::{SummaryJobInfo, SummaryJobStatus, SummaryTrigger, TurnRecord};
+
+    #[test]
+    fn conversation_protocol_encoding_golden() {
+        let turn: TurnRecord = serde_json::from_value(serde_json::json!({
+            "turn_index": 3, "role": "human", "content": "你好 👋\n第二行",
+            "thinking": false, "ts": 42
+        }))
+        .unwrap();
+        let job = SummaryJobInfo {
+            job_id: 17,
+            conversation_id: "会话-1".into(),
+            source_session_id: None,
+            trigger: SummaryTrigger::Manual,
+            provider: AgentKind::Claude,
+            requested_model: None,
+            source_revision: "revision-2".into(),
+            pipeline_version: "v2".into(),
+            generation: 1,
+            status: SummaryJobStatus::Failed,
+            attempt: 2,
+            error_kind: Some(dozer_core::protocol::SummaryErrorKind::Timeout),
+            error_detail: Some("超时\n请重试".into()),
+            created_ts_ms: 100,
+            updated_ts_ms: 200,
+            phase: Some("extract:1/2".into()),
+        };
+        let actual = [
+            encode_line(&Request::GetConversationTurns {
+                conversation_id: "会话-1".into(),
+                after_turn_index: 2,
+                limit: 200,
+            }),
+            encode_line(&Request::SubmitSummaryJob {
+                conversation_id: "会话-1".into(),
+                source_session_id: None,
+                trigger: SummaryTrigger::Manual,
+                provider: None,
+                model: None,
+                force: true,
+            }),
+            encode_line(&Request::GetSummaryJob { job_id: 17 }),
+            encode_line(&Reply::ConversationTurns {
+                conversation_id: "会话-1".into(),
+                turns: vec![turn],
+            }),
+            encode_line(&Reply::SummaryJobSubmitted { job_id: 17 }),
+            encode_line(&Reply::SummaryJob { job: Some(job) }),
+        ]
+        .concat();
+        assert_eq!(
+            actual,
+            include_str!("../tests/fixtures/conversation_protocol_golden.txt")
+        );
+    }
+}
