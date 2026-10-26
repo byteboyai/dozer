@@ -1,4 +1,3 @@
-
 use super::*;
 use dozer_model::{
     AgentKind, GroupAuthor, GroupInfo, GroupMemberInfo, GroupMessageInfo, GroupMessageStatus,

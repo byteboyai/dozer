@@ -148,7 +148,7 @@ pub fn content_pane<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter::{GroupChatPane, PanelDisplay, PaneStyle};
+    use crate::adapter::{GroupChatPane, PaneStyle, PanelDisplay};
     use crate::update::{Message as GcMessage, update};
     use byteui::interaction::icons::IconKind;
     use dozer_model::{AgentKind, GroupInfo, LocalizedText};
