@@ -8,6 +8,17 @@
 
 **本任务的 worktree 必须从已含 S7a 的 Dozer `main` 切出。** S7a(交接任务 6,`dozer-panel-conversations`)与本任务都会改 `app.rs`、`workspace/state.rs`、`runtime.rs`、`assets.rs`、`scripts/audit/check_panel_boundary.py`、`scripts/i18n/*.py`,并行做会冲突。核对办法:`git log --oneline main | head`、`ls crates | grep panel-conversations`。**若 `main` 里还没有 `dozer-panel-conversations`,不要开工**,告诉用户「S7a 尚未合并」。
 
+## 2026-10-26 更新:前置已满足,以下以实际状态为准
+
+- **S7a 已合并并发布 libs tag。** Dozer `main` 含 `dozer-panel-conversations`(合并提交 `609a18df`,tag `libs-2026-10-26a`,已推送到 origin),此后只多了文档提交。直接从当前本地 `main` 切 worktree 即可;上面的核对命令应当通过。
+- **测试基线:** S7a 合并后在干净快照里是 **3548 通过 / 0 失败 / 5 忽略**。开工仍要自己重跑记数,写进第一个提交说明。
+- **读 S7a 报告里的三条教训**(`docs/superpowers/reviews/2026-10-26-s7a-report.md`):
+  1. **先红再绿要做到每个任务。** S7a 的 Task 3 没有先写失败测试,事后只补了变异测试。本任务不接受这个偏差;抽取与迁移期间新增的行为测试也要先看到它失败。
+  2. **干净快照要带 git 历史。** `git archive` 导出的目录没有 `.git`,`extensions::git_log::tests` 里 3 个测试读仓库自身历史,会确定性失败(不是偶发)。验收时给快照补上历史(`git init` + `git fetch <worktree> HEAD` + `git reset --soft FETCH_HEAD`,工作树文件不变),或在报告里写明这 3 个是环境原因并单独证明通过。
+  3. **沙箱可能不让写兄弟目录和原仓库 `.git`。** S7a 的开发 agent 因此改用 `/private/tmp` 下的独立克隆。若你也遇到,先试 `git worktree add ../dozer-panel-group-chat`,不行就同样用独立克隆并在报告开头说明;合并时用户会从该克隆 `git fetch` 分支。
+- **库依赖方向:** S7a 里 `dozer-panel-preview` 反向依赖了 `dozer-panel-conversations`(为重导出 `parse_review_trace_event`)。群聊库**不得**照这个办法:`WebviewEnvelope` / `ProtocolError` 若要共用,在群聊库里放最小等价类型,不新增 preview → group-chat 依赖;发现 preview 里有群聊协议解析,同样先报告。
+- **Digger 侧的 `Services` 已多了 `summary` 字段**,与本任务无关。若本任务改动了 `dozer-services` 的公开接口,**在报告开头单独标出**:Digger 重钉时会因此编译失败,需要同步补 `UnavailableService` 的占位实现。
+
 ## 先读(只读,按顺序)
 
 1. `docs/superpowers/plans/2026-10-25-s7-s8-refresh.md`:**修订总览,优先于原稿**。重点 §1.1、§1.2、§1.3、§3「通用」11 条、§3「S8 设计稿与 S8a」一节、§5 Q1、§6。
