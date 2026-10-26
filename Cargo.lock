@@ -2001,6 +2001,7 @@ dependencies = [
  "dozer-mcp",
  "dozer-model",
  "dozer-panel-agent",
+ "dozer-panel-conversations",
  "dozer-panel-files",
  "dozer-panel-host",
  "dozer-panel-preview",
@@ -2167,6 +2168,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dozer-panel-conversations"
+version = "0.1.0"
+dependencies = [
+ "dozer-i18n",
+ "dozer-model",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "dozer-panel-files"
 version = "0.1.0"
 dependencies = [
@@ -2206,6 +2218,7 @@ dependencies = [
  "csv",
  "dozer-i18n",
  "dozer-model",
+ "dozer-panel-conversations",
  "dozer-preview-core",
  "iced_renderer",
  "iced_widget",

@@ -1,5 +1,5 @@
 // 生产构建:把会话审阅 trace host 打包成**离线、无 CDN、无运行时 Node** 的
-// 确定性产物到 `crates/dozer-app/assets/review-trace/`。
+// 确定性产物到 `crates/dozer-panel-conversations/assets/review-trace/`。
 //
 // 产物:`review-trace.js`(iife bundle)、`review-trace.css`(从
 // `main.tsx` 顶部 `import './styles.css'` 抽出的样式)、`host.html`(带

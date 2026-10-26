@@ -10,8 +10,6 @@ use crate::theme;
 use crate::theme::terminal_font;
 use crate::ui_text::text;
 use byteui::interaction::icons::IconKind;
-#[cfg(test)]
-use dozer_core::protocol::AgentKind;
 use dozer_panel_preview::ViewCtx;
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Element, Length, Padding};
@@ -57,7 +55,7 @@ pub(crate) fn load_more_button<'a>(
 /// 对话面板 session 详情的首屏回合页大小(2026-08-27):列表分页
 /// (`extensions::conversations::CONVERSATION_PAGE_SIZE`,20)与详情页分页
 /// (这里,200)含义不同,不要混用。
-pub(crate) const CONVERSATION_DETAIL_PAGE_SIZE: u32 = 200;
+pub(crate) use dozer_panel_conversations::filter::CONVERSATION_DETAIL_PAGE_SIZE;
 
 /// Agent 列表面板(右面板区"Agent"视图的列表侧):按 `AgentKind` 分组展示
 /// 当前项目的会话,组内保留 tab 打开顺序;点击一行 = `Message::SelectTab`
@@ -236,53 +234,20 @@ pub(crate) fn review_webview_spec(
     review: Option<&ReviewView>,
     locale: &str,
 ) -> Vec<crate::preview::WebviewSpec> {
-    let Some(rv) = review else {
-        return Vec::new();
-    };
-    if rv.error.is_some() || rv.entries.is_empty() {
-        return Vec::new();
-    }
-    let loaded = rv.loaded_nonce == Some(rv.nonce);
-    vec![crate::preview::WebviewSpec {
-        id: 0,
-        url: format!(
-            "dozer://review-trace/host.html?_r={}&locale={}",
-            rv.nonce, locale
-        ),
-        visible: loaded,
-        editor_binding: None,
-        reserve: None,
-        loading_generation: None,
-        surface: None,
-        // review-trace 是同款「未就绪先创建」的 Rendered 宿主(Preact 渲染),
-        // 未就绪时离屏停放,避免 hidden 下 rAF 被挂起拖慢/卡住首帧。
-        park_offscreen: !loaded,
-        display_i18n: None,
-    }]
-}
-
-/// `review_content_pane` 该渲染哪一态(空/loading/内容三态)。抽成纯函数
-/// 供 headless 单测——视图函数本身只管把结果画出来。
-#[derive(Debug, PartialEq)]
-pub(crate) enum ReviewPaneState {
-    Empty,
-    Loading,
-    Ready,
-}
-
-pub(crate) fn review_pane_state(rv: Option<&ReviewView>) -> ReviewPaneState {
-    let Some(rv) = rv else {
-        return ReviewPaneState::Empty;
-    };
-    // error / 空 entries 两种情况下 `review_webview_spec` 会销毁 webview
-    // (永远等不到 `document_loaded`),`loaded_nonce` 永远是 None——必须归入
-    // Ready 让 `review_content` 显示"⚠ 错误" / "暂无对话"文案,否则会永久
-    // 卡在"加载中…"占位。这跟"根本没有数据"、"正在加载"是两回事。
-    if rv.error.is_some() || rv.entries.is_empty() || rv.loaded_nonce == Some(rv.nonce) {
-        ReviewPaneState::Ready
-    } else {
-        ReviewPaneState::Loading
-    }
+    dozer_panel_conversations::snapshot::review_webview_spec(review, locale, "dozer")
+        .into_iter()
+        .map(|spec| crate::preview::WebviewSpec {
+            id: 0,
+            url: spec.url,
+            visible: spec.visible,
+            park_offscreen: spec.park_offscreen,
+            editor_binding: None,
+            reserve: None,
+            loading_generation: None,
+            surface: None,
+            display_i18n: None,
+        })
+        .collect()
 }
 
 /// 会话审阅内容面板(右面板区"对话"视图的内容侧):直接读 `ws.review`,
@@ -350,7 +315,6 @@ pub(crate) fn review_content_pane<'a>(
 
     if let Some(error) = ws.review.as_ref().and_then(|rv| match &rv.source {
         ReviewSource::Conversation(cid) => ws.conversations.summary_error(cid),
-        ReviewSource::Session(_) => None,
     }) {
         content = content.push(
             text(crate::i18n::host_render(error, locale))
@@ -632,70 +596,4 @@ pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64, locale: &str) ->
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    mod review_pane_state_tests {
-        use super::*;
-        use crate::transcript::ReviewEntry;
-
-        fn rv(nonce: u64, loaded_nonce: Option<u64>) -> ReviewView {
-            ReviewView {
-                source: ReviewSource::Conversation("c1".into()),
-                entries: vec![ReviewEntry::Human { text: "hi".into() }],
-                error: None,
-                agent: AgentKind::Claude,
-                nonce,
-                summary_title: None,
-                summary_text: None,
-                summary_time: None,
-                loaded_nonce,
-            }
-        }
-
-        #[test]
-        fn none_is_empty() {
-            assert_eq!(review_pane_state(None), ReviewPaneState::Empty);
-        }
-
-        #[test]
-        fn unloaded_nonce_is_loading() {
-            assert_eq!(
-                review_pane_state(Some(&rv(3, None))),
-                ReviewPaneState::Loading
-            );
-            assert_eq!(
-                review_pane_state(Some(&rv(3, Some(2)))),
-                ReviewPaneState::Loading
-            );
-        }
-
-        #[test]
-        fn matching_nonce_is_ready() {
-            assert_eq!(
-                review_pane_state(Some(&rv(3, Some(3)))),
-                ReviewPaneState::Ready
-            );
-        }
-
-        /// 首次加载失败:`review_webview_spec` 会销毁 webview(永远等不到
-        /// `document_loaded`),`loaded_nonce` 停在 None——必须走 Ready 让
-        /// `review_content` 显示"⚠ 错误"文案,不能永久卡在"加载中…"。
-        #[test]
-        fn error_is_ready_even_without_loaded_nonce() {
-            let mut r = rv(3, None);
-            r.error = Some("transcript 解析失败".into());
-            assert_eq!(review_pane_state(Some(&r)), ReviewPaneState::Ready);
-        }
-
-        /// 首次加载成功但会话为空:同样销毁 webview、无事件回传,必须走
-        /// Ready 显示"暂无对话",不能卡在"加载中…"。
-        #[test]
-        fn empty_entries_is_ready_even_without_loaded_nonce() {
-            let mut r = rv(3, None);
-            r.entries = Vec::new();
-            assert_eq!(review_pane_state(Some(&r)), ReviewPaneState::Ready);
-        }
-    }
-}
+pub(crate) use dozer_panel_conversations::snapshot::{ReviewPaneState, review_pane_state};

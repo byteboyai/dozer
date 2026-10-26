@@ -56,3 +56,5 @@ pub(crate) fn new_preview_pane() -> PreviewPane {
     pane.editor_font = editor_font();
     pane
 }
+
+pub(crate) use dozer_panel_conversations::assets::ReviewTraceEvent;

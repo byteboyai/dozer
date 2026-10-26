@@ -25,8 +25,7 @@ use crate::term::terminal;
 use crate::workspace::{
     CONVERSATION_DETAIL_PAGE_SIZE, RestorePayload, ReviewSource, ReviewView, SshOut,
     TabAttachedArgs, TabBackend, Workspace, exited_marker, relative_time_text,
-    review_should_refresh_on_turn, spawn_disk_usage_refresh, spawn_project_git_refresh,
-    tab_display_width, tab_title,
+    spawn_disk_usage_refresh, spawn_project_git_refresh, tab_display_width, tab_title,
 };
 use byteui::interaction::icons;
 use dozer_core::protocol::{
@@ -40,52 +39,6 @@ use super::*;
 
 dozer_core::scope!(LOG, module, "shell");
 dozer_core::scope!(PREVIEW_LOG, module, "preview");
-
-/// review-trace webview 报回 `document_loaded` 后落地:"当前 nonce 的内容
-/// 已可显示"。抽成纯函数便于 headless 单测(构造完整 `App` 成本过高)。
-///
-/// `None`/不等于 `nonce` 都算"未 loaded";事件本身不携带"我是为哪个 nonce
-/// 报的"(协议从简,见 spec"风险与边界"),因此只能把 `loaded_nonce` 设成
-/// **事件到达那一刻的当前 nonce**——快速连切两次时,第一次的过期事件会提前
-/// 让新 nonce 追上(已知限制,不在本任务修复范围)。
-pub(crate) fn mark_review_loaded(review: &mut Option<crate::workspace::ReviewView>) {
-    if let Some(rv) = review {
-        rv.loaded_nonce = Some(rv.nonce);
-    }
-}
-
-/// 会话列表刷新带回新总结后，同步当前详情页及其 WebView 快照。
-///
-/// 详情正文由 `review_snapshot` 提供，单改 `ReviewView.summary_*` 不会让已经
-/// 加载的 WebView 重新取数；这里同时推进 nonce 并返回新的序列化快照。
-fn refresh_open_conversation_summary(
-    review: &mut Option<ReviewView>,
-    review_nonce: &mut u64,
-    row: &dozer_model::SessionRow,
-) -> Option<String> {
-    let rv = review.as_mut()?;
-    if !matches!(&rv.source, ReviewSource::Conversation(cid) if cid == &row.conversation_id) {
-        return None;
-    }
-    if rv.summary_title.as_deref() == Some(row.display_title.as_str())
-        && rv.summary_text == row.summary
-    {
-        return None;
-    }
-
-    rv.summary_title = Some(row.display_title.clone());
-    rv.summary_text = row.summary.clone();
-    *review_nonce = review_nonce.wrapping_add(1);
-    rv.nonce = *review_nonce;
-    let snapshot = ReviewSnapshot {
-        entries: &rv.entries,
-        agent_label: rv.agent.label(),
-        summary_title: rv.summary_title.clone(),
-        summary_text: rv.summary_text.clone(),
-        summary_time: rv.summary_time.clone(),
-    };
-    serde_json::to_string(&snapshot).ok()
-}
 
 /// 由工作区的项目信息造切入上下文;工作区还没有项目时返回 `None`。
 fn workspace_activation_ctx<M: Send + 'static>(
@@ -427,7 +380,6 @@ impl App {
                     conversations::update(&mut ws.conversations, msg);
                     let open_cid = ws.review.as_ref().and_then(|rv| match &rv.source {
                         ReviewSource::Conversation(cid) => Some(cid.clone()),
-                        ReviewSource::Session(_) => None,
                     });
                     if let Some(row) = open_cid.as_deref().and_then(|cid| {
                         ws.conversations
@@ -4592,32 +4544,15 @@ impl App {
         }
     }
 
-    /// 回合结束后的跨面板刷新(会话列表、项目 git/磁盘占用、审阅重载)。
+    /// 回合结束后的跨面板刷新(会话列表、项目 git/磁盘占用)。
     /// 卡片本身的刷新由库在 `AgentState` 分支内完成。
-    fn agent_turn_ended(&mut self, project_id: ProjectId, tab_id: usize) {
+    fn agent_turn_ended(&mut self, project_id: ProjectId, _tab_id: usize) {
         self.with_project(project_id, |ws, io| {
             ws.spawn_conversations_refresh(io);
             if let Some(project) = &ws.project {
                 let repo_path = PathBuf::from(&project.path);
                 spawn_project_git_refresh(project_id, repo_path.clone(), io);
                 spawn_disk_usage_refresh(project_id, repo_path, io);
-            }
-            if let Some(rv) = &ws.review
-                && review_should_refresh_on_turn(&rv.source, tab_id)
-                && let Some((path, tab_agent)) = ws
-                    .tabs
-                    .iter()
-                    .find(|t| t.tab_id == tab_id)
-                    .and_then(|t| t.transcript_path.clone().map(|p| (p, t.agent)))
-            {
-                ws.spawn_review_load(
-                    io,
-                    ReviewSource::Session(tab_id),
-                    path,
-                    tab_agent,
-                    -1,
-                    10_000,
-                );
             }
         });
     }
@@ -5369,105 +5304,6 @@ mod host_event_routing_tests {
     }
 }
 
-#[cfg(test)]
-mod review_trace_tests {
-    use super::*;
-    use crate::transcript::ReviewEntry;
-    use crate::workspace::ReviewSource;
-    use dozer_core::protocol::AgentKind;
-
-    fn review(nonce: u64, loaded_nonce: Option<u64>) -> crate::workspace::ReviewView {
-        crate::workspace::ReviewView {
-            source: ReviewSource::Conversation("c1".into()),
-            entries: vec![ReviewEntry::Human { text: "hi".into() }],
-            error: None,
-            agent: AgentKind::Claude,
-            nonce,
-            summary_title: None,
-            summary_text: None,
-            summary_time: None,
-            loaded_nonce,
-        }
-    }
-
-    #[test]
-    fn sets_loaded_nonce_to_current_nonce() {
-        let mut review = Some(review(5, None));
-        mark_review_loaded(&mut review);
-        assert_eq!(review.as_ref().unwrap().loaded_nonce, Some(5));
-    }
-
-    /// 对应 Review Focus"过期事件":事件到达时 nonce 已经自增,`loaded_nonce`
-    /// 只能追到**当前**值(6)而非事件本该对应的旧值——已知限制,事件不携带
-    /// nonce。这条测试记录该行为,避免未来被误当成未测疏漏。
-    #[test]
-    fn stale_event_still_advances_to_current_nonce_known_limitation() {
-        let mut review = Some(review(6, None));
-        mark_review_loaded(&mut review);
-        assert_eq!(review.as_ref().unwrap().loaded_nonce, Some(6));
-    }
-
-    #[test]
-    fn no_op_when_review_is_none() {
-        let mut review: Option<crate::workspace::ReviewView> = None;
-        mark_review_loaded(&mut review);
-        assert!(review.is_none());
-    }
-
-    #[test]
-    fn refreshed_summary_rebuilds_snapshot_and_advances_nonce() {
-        let mut review = Some(review(5, Some(5)));
-        let mut nonce = 5;
-        let row = dozer_model::SessionRow {
-            conversation_id: "c1".into(),
-            agent: AgentKind::Claude,
-            last_ts: 1,
-            display_title: "新标题".into(),
-            summary: Some("新总结".into()),
-            summary_status: Some(dozer_core::protocol::SummaryStatus::AiGenerated),
-            task_id: None,
-        };
-
-        let json = refresh_open_conversation_summary(&mut review, &mut nonce, &row)
-            .expect("总结变化应重建快照");
-
-        let rv = review.as_ref().unwrap();
-        assert_eq!(rv.summary_title.as_deref(), Some("新标题"));
-        assert_eq!(rv.summary_text.as_deref(), Some("新总结"));
-        assert_eq!(rv.nonce, 6);
-        assert_eq!(nonce, 6);
-        assert_eq!(
-            rv.loaded_nonce,
-            Some(5),
-            "旧加载水位应使新 WebView 进入加载态"
-        );
-        assert!(json.contains("新标题"));
-        assert!(json.contains("新总结"));
-    }
-
-    #[test]
-    fn unchanged_summary_does_not_reload_webview() {
-        let mut value = review(5, Some(5));
-        value.summary_title = Some("已有标题".into());
-        value.summary_text = Some("已有总结".into());
-        let mut review = Some(value);
-        let mut nonce = 5;
-        let row = dozer_model::SessionRow {
-            conversation_id: "c1".into(),
-            agent: AgentKind::Claude,
-            last_ts: 1,
-            display_title: "已有标题".into(),
-            summary: Some("已有总结".into()),
-            summary_status: Some(dozer_core::protocol::SummaryStatus::AiGenerated),
-            task_id: None,
-        };
-
-        assert!(refresh_open_conversation_summary(&mut review, &mut nonce, &row).is_none());
-        assert_eq!(nonce, 5);
-        assert_eq!(review.as_ref().unwrap().nonce, 5);
-    }
-}
-
 /// 按路径重载一个文件页签。`find_existing_file_tab` 返回页签**下标**,`bump_reload` 要页签 **id**——
 /// 关过页签后两者不再相等,不能把下标当 id 传。找不到该路径的页签返回 `false`。
 fn bump_reload_for_path(pane: &mut crate::preview::PreviewPane, path: &std::path::Path) -> bool {
@@ -5595,3 +5431,7 @@ mod reload_by_path_tests {
         ));
     }
 }
+
+pub(crate) use dozer_panel_conversations::snapshot::{
+    mark_review_loaded, refresh_open_conversation_summary,
+};

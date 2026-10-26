@@ -10,9 +10,9 @@ import {
   Resolver,
   type Bundle,
   type ResourceSet,
-} from '../../shared/i18n/i18n.ts';
-import en from '../../../locales/panels/agent/en.json' with { type: 'json' };
-import zhCN from '../../../locales/panels/agent/zh-CN.json' with { type: 'json' };
+} from '../../../../dozer-app/web/shared/i18n/i18n.ts';
+import en from '../../../../dozer-app/locales/panels/agent/en.json' with { type: 'json' };
+import zhCN from '../../../../dozer-app/locales/panels/agent/zh-CN.json' with { type: 'json' };
 
 export const AGENT_OWNER = 'dozer.agent';
 const DEFAULT_LOCALE = 'en';

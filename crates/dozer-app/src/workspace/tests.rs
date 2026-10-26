@@ -3,154 +3,12 @@ use super::*;
 use crate::app::{Message, PanelKind};
 use crate::osc::OscScanner;
 use crate::term::term_model::TerminalModel;
-use crate::transcript::ReviewEntry;
 use byteui::interaction::icons::IconKind;
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use dozer_panel_agent::launch::agent_launch_command;
 use dozer_panel_agent::style::{agent_state_label, format_model_label, group_tabs_by_agent};
 use dozer_panel_agent::tabs::effective_cwd;
 use std::path::{Path, PathBuf};
-
-#[test]
-fn review_webview_spec_empty_when_no_review() {
-    assert_eq!(review_webview_spec(None, "en"), Vec::new());
-}
-
-#[test]
-fn review_webview_spec_empty_on_error_or_empty_entries() {
-    let with_error = ReviewView {
-        source: ReviewSource::Conversation("a".into()),
-        entries: vec![ReviewEntry::Human { text: "hi".into() }],
-        error: Some("boom".into()),
-        agent: AgentKind::Claude,
-        nonce: 3,
-        summary_title: None,
-        summary_text: None,
-        summary_time: None,
-        loaded_nonce: None,
-    };
-    assert_eq!(review_webview_spec(Some(&with_error), "en"), Vec::new());
-
-    let empty_entries = ReviewView {
-        source: ReviewSource::Conversation("a".into()),
-        entries: Vec::new(),
-        error: None,
-        agent: AgentKind::Claude,
-        nonce: 3,
-        summary_title: None,
-        summary_text: None,
-        summary_time: None,
-        loaded_nonce: None,
-    };
-    assert_eq!(review_webview_spec(Some(&empty_entries), "en"), Vec::new());
-}
-
-#[test]
-fn review_webview_spec_url_carries_nonce_and_is_visible_when_loaded() {
-    let rv = ReviewView {
-        source: ReviewSource::Conversation("a".into()),
-        entries: vec![ReviewEntry::Human { text: "hi".into() }],
-        error: None,
-        agent: AgentKind::Claude,
-        nonce: 7,
-        summary_title: None,
-        summary_text: None,
-        summary_time: None,
-        loaded_nonce: Some(7),
-    };
-    let specs = review_webview_spec(Some(&rv), "en");
-    assert_eq!(specs.len(), 1);
-    assert_eq!(
-        specs[0].url,
-        "dozer://review-trace/host.html?_r=7&locale=en"
-    );
-    assert!(specs[0].visible);
-}
-
-#[test]
-fn review_webview_spec_hidden_until_loaded_nonce_matches() {
-    let rv = ReviewView {
-        source: ReviewSource::Conversation("c1".into()),
-        entries: vec![ReviewEntry::Human { text: "hi".into() }],
-        error: None,
-        agent: AgentKind::Claude,
-        nonce: 3,
-        summary_title: None,
-        summary_text: None,
-        summary_time: None,
-        loaded_nonce: None,
-    };
-    let specs = review_webview_spec(Some(&rv), "en");
-    assert_eq!(
-        specs.len(),
-        1,
-        "有数据时仍应创建 webview(否则永远等不到 loaded 事件)"
-    );
-    assert!(!specs[0].visible, "loaded_nonce 未追上 nonce 时不可见");
-}
-
-#[test]
-fn review_webview_spec_visible_when_loaded_nonce_matches() {
-    let rv = ReviewView {
-        source: ReviewSource::Conversation("c1".into()),
-        entries: vec![ReviewEntry::Human { text: "hi".into() }],
-        error: None,
-        agent: AgentKind::Claude,
-        nonce: 3,
-        summary_title: None,
-        summary_text: None,
-        summary_time: None,
-        loaded_nonce: Some(3),
-    };
-    let specs = review_webview_spec(Some(&rv), "en");
-    assert!(specs[0].visible);
-}
-
-/// 对应本计划 Review Focus"空清单分支与未 loaded 分支职责重叠":即便
-/// `loaded_nonce == nonce`(理论上不该跟"无数据"同时成立,但要防呆),
-/// `entries.is_empty()` 仍必须优先命中既有的"销毁 webview"分支。
-#[test]
-fn review_webview_spec_empty_entries_still_wins_over_loaded_nonce() {
-    let rv = ReviewView {
-        source: ReviewSource::Conversation("c1".into()),
-        entries: Vec::new(),
-        error: None,
-        agent: AgentKind::Claude,
-        nonce: 3,
-        summary_title: None,
-        summary_text: None,
-        summary_time: None,
-        loaded_nonce: Some(3),
-    };
-    assert_eq!(review_webview_spec(Some(&rv), "en"), Vec::new());
-}
-
-#[test]
-fn review_source_conversation_id_uses_conversation_source_directly() {
-    let source = ReviewSource::Conversation("abc".into());
-    assert_eq!(
-        review_source_conversation_id(&source, |_| None),
-        Some("abc".to_string())
-    );
-}
-
-#[test]
-fn review_source_conversation_id_derives_from_session_tab_transcript_stem() {
-    let source = ReviewSource::Session(2);
-    assert_eq!(
-        review_source_conversation_id(&source, |tab_id| {
-            assert_eq!(tab_id, 2);
-            Some("/h/.claude/projects/x/abc123.jsonl")
-        }),
-        Some("abc123".to_string())
-    );
-}
-
-#[test]
-fn review_source_conversation_id_none_when_session_tab_has_no_transcript() {
-    let source = ReviewSource::Session(0);
-    assert_eq!(review_source_conversation_id(&source, |_| None), None);
-}
 
 #[test]
 fn agent_card_refresh_plan_decides_by_agent_and_cwd() {
@@ -387,26 +245,6 @@ fn relative_time_text_boundaries() {
     assert_eq!(relative_time_text(0, 86_399_000, "zh-CN"), "23 小时前");
     assert_eq!(relative_time_text(0, 86_400_000, "zh-CN"), "1 天前");
     assert_eq!(relative_time_text(0, 86_400_000, "en"), "1 days ago");
-}
-
-#[test]
-fn review_refresh_only_for_matching_session() {
-    assert!(review_should_refresh_on_turn(&ReviewSource::Session(3), 3));
-    assert!(!review_should_refresh_on_turn(&ReviewSource::Session(3), 4));
-    assert!(!review_should_refresh_on_turn(
-        &ReviewSource::Conversation("x".into()),
-        3
-    ));
-}
-
-#[test]
-fn review_source_conversation_matches_conversation_id_not_tab() {
-    // Conversation 变体不该被 review_should_refresh_on_turn(只认
-    // Session(tab_id))误判为需要跟随终端回合刷新。
-    assert!(!review_should_refresh_on_turn(
-        &ReviewSource::Conversation("c1".into()),
-        3
-    ));
 }
 
 #[test]
