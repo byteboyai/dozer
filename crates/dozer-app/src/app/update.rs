@@ -191,7 +191,12 @@ impl App {
                         .map(|n| toast::pending_from_notice(conversations::LOG, n)),
                 );
                 pending.extend(ws.codehealth.take_outbox());
-                pending.extend(ws.group_chat.take_outbox());
+                pending.extend(
+                    ws.group_chat
+                        .take_outbox()
+                        .into_iter()
+                        .map(|n| toast::pending_from_notice(crate::extensions::group_chat::LOG, n)),
+                );
                 pending.extend(ws.ssh.take_outbox());
                 pending.extend(ws.database.take_outbox());
                 pending.extend(ws.agent_context.take_outbox());
@@ -624,7 +629,7 @@ impl App {
                 }
                 other => self.todo_message(other),
             },
-            Message::GroupChatContentWebviewEvent(event) => self.group_chat_content_event(event),
+            Message::GroupChatContentWebviewEvent(event) => self.on_group_chat_webview_event(event),
             Message::GroupChatShell(crate::extensions::group_chat::ShellMessage::Retry) => {
                 self.group_chat_webview.clear_failed();
             }
@@ -636,7 +641,7 @@ impl App {
                     let pio = io.panel_io(Message::GroupChat);
                     for effect in crate::extensions::group_chat::update(&mut ws.group_chat, msg) {
                         crate::extensions::group_chat::run_effect(
-                            &ws.group_chat.requests,
+                            &ws.group_chat.requests(),
                             effect,
                             project_id,
                             &pio,
@@ -3094,54 +3099,29 @@ impl App {
     /// 群聊 webview 事件入口。`Ready`/`Failed` 在这里直接处理;其余事件交给
     /// 纯函数 `group_chat::route_event` 校验并映射成命令,再派发:`SelectGroup`
     /// 同步改状态、`OpenTodo` 显示 Todo 面板,其余异步命令走 `spawn_command`。
-    pub(crate) fn group_chat_content_event(
+    pub(crate) fn on_group_chat_webview_event(
         &mut self,
         event: crate::extensions::group_chat::GroupChatWebviewEvent,
     ) {
-        use crate::extensions::group_chat::{self as gc, GroupChatWebviewEvent as Ev};
-        match &event {
-            Ev::Ready => {
-                self.group_chat_webview.set_ready(true);
-                return;
-            }
-            Ev::Failed { reason } => {
-                dozer_core::log_warn!(
-                    gc::LOG,
-                    panel = "group_chat",
-                    %reason,
-                    "群聊内容页渲染失败,回落原生占位"
-                );
-                self.group_chat_webview
-                    .set_failed(dozer_model::LocalizedText::literal(
-                        crate::i18n::HOST_OWNER,
-                        reason.clone(),
-                    ));
-                return;
-            }
-            // 输入框草稿逐键上报:纯视图状态,不进 Command、不 spawn,直接写
-            // host 侧权威副本(切面板销毁 webview 后据此恢复,见
-            // `take_group_chat_content_script` 的恢复脚本)。校验(群存在、
-            // 长度上限)在 `set_composer_draft` 里。需要 `&mut Workspace`,
-            // 走 `with_project`(同 `group_chat_command` 的门禁口径:只认
-            // 当前活跃项目)。
-            Ev::SetDraft { group_id, text } => {
-                if let Some(project_id) = self.active_project_id {
-                    self.with_project(project_id, |ws, _io| {
-                        ws.group_chat.set_composer_draft(*group_id, text);
-                    });
-                }
-                return;
-            }
-            _ => {}
-        }
         let Some(project_id) = self.active_project_id else {
             return;
         };
-        let cmd = self
-            .active_workspace()
-            .and_then(|ws| gc::route_event(&ws.group_chat, event));
-        if let Some(cmd) = cmd {
-            self.group_chat_command(project_id, cmd);
+        let io = self.panel_io(Message::GroupChat);
+        let mut push = std::mem::take(&mut self.group_chat_webview);
+        let Some(ws) = self.active_workspace_mut() else {
+            self.group_chat_webview = push;
+            return;
+        };
+        let action = crate::extensions::group_chat::host::handle_webview_event(
+            &mut ws.group_chat,
+            &mut push,
+            project_id,
+            event,
+            &io,
+        );
+        self.group_chat_webview = push;
+        if action == crate::extensions::group_chat::host::HostAction::ShowTodoPanel {
+            self.show_panel(PanelKind::Todo);
         }
     }
 
@@ -3163,7 +3143,7 @@ impl App {
             // 命令结果绑定发起时的工作区实例;已关闭的项目不再发起命令。
             other => self.with_project(project_id, |ws, io| {
                 gc::spawn_command(
-                    &ws.group_chat.requests,
+                    &ws.group_chat.requests(),
                     project_id,
                     other,
                     &io.panel_io(Message::GroupChat),

@@ -128,116 +128,15 @@ impl GroupChatCreateOverlay {
         );
     }
 
-    /// 弹窗内容:`ws.group_chat.new_group_dialog_open()` 为假(已被别处关掉)
-    /// 时返回 `None`,`redraw`/`handle_input` 顶部短路,直接不画。
-    fn card<'a>(
-        ws: &'a crate::workspace::Workspace,
-        project_id: i64,
-        locale: &str,
-    ) -> Option<Element<'a, GroupChatMessage, iced_widget::Theme, iced_renderer::Renderer>> {
-        if !ws.group_chat.new_group_dialog_open() {
-            return None;
-        }
-        let c = byteui::theme::color::current();
-        let gc = &ws.group_chat;
-
-        let input = byteui::form::text_area::view(
-            gc.new_group_topic(),
-            &group_chat::t("new_group.placeholder", "New group topic…", locale),
-            Some(iced_widget::core::widget::Id::new("group-chat-new-topic")),
-            false,
-            Some(TOPIC_AREA_HEIGHT),
-            move |action| GroupChatMessage::NewGroupTopicAction(project_id, action),
-        );
-
-        // 参与 agent 勾选行:遍历后端支持的成员种类。用 `Vec<Element<…>>` 收集,
-        // 渲染器由本函数返回类型(`iced_renderer::Renderer`)统一锚定,避免像单独的
-        // `Column`/`Button` 局部标注那样在测试构建下触发生命周期/渲染器推断冲突。
-        let mut agent_rows: Vec<
-            Element<'a, GroupChatMessage, iced_widget::Theme, iced_renderer::Renderer>,
-        > = Vec::with_capacity(group_chat::CREATABLE_AGENTS.len());
-        for agent in group_chat::CREATABLE_AGENTS {
-            let selected = gc.new_group_selected_agents().contains(agent);
-            let check = if selected {
-                text("✓").size(byteui::theme::font::label()).color(c.green)
-            } else {
-                text("").size(byteui::theme::font::label()).color(c.dim)
-            };
-            let icon: Element<GroupChatMessage, iced_widget::Theme, iced_renderer::Renderer> =
-                container(byteui::interaction::icons::view(
-                    agent_icon(*agent),
-                    byteui::theme::icon_size::row(),
-                    agent_dot_color(*agent),
-                ))
-                .into();
-            let pid = project_id;
-            let icon = icon.map(move |_| GroupChatMessage::Noop(pid));
-            let row = row![
-                icon,
-                text(agent.display_label())
-                    .size(byteui::theme::font::body())
-                    .color(if selected { c.cream } else { c.dim }),
-                check,
-            ]
-            .align_y(iced_widget::core::alignment::Vertical::Center)
-            .spacing(8);
-            let btn = button(row)
-                .on_press(GroupChatMessage::NewGroupAgentToggled(project_id, *agent))
-                .width(Length::Fill)
-                .padding(8)
-                .style(byteui::interaction::cards::button_card(selected, c.card));
-            agent_rows.push(btn.into());
-        }
-
-        let cancel = button(
-            text(group_chat::t("cancel.button", "Cancel", locale))
-                .size(byteui::theme::font::label())
-                .color(c.dim),
-        )
-        .on_press(GroupChatMessage::NewGroupDialogCancel(project_id))
-        .padding([6, 12])
-        .style(byteui::feedback::dialog::action_button_style(c.dim));
-
-        let create = button(
-            text(group_chat::t("new_group.confirm", "Create", locale))
-                .size(byteui::theme::font::label())
-                .color(c.gold),
-        )
-        .on_press(GroupChatMessage::NewGroupSubmit(project_id))
-        .padding([6, 12])
-        .style(byteui::feedback::dialog::action_button_style(c.gold));
-
-        let card = column![
-            text(group_chat::t("new_group.title", "New group chat", locale))
-                .size(byteui::theme::font::subtitle())
-                .color(c.cream),
-            input,
-            text(group_chat::t(
-                "new_group.agents",
-                "Participating agents",
-                locale
-            ))
-            .size(byteui::theme::font::caption_sm())
-            .color(c.dim),
-            iced_widget::Column::with_children(agent_rows).spacing(6),
-            byteui::feedback::dialog::actions(row![cancel, create].spacing(8)),
-        ]
-        .spacing(12);
-
-        Some(
-            container(card)
-                .padding(16)
-                .style(byteui::feedback::dialog::card_style)
-                .into(),
-        )
-    }
-
     pub(crate) fn redraw(&mut self, app: &mut App) {
         let Some(ws) = app.active_workspace() else {
             return;
         };
-        let locale = app.locale.active_locale();
-        let Some(card) = Self::card(ws, self.project_id, locale) else {
+        let Some(card) = dozer_panel_group_chat::dialog::new_group_dialog_card(
+            &ws.group_chat,
+            app,
+            self.project_id,
+        ) else {
             return;
         };
         self.gpu.redraw(
@@ -268,8 +167,11 @@ impl GroupChatCreateOverlay {
         let Some(ws) = app.active_workspace() else {
             return Vec::new();
         };
-        let locale = app.locale.active_locale();
-        let Some(card) = Self::card(ws, self.project_id, locale) else {
+        let Some(card) = dozer_panel_group_chat::dialog::new_group_dialog_card(
+            &ws.group_chat,
+            app,
+            self.project_id,
+        ) else {
             return Vec::new();
         };
         self.gpu.dispatch(

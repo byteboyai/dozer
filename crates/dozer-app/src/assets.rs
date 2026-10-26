@@ -78,12 +78,6 @@ fn todo_content_root_for(flyfish_root: &Path) -> PathBuf {
     }
 }
 
-/// group-chat-content host(群聊面板)静态资源根 = flyfish 根的兄弟目录
-/// `group-chat-content`。同 `todo_content_root_for`。
-fn group_chat_content_root_for(flyfish_root: &Path) -> PathBuf {
-    flyfish_root.with_file_name("group-chat-content")
-}
-
 /// 应用外壳自己的命名空间(与预览库的七个互斥)。
 fn is_app_namespace(uri: &str) -> bool {
     let Some(rest) = uri.strip_prefix("dozer://") else {
@@ -149,17 +143,24 @@ pub fn handle_protocol(
         return serve_vendored(&todo_content_root_for(assets_root), path);
     }
 
-    // group-chat-content host(群聊面板):同 todo-content,没有 data.json 特判,
-    // 数据全靠 evaluate_script 推送。
+    // group-chat-content host(群聊面板):资源由共享库嵌入;同 todo-content,
+    // 没有 data.json 特判,数据全靠 evaluate_script 推送。
     if let Some(path) = rest.strip_prefix("group-chat-content/") {
-        return serve_vendored(&group_chat_content_root_for(assets_root), path);
+        return match dozer_panel_group_chat::assets::serve_group_chat_content(path) {
+            Some((mime, body)) => ProtocolReply {
+                status: 200,
+                mime,
+                body: body.to_vec(),
+            },
+            None => not_found(),
+        };
     }
 
     not_found()
 }
 
 /// vendored 静态资源服务(应用外壳自己的命名空间)。
-fn serve_vendored(root: &Path, encoded_path: &str) -> ProtocolReply {
+pub(crate) fn serve_vendored(root: &Path, encoded_path: &str) -> ProtocolReply {
     let mut full = root.to_path_buf();
     for seg in encoded_path.split('/') {
         let Some(seg) = dozer_panel_preview::assets::percent_decode(seg) else {
@@ -424,138 +425,6 @@ mod tests {
         assert!(!html.contains("connect-src"));
         assert!(!html.contains("http://") && !html.contains("https://"));
         assert!(html.contains("codehealth-content.js") && html.contains("codehealth-content.css"));
-    }
-
-    /// 提交的 group-chat-content 产物必须齐全(防止忘记 `npm run build` 就提交)。
-    #[test]
-    fn group_chat_content_bundle_assets_are_present() {
-        let root = Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/group-chat-content"
-        ));
-        for f in [
-            "host.html",
-            "group-chat-content.js",
-            "group-chat-content.css",
-        ] {
-            let p = root.join(f);
-            assert!(
-                p.is_file(),
-                "缺少 group-chat-content 产物 {f}: {}",
-                p.display()
-            );
-            assert!(
-                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
-                "group-chat-content 产物为空: {f}"
-            );
-        }
-    }
-
-    /// 严格 CSP、无 connect-src、无网络引用。
-    #[test]
-    fn group_chat_content_host_has_strict_csp_and_no_external_refs() {
-        let root = Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/group-chat-content"
-        ));
-        let html = std::fs::read_to_string(root.join("host.html")).expect("读 host.html");
-        assert!(html.contains("default-src 'none'"));
-        assert!(html.contains("script-src 'self'"));
-        assert!(!html.contains("connect-src"));
-        assert!(!html.contains("http://") && !html.contains("https://"));
-        assert!(html.contains("group-chat-content.js") && html.contains("group-chat-content.css"));
-    }
-
-    #[test]
-    fn todo_content_serves_vendored_files() {
-        let root = scratch();
-        std::fs::create_dir_all(root.with_file_name("todo-content")).unwrap();
-        std::fs::write(
-            root.with_file_name("todo-content").join("host.html"),
-            b"<html>t</html>",
-        )
-        .unwrap();
-        let r = handle_protocol(
-            &root,
-            &dozer_panel_preview::assets::AllowedFiles::new(),
-            None,
-            "dozer://todo-content/host.html",
-        );
-        assert_eq!((r.status, r.mime), (200, "text/html"));
-        assert_eq!(r.body, b"<html>t</html>");
-    }
-
-    #[test]
-    fn todo_content_unknown_subpath_404() {
-        let root = scratch();
-        std::fs::create_dir_all(root.with_file_name("todo-content")).unwrap();
-        let r = handle_protocol(
-            &root,
-            &dozer_panel_preview::assets::AllowedFiles::new(),
-            None,
-            "dozer://todo-content/nope",
-        );
-        assert_eq!(r.status, 404);
-    }
-
-    /// 路径穿越不得逃出 todo-content 根。
-    #[test]
-    fn todo_content_rejects_path_traversal() {
-        let root = scratch();
-        std::fs::create_dir_all(root.with_file_name("todo-content")).unwrap();
-        let r = handle_protocol(
-            &root,
-            &dozer_panel_preview::assets::AllowedFiles::new(),
-            None,
-            "dozer://todo-content/../usage-content/host.html",
-        );
-        assert_eq!(r.status, 404);
-    }
-
-    #[test]
-    fn group_chat_content_serves_vendored_files() {
-        let root = scratch();
-        std::fs::create_dir_all(root.with_file_name("group-chat-content")).unwrap();
-        std::fs::write(
-            root.with_file_name("group-chat-content").join("host.html"),
-            b"<html>g</html>",
-        )
-        .unwrap();
-        let r = handle_protocol(
-            &root,
-            &dozer_panel_preview::assets::AllowedFiles::new(),
-            None,
-            "dozer://group-chat-content/host.html",
-        );
-        assert_eq!((r.status, r.mime), (200, "text/html"));
-        assert_eq!(r.body, b"<html>g</html>");
-    }
-
-    #[test]
-    fn group_chat_content_unknown_subpath_404() {
-        let root = scratch();
-        std::fs::create_dir_all(root.with_file_name("group-chat-content")).unwrap();
-        let r = handle_protocol(
-            &root,
-            &dozer_panel_preview::assets::AllowedFiles::new(),
-            None,
-            "dozer://group-chat-content/nope",
-        );
-        assert_eq!(r.status, 404);
-    }
-
-    /// 路径穿越不得逃出 group-chat-content 根。
-    #[test]
-    fn group_chat_content_rejects_path_traversal() {
-        let root = scratch();
-        std::fs::create_dir_all(root.with_file_name("group-chat-content")).unwrap();
-        let r = handle_protocol(
-            &root,
-            &dozer_panel_preview::assets::AllowedFiles::new(),
-            None,
-            "dozer://group-chat-content/../usage-content/host.html",
-        );
-        assert_eq!(r.status, 404);
     }
 
     /// 提交的 todo-content 产物必须齐全(防止忘记 `npm run build` 就提交)。

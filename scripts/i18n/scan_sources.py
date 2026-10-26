@@ -51,6 +51,7 @@ SRC_ROOTS = [
     "crates/dozer-panel-conversations/web",
     "crates/dozer-app/src",
     "crates/dozer-app/web",               # TS/TSX/JS 源 + html 模板
+    "crates/dozer-panel-group-chat/web",  # 群聊面板 TS/TSX/JS 源 + html 模板
     "crates/dozer-app/src/html_host.html",
     "crates/dozer-app/src/image_annotate_host.html",
     "crates/dozer-panel-usage/src",
@@ -111,7 +112,7 @@ OWNER_RULES = [
     ("crates/dozer-app/web/flyfish/", "dozer.preview"),
     ("crates/dozer-app/web/plantuml-viewer/", "dozer.preview"),
     ("crates/dozer-app/web/codehealth-content/", "dozer.codehealth"),
-    ("crates/dozer-app/web/group-chat-content/", "dozer.group_chat"),
+    ("crates/dozer-panel-group-chat/web/group-chat-content/", "dozer.group_chat"),
     ("crates/dozer-panel-conversations/web/review-trace/", "dozer.agent"),
     ("crates/dozer-app/src/preview/", "dozer.preview"),
     ("crates/dozerd/", "dozer.host"),

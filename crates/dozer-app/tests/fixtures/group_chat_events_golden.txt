@@ -1,0 +1,24 @@
+{"body":"{\"kind\":\"ready\"}","parse":{"Ok":"ok"},"route":null}
+{"body":"{\"kind\":\"failed\",\"reason\":\"boom\"}","parse":{"Ok":"ok"},"route":null}
+{"body":"{\"kind\":\"set_draft\",\"group_id\":1,\"text\":\"draft\"}","parse":{"Ok":"ok"},"route":null}
+{"body":"{\"kind\":\"create_group\",\"topic\":\"新群\"}","parse":{"Ok":"ok"},"route":"CreateGroup { topic: \"新群\" }"}
+{"body":"{\"kind\":\"create_group\",\"topic\":\"   \"}","parse":{"Ok":"ok"},"route":null}
+{"body":"{\"kind\":\"select_group\",\"group_id\":1}","parse":{"Ok":"ok"},"route":"SelectGroup { group_id: 1 }"}
+{"body":"{\"kind\":\"select_group\",\"group_id\":999}","parse":{"Ok":"ok"},"route":null}
+{"body":"{\"kind\":\"delete_group\",\"group_id\":2}","parse":{"Ok":"ok"},"route":"DeleteGroup { group_id: 2 }"}
+{"body":"{\"kind\":\"add_member\",\"group_id\":1,\"agent\":\"claude\",\"handle\":\"新成员\",\"role_prompt\":\"\"}","parse":{"Ok":"ok"},"route":"AddMember { group_id: 1, agent: Claude, handle: \"新成员\", role_prompt: \"\" }"}
+{"body":"{\"kind\":\"add_member\",\"group_id\":1,\"agent\":\"unknown\",\"handle\":\"x\",\"role_prompt\":\"\"}","parse":{"Ok":"ok"},"route":null}
+{"body":"{\"kind\":\"update_member\",\"member_id\":10,\"handle\":\"改名\",\"role_prompt\":\"角色\"}","parse":{"Ok":"ok"},"route":"UpdateMember { member_id: 10, handle: \"改名\", role_prompt: \"角色\" }"}
+{"body":"{\"kind\":\"remove_member\",\"member_id\":999}","parse":{"Ok":"ok"},"route":null}
+{"body":"{\"kind\":\"post\",\"group_id\":1,\"text\":\"hello\"}","parse":{"Ok":"ok"},"route":"Post { group_id: 1, text: \"hello\" }"}
+{"body":"{\"kind\":\"post\",\"group_id\":2,\"text\":\"wrong group\"}","parse":{"Ok":"ok"},"route":null}
+{"body":"{\"kind\":\"cancel\",\"group_id\":1,\"scope\":\"all\"}","parse":{"Err":"unknown variant `all`, expected `turn` or `round`"},"route":null}
+{"body":"{\"kind\":\"retry\",\"message_id\":7}","parse":{"Ok":"ok"},"route":"Retry { message_id: 7 }"}
+{"body":"{\"kind\":\"retry\",\"message_id\":1}","parse":{"Ok":"ok"},"route":null}
+{"body":"{\"kind\":\"push_todo\",\"message_id\":1,\"text\":\"买菜\"}","parse":{"Ok":"ok"},"route":"PushTodo { group_id: 1, message_id: 1, text: \"买菜\" }"}
+{"body":"{\"kind\":\"open_todo\",\"todo_id\":9}","parse":{"Ok":"ok"},"route":"OpenTodo { todo_id: 9 }"}
+{"body":"{\"kind\":\"open_todo\",\"todo_id\":0}","parse":{"Ok":"ok"},"route":null}
+{"body":"{\"kind\":\"nope\"}","parse":{"Err":"unknown variant `nope`, expected one of `ready`, `failed`, `set_draft`, `create_group`, `select_group`, `delete_group`, `add_member`, `update_member`, `remove_member`, `post`, `cancel`, `retry`, `push_todo`, `open_todo` at line 1 column 14"},"route":null}
+{"body":"{\"kind\":\"post\",\"group_id\":1,\"text\":","parse":{"Err":"EOF while parsing a value at line 1 column 35"},"route":null}
+{"body":"{\"kind\":\"add_height\",\"px\":1}","parse":{"Err":"unknown variant `add_height`, expected one of `ready`, `failed`, `set_draft`, `create_group`, `select_group`, `delete_group`, `add_member`, `update_member`, `remove_member`, `post`, `cancel`, `retry`, `push_todo`, `open_todo` at line 1 column 20"},"route":null}
+{"non_utf8":true}

@@ -82,7 +82,7 @@ FILE_TASK = [
     ("crates/dozer-app/src/extensions/conversations.rs", "10"),
     ("crates/dozer-app/src/extensions/agent_context.rs", "10"),
     ("crates/dozer-app/src/extensions/group_chat/", "10"),
-    ("crates/dozer-app/web/group-chat-content/", "10"),
+    ("crates/dozer-panel-group-chat/web/group-chat-content/", "10"),
     ("crates/dozer-app/src/extensions/git_log.rs", "10"),
     ("crates/dozer-app/src/extensions/app_logs.rs", "10"),
     ("crates/dozer-app/src/extensions/diff_content.rs", "10"),
@@ -117,6 +117,7 @@ EXCLUDED_FILES = [
     # WebView 侧共享 i18n 运行时的 `I18nError` 异常文案:开发者诊断(模板/资源
     # 非法时抛出),不面向最终用户;页面文案由各 surface 自己的资源与任务负责。
     "crates/dozer-app/web/shared/i18n/i18n.ts",
+    "crates/dozer-panel-group-chat/web/shared/i18n/i18n.ts",
     # Web 面板的测试支撑模块:fixtures.ts 是 wire payload 样例(含用户任务文本/
     # 分类名等用户内容),render-smoke.tsx 是渲染 smoke 用例的断言描述;都不是
     # 发布 UI,文案按 spec 保持不变(smoke 描述是开发者断言,不必本地化)。

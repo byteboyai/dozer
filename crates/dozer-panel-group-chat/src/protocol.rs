@@ -4,7 +4,7 @@
 //! 槽位、状态映射、提示文案都在这里算好。形态仿 `extensions/todo/protocol.rs`
 //! (声明式比较 + 固定单槽)。
 
-use super::WorkspaceState;
+use crate::{consts::CREATABLE_AGENTS, i18n, state::WorkspaceState};
 use dozer_model::{
     AgentKind, GroupAuthor, GroupCancelScope, GroupInfo, GroupMessageStatus, LocaleStamp,
     LocalizedText, Stamped,
@@ -162,13 +162,13 @@ pub fn current_view_payload(
             let author = match &m.author {
                 GroupAuthor::Human => AuthorVm {
                     kind: AuthorKind::Human,
-                    label: super::t("author.you", "You", locale),
+                    label: i18n::t("author.you", "You", locale),
                     agent_label: None,
                     color_slot: None,
                 },
                 GroupAuthor::System => AuthorVm {
                     kind: AuthorKind::System,
-                    label: super::t("author.system", "System", locale),
+                    label: i18n::t("author.system", "System", locale),
                     agent_label: None,
                     color_slot: None,
                 },
@@ -184,7 +184,7 @@ pub fn current_view_payload(
                         },
                         None => AuthorVm {
                             kind: AuthorKind::Member,
-                            label: super::t("author.removed", "Removed member", locale),
+                            label: i18n::t("author.removed", "Removed member", locale),
                             agent_label: None,
                             color_slot: None,
                         },
@@ -213,9 +213,7 @@ pub fn current_view_payload(
         groups,
         selected_group_id: state.selected(),
         messages,
-        hint: state
-            .hint()
-            .map(|t| crate::i18n::render_localized(t, locale)),
+        hint: state.hint().map(|t| i18n::render(t, locale)),
         running: state.has_active_turn(),
     }
 }
@@ -377,7 +375,7 @@ fn member_exists(state: &WorkspaceState, id: i64) -> bool {
 /// 校验 webview 事件并映射成命令。`id` 已不存在、入参非法一律返回 `None`
 /// (空操作),绝不能落到别的对象上。`Ready`/`Failed` 由 `App` 自己处理,这里
 /// 返回 `None`。
-pub(crate) fn route_event(state: &WorkspaceState, event: GroupChatWebviewEvent) -> Option<Command> {
+pub fn route_event(state: &WorkspaceState, event: GroupChatWebviewEvent) -> Option<Command> {
     use GroupChatWebviewEvent as Ev;
     match event {
         // `SetDraft` 由 `App` 在进本函数前直接消费(纯视图状态,不产命令)。
@@ -397,7 +395,7 @@ pub(crate) fn route_event(state: &WorkspaceState, event: GroupChatWebviewEvent) 
             handle,
             role_prompt,
         } => {
-            if !group_exists(state, group_id) || !super::CREATABLE_AGENTS.contains(&agent) {
+            if !group_exists(state, group_id) || !CREATABLE_AGENTS.contains(&agent) {
                 return None;
             }
             Some(Command::AddMember {
@@ -528,7 +526,7 @@ impl WebviewPushState {
         let since = *self.waiting_since.get_or_insert(now);
         if self.failed.is_none() && now.duration_since(since) > READY_TIMEOUT {
             self.failed = Some(LocalizedText::keyed(
-                crate::i18n::HOST_OWNER,
+                i18n::HOST_OWNER,
                 "webview.load_timeout",
                 "Panel page load timed out",
             ));
@@ -572,7 +570,7 @@ impl WebviewPushState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extensions::group_chat::{Message, update};
+    use crate::{Message, update};
     use dozer_model::{
         AgentKind, GroupAuthor, GroupCancelScope, GroupInfo, GroupMemberInfo, GroupMessageInfo,
         GroupMessageStatus,
@@ -1188,14 +1186,255 @@ mod tests {
         let mut ps = WebviewPushState::default();
         ps.set_ready(true);
         ps.set_failed(dozer_model::LocalizedText::literal(
-            crate::i18n::HOST_OWNER,
+            i18n::HOST_OWNER,
             "渲染异常",
         ));
         let a = stamped(current_view_payload(&WorkspaceState::default(), 7, "en"));
         assert!(ps.pending_push(&a).is_none());
         assert_eq!(
-            ps.failed().map(|t| crate::i18n::render_localized(t, "en")),
+            ps.failed().map(|t| i18n::render(t, "en")),
             Some("渲染异常".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod s8a_golden_tests {
+    use super::*;
+    use crate::{Message, update};
+    use dozer_model::{
+        AgentKind, GroupAuthor, GroupInfo, GroupMemberInfo, GroupMessageInfo, GroupMessageStatus,
+    };
+    use sha2::{Digest, Sha256};
+
+    fn fixture(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../dozer-app/tests/fixtures")
+            .join(name)
+    }
+
+    fn write_or_assert(name: &str, actual: &str) {
+        let path = fixture(name);
+        if std::env::var_os("UPDATE_GOLDEN").is_some() {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, actual).unwrap();
+            return;
+        }
+        let expected = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        assert_eq!(actual, expected, "{} changed", path.display());
+    }
+
+    fn member(id: i64, agent: AgentKind, handle: &str) -> GroupMemberInfo {
+        GroupMemberInfo {
+            id,
+            group_id: 1,
+            agent,
+            handle: handle.into(),
+            role_prompt: "角色".into(),
+        }
+    }
+
+    fn msg(
+        id: i64,
+        seq: i64,
+        rev: i64,
+        author: GroupAuthor,
+        status: Option<GroupMessageStatus>,
+        text: &str,
+    ) -> GroupMessageInfo {
+        GroupMessageInfo {
+            id,
+            group_id: 1,
+            seq,
+            rev,
+            author,
+            text: text.into(),
+            mentions: vec![],
+            status,
+            duration_ms: Some(1500),
+            created_ms: 0,
+            todo_id: None,
+        }
+    }
+
+    fn rich_state() -> WorkspaceState {
+        let mut state = WorkspaceState::default();
+        let groups = vec![
+            GroupInfo {
+                id: 1,
+                project_id: 7,
+                topic: "评审登录方案".into(),
+                created_ms: 0,
+                members: vec![
+                    member(10, AgentKind::Claude, "架构师"),
+                    member(11, AgentKind::Codex, "审阅者"),
+                    member(12, AgentKind::Codebuddy, "第三人"),
+                    member(13, AgentKind::Opencode, "第四人"),
+                    member(14, AgentKind::Qodercn, "回绕到零"),
+                ],
+            },
+            GroupInfo {
+                id: 2,
+                project_id: 7,
+                topic: "second".into(),
+                created_ms: 1,
+                members: vec![],
+            },
+        ];
+        update(&mut state, Message::GroupsLoaded(7, Ok(groups)));
+        let mut messages = vec![
+            msg(1, 1, 1, GroupAuthor::Human, None, "第一行\n第二行"),
+            msg(
+                2,
+                2,
+                2,
+                GroupAuthor::Member { member_id: 10 },
+                Some(GroupMessageStatus::Done),
+                "RTL: \u{202e}abc\u{202c}; zero:\u{200b}",
+            ),
+            msg(
+                3,
+                3,
+                3,
+                GroupAuthor::Member { member_id: 99 },
+                Some(GroupMessageStatus::Done),
+                "removed",
+            ),
+            msg(4, 4, 4, GroupAuthor::System, None, "system"),
+            msg(
+                5,
+                5,
+                5,
+                GroupAuthor::Member { member_id: 11 },
+                Some(GroupMessageStatus::Queued),
+                "queued",
+            ),
+            msg(
+                6,
+                6,
+                6,
+                GroupAuthor::Member { member_id: 12 },
+                Some(GroupMessageStatus::Running),
+                "running",
+            ),
+            msg(
+                7,
+                7,
+                7,
+                GroupAuthor::Member { member_id: 13 },
+                Some(GroupMessageStatus::Failed {
+                    reason: "超时".into(),
+                }),
+                "failed",
+            ),
+            msg(
+                8,
+                8,
+                8,
+                GroupAuthor::Member { member_id: 14 },
+                Some(GroupMessageStatus::Cancelled),
+                "cancelled",
+            ),
+            msg(9, 9, 9, GroupAuthor::Human, None, &"长".repeat(20_000)),
+        ];
+        update(
+            &mut state,
+            Message::Polled {
+                project_id: 7,
+                group_id: 1,
+                result: Ok((std::mem::take(&mut messages), 9)),
+            },
+        );
+        state
+    }
+
+    #[test]
+    fn group_chat_payload_matches_the_golden() {
+        let payload = current_view_payload(&rich_state(), 7, "en");
+        let text = encode_group_chat_push(
+            3,
+            Some(dozer_model::LocaleStamp {
+                ui_locale: dozer_model::Locale::default_locale(),
+                locale_revision: 0,
+            }),
+            payload,
+        );
+        write_or_assert("group_chat_payload_golden.json", &text);
+    }
+
+    #[test]
+    fn group_chat_events_match_the_golden() {
+        let state = rich_state();
+        let bodies = [
+            r#"{"kind":"ready"}"#,
+            r#"{"kind":"failed","reason":"boom"}"#,
+            r#"{"kind":"set_draft","group_id":1,"text":"draft"}"#,
+            r#"{"kind":"create_group","topic":"新群"}"#,
+            r#"{"kind":"create_group","topic":"   "}"#,
+            r#"{"kind":"select_group","group_id":1}"#,
+            r#"{"kind":"select_group","group_id":999}"#,
+            r#"{"kind":"delete_group","group_id":2}"#,
+            r#"{"kind":"add_member","group_id":1,"agent":"claude","handle":"新成员","role_prompt":""}"#,
+            r#"{"kind":"add_member","group_id":1,"agent":"unknown","handle":"x","role_prompt":""}"#,
+            r#"{"kind":"update_member","member_id":10,"handle":"改名","role_prompt":"角色"}"#,
+            r#"{"kind":"remove_member","member_id":999}"#,
+            r#"{"kind":"post","group_id":1,"text":"hello"}"#,
+            r#"{"kind":"post","group_id":2,"text":"wrong group"}"#,
+            r#"{"kind":"cancel","group_id":1,"scope":"all"}"#,
+            r#"{"kind":"retry","message_id":7}"#,
+            r#"{"kind":"retry","message_id":1}"#,
+            r#"{"kind":"push_todo","message_id":1,"text":"买菜"}"#,
+            r#"{"kind":"open_todo","todo_id":9}"#,
+            r#"{"kind":"open_todo","todo_id":0}"#,
+            r#"{"kind":"nope"}"#,
+            r#"{"kind":"post","group_id":1,"text":"#,
+            r#"{"kind":"add_height","px":1}"#,
+        ];
+        let mut out = String::new();
+        for body in bodies {
+            let parsed = parse_group_chat_event(body).map_err(|e| e.to_string());
+            let routed = parsed
+                .as_ref()
+                .ok()
+                .and_then(|ev| route_event(&state, ev.clone()));
+            let row = serde_json::json!({
+                "body": body,
+                "parse": parsed.as_ref().map(|_| "ok").map_err(|e| e.clone()),
+                "route": routed.map(|c| format!("{c:?}")),
+            });
+            out.push_str(&serde_json::to_string(&row).unwrap());
+            out.push('\n');
+        }
+        // 非 UTF-8 输入在 &str 边界就已被拒绝;记录这一事实。
+        let bad = String::from_utf8(vec![0xff, 0xfe]).is_err();
+        out.push_str(&serde_json::json!({"non_utf8": bad}).to_string());
+        out.push('\n');
+        write_or_assert("group_chat_events_golden.txt", &out);
+    }
+
+    #[test]
+    fn group_chat_serve_matches_the_golden() {
+        let mut out = String::new();
+        for path in [
+            "host.html",
+            "group-chat-content.js",
+            "group-chat-content.css",
+        ] {
+            let (mime, body) = crate::assets::serve_group_chat_content(path)
+                .unwrap_or_else(|| panic!("missing {path}"));
+            let hash = Sha256::digest(body);
+            out.push_str(&format!("{path}\t200\t{}\t{:x}\n", body.len(), hash));
+            let _ = mime;
+        }
+        for path in ["../usage-content/host.html", "nope", ""] {
+            let status = if crate::assets::serve_group_chat_content(path).is_some() {
+                200
+            } else {
+                404
+            };
+            out.push_str(&format!("{path}\t{status}\n"));
+        }
+        write_or_assert("group_chat_serve_golden.txt", &out);
     }
 }
