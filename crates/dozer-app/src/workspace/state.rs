@@ -663,16 +663,6 @@ impl Workspace {
         self.project.as_ref().map(|p| p.id)
     }
 
-    /// 审阅面板当前正在查看的那一条会话的 conversation_id（单一值——一次
-    /// 只有一条"当前"，不是"全部打开的 Agent tab"；2026-09-25 前的实现是
-    /// 后者，导致同时开几个 tab 就有几行同时被标"● 当前"，见对话面板列表
-    /// "● 当前"用 (`extensions::conversations::view`)。
-    pub fn current_review_conversation_id(&self) -> Option<String> {
-        self.conversations
-            .current_conversation_id()
-            .map(str::to_owned)
-    }
-
     /// 项目切换清理：关掉所有终端 tab（=结束会话，同 CloseTab 语义）与
     /// 所有预览 tab，给新项目一个干净起点。webview 池由
     /// main.rs 的 sync_previews 依据空的期望清单自动销毁。

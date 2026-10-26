@@ -3812,7 +3812,7 @@ mod conversation_detail_service_tests {
     ) {
         let dir = tempfile::Builder::new()
             .prefix("s7a")
-            .tempdir_in("/private/tmp")
+            .tempdir_in("/tmp")
             .unwrap();
         let socket = dir.path().join("s.sock");
         let listener = tokio::net::UnixListener::bind(&socket).unwrap();

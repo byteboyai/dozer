@@ -33,13 +33,15 @@ fn ten_thousand_trajectory_records_fold_without_losing_tools_or_tokens() {
     }
     turns.push(turn("ai", "完成".into()));
     let entries = review_entries_from_turns(&turns);
-    let [ReviewEntry::AiTurn {
-        text,
-        tool_calls,
-        tokens_in,
-        tokens_out,
-        ..
-    }] = entries.as_slice()
+    let [
+        ReviewEntry::AiTurn {
+            text,
+            tool_calls,
+            tokens_in,
+            tokens_out,
+            ..
+        },
+    ] = entries.as_slice()
     else {
         panic!("纯轨迹与最终正文应折叠成同一个回合");
     };

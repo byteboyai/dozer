@@ -143,26 +143,6 @@ pub fn host_text_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &s
     host_resolver().resolve(&t, locale).text
 }
 
-/// 构造一条 Host `LocalizedText`(owner = `dozer.host`)但不解析:用于后台任务/
-/// 生产端(拿不到 locale)把文案存进状态,渲染端再用 [`host_render`] 按当前
-/// locale 解析,因此切换语言只需重绘(见 spec §4.3/Task 07)。
-pub fn host_keyed(key: &str, fallback: &str) -> dozer_model::LocalizedText {
-    dozer_model::LocalizedText::keyed(HOST_OWNER, key, fallback)
-}
-
-/// 同 [`host_keyed`],带具名参数。
-pub fn host_keyed_args(
-    key: &str,
-    fallback: &str,
-    args: &[(&str, &str)],
-) -> dozer_model::LocalizedText {
-    let mut t = dozer_model::LocalizedText::keyed(HOST_OWNER, key, fallback);
-    for (name, value) in args {
-        t = t.with_arg(*name, *value);
-    }
-    t
-}
-
 /// 按当前 locale 渲染一条 Host `LocalizedText`(Toast/错误呈现用)。
 ///
 /// Toast 与错误提示把文案存成 `LocalizedText`(owner = `dozer.host`),渲染时

@@ -8,12 +8,15 @@ use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 
+use crate::Message;
 use crate::adapter::PanelDisplay;
 use crate::git_status;
 use crate::i18n::{t, t_args};
-use crate::state::{FilesToolbarTarget, TreeEdit, TreeEditMode, WorkspaceState, move_dir_field_id, move_name_field_id, search_field_id, tree_edit_field_id};
+use crate::state::{
+    FilesToolbarTarget, TreeEdit, TreeEditMode, WorkspaceState, move_dir_field_id,
+    move_name_field_id, search_field_id, tree_edit_field_id,
+};
 use crate::tree::tree_state_color;
-use crate::Message;
 
 pub fn view<'a>(
     ws_state: &'a WorkspaceState,
@@ -510,7 +513,10 @@ pub fn view<'a>(
 
     let body = container(
         column![
-            host.panel_head(icons::IconKind::FolderTree, t("head.title", "Files", locale)),
+            host.panel_head(
+                icons::IconKind::FolderTree,
+                t("head.title", "Files", locale)
+            ),
             header,
             Scrollable::new(tree_col)
                 .width(Length::Fill)

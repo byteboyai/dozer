@@ -1,9 +1,9 @@
 //! Files 面板状态类型与状态机:TreeEditMode/TreeEdit/ContextMenu/PendingMove/
 //! WorkspaceState/GitInfo/AppState/Message/焦点捕获。
 
+use crate::fs::{FileTree, PathKind, TreeRow, is_single_path_component};
 use crate::git_status::{self, FileGitStatus};
 use crate::tree::{TreeDrag, TreeDragPhase};
-use crate::fs::{FileTree, PathKind, TreeRow, is_single_path_component};
 use iced_widget::core::Rectangle;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
@@ -511,7 +511,6 @@ pub fn search_field_id() -> Id {
     Id::new("files-search-box")
 }
 
-
 pub static SEARCH_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
 
@@ -567,7 +566,6 @@ pub fn move_name_field_id() -> Id {
 pub fn move_dir_field_id() -> Id {
     Id::new("files-move-dir-box")
 }
-
 
 pub static TREE_EDIT_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
@@ -868,7 +866,8 @@ impl WorkspaceState {
             return;
         }
         if !is_single_path_component(name) {
-            self.outbox.push(                dozer_panel_host::NoticeLevel::Error,
+            self.outbox.push(
+                dozer_panel_host::NoticeLevel::Error,
                 i18n::keyed(
                     "edit.error.invalid_name",
                     "Name cannot contain a path separator",
@@ -889,7 +888,7 @@ impl WorkspaceState {
                 }
                 if new_path.exists() {
                     self.outbox.push(
-                    dozer_panel_host::NoticeLevel::Error,
+                        dozer_panel_host::NoticeLevel::Error,
                         i18n::keyed_args(
                             "edit.error.exists",
                             "{name} already exists",
@@ -921,7 +920,7 @@ impl WorkspaceState {
             TreeEditMode::NewFile => {
                 if new_path.exists() {
                     self.outbox.push(
-                    dozer_panel_host::NoticeLevel::Error,
+                        dozer_panel_host::NoticeLevel::Error,
                         i18n::keyed_args(
                             "edit.error.exists",
                             "{name} already exists",
@@ -955,7 +954,7 @@ impl WorkspaceState {
             TreeEditMode::NewFolder => {
                 if new_path.exists() {
                     self.outbox.push(
-                    dozer_panel_host::NoticeLevel::Error,
+                        dozer_panel_host::NoticeLevel::Error,
                         i18n::keyed_args(
                             "edit.error.exists",
                             "{name} already exists",

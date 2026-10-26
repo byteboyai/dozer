@@ -8,12 +8,12 @@ use std::path::{Path, PathBuf};
 
 use crate::Message;
 use crate::adapter::{FilesCapabilities, FilesRequest};
-use crate::state::{AppState, GitInfo, PendingMove, TreeEdit, TreeEditMode, WorkspaceState};
-use crate::menu::{context_menu_items, tab_context_menu_items};
-use crate::tree::{TreeDragPhase, is_valid_move_target};
-use crate::menu::FileContextMenuParams;
-use crate::{fs, i18n};
 use crate::external_apps;
+use crate::menu::FileContextMenuParams;
+use crate::menu::{context_menu_items, tab_context_menu_items};
+use crate::state::{AppState, GitInfo, PendingMove, TreeEdit, TreeEditMode, WorkspaceState};
+use crate::tree::{TreeDragPhase, is_valid_move_target};
+use crate::{fs, i18n};
 
 /// 面板日志作用域名。库不依赖 `dozer-core`,产品自己用它建 `log::Scope`。
 pub const LOG_NAME: &str = "files";
@@ -107,10 +107,9 @@ pub fn update(
             // 两条路都不在这里递推 `update`——菜单项里的 `OpenSearch`/
             // `CopyPath` 是内核拦截的,必须经 `emit` 走回顶层。
             app_state.context_menu_entries = items.clone();
-            ws_state.requests.push(FilesRequest::ShowNativeMenu {
-                items,
-                at: (x, y),
-            });
+            ws_state
+                .requests
+                .push(FilesRequest::ShowNativeMenu { items, at: (x, y) });
         }
         Message::ContextMenuClose => {
             app_state.context_menu = None;
@@ -141,19 +140,12 @@ pub fn update(
             app_state.close_context_menu();
             let (x, y) = app_state.last_right_click;
             let is_git_repo = ws_state.git_is_repo;
-            let items = tab_context_menu_items(
-                kind,
-                &path,
-                is_git_repo,
-                external_apps,
-                caps,
-                locale,
-            );
+            let items =
+                tab_context_menu_items(kind, &path, is_git_repo, external_apps, caps, locale);
             app_state.tab_context_menu_entries = items.clone();
-            ws_state.requests.push(FilesRequest::ShowNativeMenu {
-                items,
-                at: (x, y),
-            });
+            ws_state
+                .requests
+                .push(FilesRequest::ShowNativeMenu { items, at: (x, y) });
         }
         Message::TabContextMenuClose => {
             app_state.context_menu = None;
@@ -172,16 +164,15 @@ pub fn update(
             }
             command.arg(&path);
             handle.spawn(async move {
-                let result = tokio::task::spawn_blocking(move || {
-                    external_apps::run_open_command(command)
-                })
-                .await
-                .unwrap_or_else(|e| {
-                    Err(external_apps::OpenError::Spawn {
-                        program: "open".to_string(),
-                        error: e.to_string(),
-                    })
-                });
+                let result =
+                    tokio::task::spawn_blocking(move || external_apps::run_open_command(command))
+                        .await
+                        .unwrap_or_else(|e| {
+                            Err(external_apps::OpenError::Spawn {
+                                program: "open".to_string(),
+                                error: e.to_string(),
+                            })
+                        });
                 emit(Message::OpenWithDefaultDone(
                     project_id, path, app_name, result,
                 ));
@@ -190,7 +181,8 @@ pub fn update(
         Message::OpenWithDefaultDone(_, path, app_name, result) => {
             if let Err(reason) = result {
                 // Toast 会把完整文案写进日志(含文件名与原因),这里不再重复写。
-                ws_state.outbox.push(                    dozer_panel_host::NoticeLevel::Error,
+                ws_state.outbox.push(
+                    dozer_panel_host::NoticeLevel::Error,
                     external_apps::open_failure_message(app_name.as_deref(), &path, &reason),
                 );
             }
@@ -223,7 +215,8 @@ pub fn update(
                     tree.refresh(parent);
                 }
             }
-            Err(e) => ws_state.outbox.push(                dozer_panel_host::NoticeLevel::Error,
+            Err(e) => ws_state.outbox.push(
+                dozer_panel_host::NoticeLevel::Error,
                 i18n::keyed_args(
                     "toast.paste_failed",
                     "Paste failed: {e}",
@@ -239,7 +232,8 @@ pub fn update(
                     tree.refresh(parent);
                 }
             }
-            Err(e) => ws_state.outbox.push(                dozer_panel_host::NoticeLevel::Error,
+            Err(e) => ws_state.outbox.push(
+                dozer_panel_host::NoticeLevel::Error,
                 i18n::keyed_args(
                     "toast.rollback_failed",
                     "Restore file failed: {e}",
@@ -342,7 +336,8 @@ pub fn update(
                     }
                 }
             }
-            Err(e) => ws_state.outbox.push(                dozer_panel_host::NoticeLevel::Error,
+            Err(e) => ws_state.outbox.push(
+                dozer_panel_host::NoticeLevel::Error,
                 i18n::keyed_args(
                     "toast.op_failed",
                     "File operation failed: {e}",
@@ -590,7 +585,8 @@ pub fn update(
                     tree.refresh(&target);
                 }
             }
-            Err(e) => ws_state.outbox.push(                dozer_panel_host::NoticeLevel::Error,
+            Err(e) => ws_state.outbox.push(
+                dozer_panel_host::NoticeLevel::Error,
                 i18n::keyed_args(
                     "toast.drop_failed",
                     "Drag-move failed: {e}",

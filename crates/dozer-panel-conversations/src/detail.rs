@@ -65,8 +65,7 @@ pub fn review_fallback<'a, M: Clone + 'a>(
     // trace 改造,见
     // docs/superpowers/plans/2026-08-21-review-content-webview-trace.md。
     // 对话面板 session 详情(2026-08-27):条目渲染走 webview,但"加载更多"
-    // 按钮补在 iced 滚动体末尾——点它发 `ConversationDetailLoadMore`,
-    // dozer-app 的 `update` 用 `spawn_review_load_conversation(append=true)`
+    // 按钮补在 iced 滚动体末尾——点它发 `DetailLoadMore`,由库内 update
     // 追加下一页回合,而不是替换首屏。
     let ReviewSource::Conversation(conversation_id) = &rv.source;
     if !rv.entries.is_empty() {
