@@ -7,6 +7,7 @@
 
 pub(crate) mod agent_panel;
 pub(crate) mod app_host;
+pub(crate) mod browser_panel;
 pub(crate) mod files_panel;
 pub(crate) mod group_chat_panel;
 pub(crate) mod preview_panel;

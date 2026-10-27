@@ -37,6 +37,12 @@ pub fn t(key: &str, fallback: &str, locale: &str) -> String {
         .text
 }
 
+/// 把一条 `dozer.web` 文案按 locale 渲染成字符串(视图里的内联错误提示用)。库里写进
+/// `State.error` 的文案全部属于 `dozer.web`,与宿主总词表里的同一份资源。
+pub fn render(text: &LocalizedText, locale: &str) -> String {
+    resolver().resolve(text, locale).text
+}
+
 /// 构造一条带具名参数的 `dozer.web` 文案(不解析,渲染端按 locale 解析)。
 pub fn panel_keyed_args(
     owner: &str,

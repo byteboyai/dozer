@@ -871,13 +871,13 @@ pub(crate) fn panel_body<'a>(
             }
         }
         PanelKind::Web => browser::view(
+            app,
             &ws.browser,
             ws.project.as_ref().map(|p| p.id),
             app.dims.browser_bookmarks_split,
             Length::Fill,
             zone_pane_border(zone, ac),
             app.panel_mirrored(PanelKind::Web),
-            app.locale.active_locale(),
         )
         .map(Message::Browser),
         PanelKind::Agent => {

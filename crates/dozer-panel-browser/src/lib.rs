@@ -10,11 +10,12 @@ pub mod i18n;
 mod state;
 mod tabs;
 mod update;
+mod view;
 
 /// 面板 owner id:`locales/`(随库)。
 pub const WEB_OWNER: &str = "dozer.web";
 
-pub use adapter::TAB_TOOLTIP_DELAY;
+pub use adapter::{BrowserDisplay, BrowserRegion, TAB_TOOLTIP_DELAY, TabView, chrome_top_px};
 pub use addr_focus::{CaptureAddrFocus, addr_field_id, take_addr_focused};
 pub use bookmarks::{BookmarkStatus, bookmark_status};
 pub use state::{
@@ -22,8 +23,11 @@ pub use state::{
 };
 pub use tabs::{BrowserTab, Tabs};
 pub use update::{Message, NavAction, request_bookmarks_refresh, update};
+pub use view::view;
 
 #[cfg(test)]
 mod testing;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod view_tests;

@@ -37,9 +37,9 @@ impl TabHover {
 
 pub struct State {
     pub requests: dozer_panel_host::RequestTrackers,
-    pub tabs: Tabs,
-    pub error: Option<dozer_model::LocalizedText>,
-    pub bookmarks: Vec<BookmarkInfo>,
+    pub(crate) tabs: Tabs,
+    pub(crate) error: Option<dozer_model::LocalizedText>,
+    pub(crate) bookmarks: Vec<BookmarkInfo>,
     pub(crate) bookmarks_open: bool,
     /// tab 标题/关闭按钮的 hover 进度,键 `(tab 序号, 是否关闭按钮)`。
     pub(crate) hover: HashMap<(usize, bool), TabHover>,
@@ -155,7 +155,7 @@ impl State {
     /// 维护某页签的 tooltip 悬停计时:进入记起点、离开清除(满 2s 由
     /// `hover_tooltip_ready` 判断)。与 `hover` 动画进度同源触发,但计时是
     /// 独立的一份(见 `tooltip_starts` 字段注释)。
-    pub fn set_tab_tooltip(&mut self, idx: usize, hovered: bool) {
+    pub(crate) fn set_tab_tooltip(&mut self, idx: usize, hovered: bool) {
         if hovered {
             self.tooltip_starts.insert(idx, std::time::Instant::now());
         } else {
@@ -165,7 +165,7 @@ impl State {
 
     /// 某页签悬停是否已持续满 `HOVER_TOOLTIP_DELAY`(2s):满则视图层弹标题
     /// 全称 tooltip(见 `panel_tab` 的 `show_tooltip` 参数)。
-    pub fn hover_tooltip_ready(&self, idx: usize) -> bool {
+    pub(crate) fn hover_tooltip_ready(&self, idx: usize) -> bool {
         self.tooltip_starts
             .get(&idx)
             .is_some_and(|start| start.elapsed() >= crate::adapter::TAB_TOOLTIP_DELAY)
@@ -182,7 +182,7 @@ impl State {
 
     /// 取某 tab 标题(idx, is_close=false)或关闭按钮(idx, is_close=true)的
     /// 当前 hover 进度(0..=1),给 `view` 做颜色插值。
-    pub fn hover_progress(&self, idx: usize, is_close: bool) -> f32 {
+    pub(crate) fn hover_progress(&self, idx: usize, is_close: bool) -> f32 {
         self.hover
             .get(&(idx, is_close))
             .map(|h| h.progress)
@@ -192,7 +192,7 @@ impl State {
     /// 星标按钮(当前 tab 收藏/取消收藏)的 hover 进度。用哨兵键
     /// `(STAR_HOVER_KEY, false)` 区分于真实 tab(真实 tab 序号不可能
     /// 等于 `usize::MAX`)。
-    pub fn star_hover(&self) -> f32 {
+    pub(crate) fn star_hover(&self) -> f32 {
         self.hover
             .get(&(STAR_HOVER_KEY, false))
             .map(|h| h.progress)
@@ -279,7 +279,7 @@ impl State {
     }
 
     /// 收藏夹下拉按钮的 hover 进度,哨兵键 `(STAR_HOVER_KEY, true)`。
-    pub fn bookmark_hover(&self) -> f32 {
+    pub(crate) fn bookmark_hover(&self) -> f32 {
         self.hover
             .get(&(STAR_HOVER_KEY, true))
             .map(|h| h.progress)
@@ -288,7 +288,7 @@ impl State {
 
     /// 后退/前进/刷新三颗导航按钮的 hover 进度,各自独立哨兵键
     /// `(NAV_*_KEY, false)`,与真实 tab 序号和星标/收藏夹键都不冲突。
-    pub fn nav_hover(&self, action: NavAction) -> f32 {
+    pub(crate) fn nav_hover(&self, action: NavAction) -> f32 {
         let key = match action {
             NavAction::Back => NAV_BACK_KEY,
             NavAction::Forward => NAV_FORWARD_KEY,
@@ -302,7 +302,7 @@ impl State {
 
     /// tab 栏末尾"新标签页"(+)按钮的 hover 进度,哨兵键
     /// `(NEW_TAB_KEY, false)`,远离真实 tab 序号空间。
-    pub fn new_tab_hover(&self) -> f32 {
+    pub(crate) fn new_tab_hover(&self) -> f32 {
         self.hover
             .get(&(NEW_TAB_KEY, false))
             .map(|h| h.progress)

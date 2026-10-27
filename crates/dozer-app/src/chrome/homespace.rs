@@ -278,13 +278,13 @@ fn home_left_zone(
 fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let zone = theme::region::right_zone();
     let inner = browser::view(
+        app,
         &app.home_browser,
         None,
         byteui::theme::geometry::default_split_ratio(),
         Length::Fill,
         zone_pane_border(zone, PaneCorner::All),
         false,
-        app.locale.active_locale(),
     )
     .map(Message::HomeBrowser);
     let zone_box = container(inner)
