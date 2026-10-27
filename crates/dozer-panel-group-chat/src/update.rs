@@ -97,6 +97,8 @@ pub enum Message {
     /// 一次性失败(新建群失败、发送失败…),进 Toast。后台任务(拿不到 locale)
     /// 构造 keyed 文案,渲染端解析。
     Failed(i64, LocalizedText),
+    /// 弹窗提交的创建群失败:带回提交时的主题,让弹窗带着草稿重新打开(同时进 Toast)。
+    CreateFailed(i64, String, LocalizedText),
 }
 
 impl Message {
@@ -125,7 +127,8 @@ impl Message {
             | Message::NewGroupSubmit(p)
             | Message::NewGroupAgentToggled(p, _)
             | Message::Noop(p)
-            | Message::Failed(p, _) => *p,
+            | Message::Failed(p, _)
+            | Message::CreateFailed(p, _, _) => *p,
             Message::SelectRequested(p, _)
             | Message::Polled { project_id: p, .. }
             | Message::Posted { project_id: p, .. }
@@ -511,6 +514,16 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
             state.outbox.push(NoticeLevel::Error, text);
             Vec::new()
         }
+        Message::CreateFailed(_, topic, text) => {
+            state.outbox.push(NoticeLevel::Error, text);
+            // 提交时已关弹窗并清了主题框;失败后带回草稿。已选 agent 在成功前不清,
+            // 无需恢复。用户若在等待期间重新打开并写了新内容,不覆盖它。
+            if state.new_group_topic.text().trim().is_empty() {
+                state.new_group_topic = iced_widget::text_editor::Content::with_text(&topic);
+            }
+            state.new_group_dialog_open = true;
+            Vec::new()
+        }
     }
 }
 
@@ -518,6 +531,34 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
 // 异步 spawn:只负责"调 Client → 把结果包成 Message 经 emit 发回",不含业务逻辑
 // (校验已在 `protocol::route_event` 完成)。
 // ---------------------------------------------------------------------------
+
+/// 弹窗提交的创建:与页面发起的 `Command::CreateGroup` 区别在失败时要带回主题恢复草稿。
+fn spawn_create_from_dialog(
+    requests: &dozer_panel_host::RequestTrackers,
+    project_id: i64,
+    topic: String,
+    io: &PanelIo<Message>,
+) {
+    let io = io.with_request(requests.scope(Some(project_id)), Message::AsyncResult);
+    io.spawn(move |services, io| async move {
+        match services
+            .group_chat
+            .create_group(project_id, topic.clone())
+            .await
+        {
+            Ok(group) => io.emit(Message::GroupCreated(project_id, group)),
+            Err(e) => io.emit(Message::CreateFailed(
+                project_id,
+                topic,
+                crate::i18n::keyed_args(
+                    "error.create_failed",
+                    "Failed to create group chat: {e}",
+                    &[("e", &e.to_string())],
+                ),
+            )),
+        }
+    });
+}
 
 /// 加载某项目的群聊列表。
 pub fn spawn_load_groups(
@@ -693,9 +734,7 @@ pub fn run_effect(
         Effect::FetchMessages { group_id } => {
             spawn_fetch_messages(requests, project_id, group_id, 0, io)
         }
-        Effect::CreateGroup { topic } => {
-            spawn_command(requests, project_id, Command::CreateGroup { topic }, io)
-        }
+        Effect::CreateGroup { topic } => spawn_create_from_dialog(requests, project_id, topic, io),
         Effect::AddMembers { group_id, members } => {
             // handle 默认取品牌名(均属合法 handle 字符),角色留空。每个 agent
             // 一条独立的 `AddMember`,后端逐一回 `GroupChanged`。

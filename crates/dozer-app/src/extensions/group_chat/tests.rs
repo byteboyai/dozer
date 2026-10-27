@@ -372,6 +372,73 @@ fn new_group_submit_ignores_empty_topic() {
     assert_eq!(s.new_group_selected_agents(), &[AgentKind::Claude]);
 }
 
+// ---- 新建群失败:弹窗带着草稿恢复(L1) ----
+// 主题文本要真实渲染器的 text_editor,库自己的单测里是空实现,所以测试放在这里。
+
+fn type_topic(s: &mut WorkspaceState, text: &str) {
+    update(
+        s,
+        Message::NewGroupTopicAction(
+            1,
+            iced_widget::text_editor::Action::Edit(iced_widget::text_editor::Edit::Paste(
+                std::sync::Arc::new(text.into()),
+            )),
+        ),
+    );
+}
+
+fn submitted(topic: &str) -> WorkspaceState {
+    let mut s = WorkspaceState::default();
+    update(&mut s, Message::NewGroupDialogToggle(1));
+    update(&mut s, Message::NewGroupAgentToggled(1, AgentKind::Claude));
+    type_topic(&mut s, topic);
+    let fx = update(&mut s, Message::NewGroupSubmit(1));
+    assert_eq!(
+        fx,
+        vec![Effect::CreateGroup {
+            topic: topic.to_string()
+        }]
+    );
+    assert!(!s.new_group_dialog_open());
+    s
+}
+
+#[test]
+fn a_failed_create_restores_the_dialog_with_topic_and_members() {
+    let mut s = submitted("评审方案");
+    update(
+        &mut s,
+        Message::CreateFailed(1, "评审方案".into(), "boom".into()),
+    );
+    assert!(s.new_group_dialog_open(), "失败后弹窗重新打开");
+    assert_eq!(s.new_group_topic().text().trim(), "评审方案");
+    assert_eq!(s.new_group_selected_agents(), &[AgentKind::Claude]);
+    assert_eq!(s.take_outbox().len(), 1, "同时进 Toast");
+}
+
+#[test]
+fn a_failed_create_does_not_overwrite_a_newer_draft() {
+    let mut s = submitted("评审方案");
+    update(&mut s, Message::NewGroupDialogToggle(1));
+    type_topic(&mut s, "新的想法");
+    update(
+        &mut s,
+        Message::CreateFailed(1, "评审方案".into(), "boom".into()),
+    );
+    assert!(s.new_group_dialog_open());
+    assert_eq!(s.new_group_topic().text().trim(), "新的想法");
+    assert_eq!(s.take_outbox().len(), 1);
+}
+
+#[test]
+fn a_successful_create_leaves_the_dialog_closed_and_clears_the_draft() {
+    let mut s = submitted("评审方案");
+    update(&mut s, Message::GroupCreated(1, group(5, "评审方案")));
+    assert!(!s.new_group_dialog_open());
+    assert!(s.new_group_topic().text().trim().is_empty());
+    assert!(s.new_group_selected_agents().is_empty());
+}
+
 // ---- 输入框草稿(webview → host 同步,切面板后恢复) ----
 
 #[test]
@@ -798,8 +865,10 @@ fn run_effect_maps_each_effect_to_its_task() {
     );
     assert!(matches!(
         rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
-        Message::Failed(7, ref t)
-            if crate::extensions::group_chat::i18n::render(t, "en").starts_with("Failed to create group chat")
+        // 弹窗提交的创建失败带回主题(L1),让弹窗恢复草稿。
+        Message::CreateFailed(7, ref topic, ref t)
+            if topic == "t"
+                && crate::extensions::group_chat::i18n::render(t, "en").starts_with("Failed to create group chat")
     ));
 }
 
