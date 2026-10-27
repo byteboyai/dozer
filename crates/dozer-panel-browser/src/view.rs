@@ -4,10 +4,8 @@
 
 use crate::adapter::{BrowserDisplay, TabView, TextInputTarget};
 use crate::i18n::t;
-use crate::{
-    Message, NAV_BACK_KEY, NAV_FORWARD_KEY, NAV_REFRESH_KEY, NEW_TAB_KEY, NavAction,
-    STAR_HOVER_KEY, State, addr_field_id, bookmark_status,
-};
+use crate::state::{NAV_BACK_KEY, NAV_FORWARD_KEY, NAV_REFRESH_KEY, NEW_TAB_KEY, STAR_HOVER_KEY};
+use crate::{Message, NavAction, State, addr_field_id, bookmark_status};
 use byteui::interaction::icons;
 use dozer_model::{BookmarkInfo, BookmarkScope};
 use iced_widget::core::text::LineHeight;
