@@ -36,6 +36,8 @@ dozer-codehealth = { path = "../dozer-codehealth" }
 dozer-panel-usage = { path = "../dozer-panel-usage" }
 dozer-panel-host = { path = "../dozer-panel-host" }
 dozer-panel-todo = { path = "../dozer-panel-todo" }
+# 同源浏览器面板库:页签 / 地址栏状态机与文案在库,dozer-app 重导出并做适配。
+dozer-panel-browser = { path = "../dozer-panel-browser" }
 # 同源终端控件库(S6b):终端模型(VTE/网格)与 iced 自绘视图。
 dozer-panel-term = { path = "../dozer-panel-term" }
 # 同源 Agent 面板库(S6c):会话/页签状态、消息与更新。

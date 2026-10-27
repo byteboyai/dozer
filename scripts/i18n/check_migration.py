@@ -109,6 +109,9 @@ def _owner_from_dir(rel: str) -> str:
         # 同源预览面板库的 owner 是 dozer.preview_panel(不是 dozer.preview)。
         if crate == "dozer-panel-preview":
             return "dozer.preview_panel"
+        # 浏览器面板库的 owner 沿用历史面板名 `web`(PanelKind::Web),不是 dozer.browser。
+        if crate == "dozer-panel-browser":
+            return "dozer.web"
         return f"dozer.{crate.replace('dozer-panel-', '').replace('-', '_')}"
     return "dozer.host"
 
@@ -134,6 +137,7 @@ def _default_srcroots():
         os.path.join(ROOT, "crates", "dozer-panel-usage", "src"),
         os.path.join(ROOT, "crates", "dozer-panel-todo", "src"),
         os.path.join(ROOT, "crates", "dozer-panel-project", "src"),
+        os.path.join(ROOT, "crates", "dozer-panel-browser", "src"),
         os.path.join(ROOT, "crates", "dozer-panel-agent", "src"),
         os.path.join(ROOT, "crates", "dozer-panel-term", "src"),
         os.path.join(ROOT, "crates", "dozer-preview-core", "src"),
