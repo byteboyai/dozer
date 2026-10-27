@@ -25,14 +25,6 @@ impl dozer_panel_group_chat::adapter::PanelDisplay<Message> for App {
         crate::chrome::homespace::home_panel_head_with_actions(icon, title, actions)
     }
 
-    fn list_collapse_button<'a>(
-        &self,
-        _tooltip_collapse: String,
-        _tooltip_expand: String,
-    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        iced_widget::Space::new().into()
-    }
-
     fn pane_style(&self, pane: GroupChatPane) -> PaneStyle {
         match pane {
             GroupChatPane::List => {

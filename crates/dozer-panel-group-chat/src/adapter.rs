@@ -27,11 +27,6 @@ pub trait PanelDisplay<M> {
         title: String,
         actions: Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>>,
     ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>;
-    fn list_collapse_button<'a>(
-        &self,
-        tooltip_collapse: String,
-        tooltip_expand: String,
-    ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>;
     fn pane_style(&self, pane: GroupChatPane) -> PaneStyle;
     fn agent_icon(
         &self,

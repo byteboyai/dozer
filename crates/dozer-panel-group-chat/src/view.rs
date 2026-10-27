@@ -170,13 +170,6 @@ mod tests {
         ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
             iced_widget::Space::new().into()
         }
-        fn list_collapse_button<'a>(
-            &self,
-            _c: String,
-            _e: String,
-        ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-            iced_widget::Space::new().into()
-        }
         fn pane_style(&self, _pane: GroupChatPane) -> PaneStyle {
             PaneStyle {
                 padding: iced_widget::core::Padding::from(0),
