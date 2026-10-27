@@ -2,7 +2,7 @@
 //! 不知道对面是 dozerd 还是内存假实现。生产实现在 `dozer-client`(为 `Client` 适配)。
 
 use dozer_model::{
-    AgentKind, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
+    AgentKind, BackfillReport, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
     CodeHealthReportInfo, ContextItemInfo, ConversationSummary, FileEditHistoryInfo,
     GroupCancelScope, GroupInfo, GroupMessageInfo, LocalePreference, LocaleSnapshot,
     LocaleWriteOutcome, MemoryDetail, MemoryInfo, MutationOutcome, ProjectInfo, SessionEvent,
@@ -166,6 +166,20 @@ pub trait TranscriptService: Send + Sync {
     fn delete_project_transcripts(&self, cwd: String) -> BoxFuture<'_, Result<u32, ServiceError>>;
     fn backfill_project_transcripts(&self, cwd: String)
     -> BoxFuture<'_, Result<u32, ServiceError>>;
+    /// 与 `backfill_project_transcripts` 同一导入,多带回失败明细。默认实现退化为只带
+    /// 导入数、无明细,所以不关心明细的实现(占位、测试替身)不用改。
+    fn backfill_project_transcripts_report(
+        &self,
+        cwd: String,
+    ) -> BoxFuture<'_, Result<BackfillReport, ServiceError>> {
+        Box::pin(async move {
+            let imported_files = self.backfill_project_transcripts(cwd).await?;
+            Ok(BackfillReport {
+                imported_files,
+                ..BackfillReport::default()
+            })
+        })
+    }
     fn submit_summary_batch(
         &self,
         cwd: String,

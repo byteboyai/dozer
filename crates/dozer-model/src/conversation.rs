@@ -3,6 +3,34 @@ use crate::{SessionSummaryPayload, SummaryStatus};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// 历史导入里单个摄取失败的文件。`reason` 是给人看的原因,不作程序判断。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackfillFailure {
+    pub path: String,
+    pub reason: String,
+}
+
+/// 一次按项目历史导入的结果。`failures` 只保留前若干条(防止一个坏目录淹没界面),
+/// 总数在 `failed_total`;全部成功时两者都为空/0。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackfillReport {
+    pub imported_files: u32,
+    pub failed_total: u32,
+    pub failures: Vec<BackfillFailure>,
+}
+
+impl BackfillReport {
+    /// 失败明细最多保留的条数,防止一个坏目录淹没界面;`failed_total` 始终准确。
+    pub const MAX_FAILURE_DETAILS: usize = 50;
+
+    pub fn record_failure(&mut self, path: String, reason: String) {
+        self.failed_total = self.failed_total.saturating_add(1);
+        if self.failures.len() < Self::MAX_FAILURE_DETAILS {
+            self.failures.push(BackfillFailure { path, reason });
+        }
+    }
+}
+
 /// 单个历史会话(=一份 agent transcript 文件)的索引摘要;由 dozerd 的
 /// `TranscriptStore` 摄取落库维护(spec 2026-08-20)。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

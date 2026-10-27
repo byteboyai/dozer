@@ -1,7 +1,8 @@
 //! dozerd 启动时的历史 transcript 回填。
 
 use crate::transcripts::TranscriptStore;
-use dozer_core::protocol::AgentKind;
+use dozer_core::protocol::{AgentKind, BackfillReport};
+
 use std::path::PathBuf;
 
 dozer_core::scope!(LOG, module, "summary");
@@ -12,16 +13,26 @@ dozer_core::scope!(LOG, module, "summary");
 /// 循环,只是喂给它的 `files` 来源不同(前者 `discover_all_transcript_files`,
 /// 后者 `discover_project_transcript_files`)。返回成功摄取的文件数。
 pub fn ingest_files(store: &TranscriptStore, files: Vec<(AgentKind, PathBuf)>) -> u32 {
-    let mut imported = 0u32;
+    ingest_files_report(store, files).imported_files
+}
+
+/// 与 [`ingest_files`] 同一个循环,多带回失败明细。明细只留前
+/// `BackfillReport::MAX_FAILURE_DETAILS` 条,总数始终准确。
+pub fn ingest_files_report(
+    store: &TranscriptStore,
+    files: Vec<(AgentKind, PathBuf)>,
+) -> BackfillReport {
+    let mut report = BackfillReport::default();
     for (agent, path) in files {
         match store.ingest_session(agent, &path) {
-            Ok(()) => imported += 1,
+            Ok(()) => report.imported_files += 1,
             Err(e) => {
                 dozer_core::log_warn!(LOG, error = %e, path = %path.display(), "回填摄取失败,跳过该文件");
+                report.record_failure(path.to_string_lossy().into_owned(), e.to_string());
             }
         }
     }
-    imported
+    report
 }
 
 pub fn backfill_all(store: &TranscriptStore, files: Vec<(AgentKind, PathBuf)>) {
@@ -74,5 +85,56 @@ mod tests {
             vec![(AgentKind::Claude, f1), (AgentKind::Claude, missing)],
         );
         assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn report_names_each_failed_file_and_keeps_the_successes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let ok = tmp.path().join("a.jsonl");
+        std::fs::write(&ok, "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"一\"}}\n").unwrap();
+        let missing = tmp.path().join("does-not-exist.jsonl");
+
+        let report = ingest_files_report(
+            &store,
+            vec![
+                (AgentKind::Claude, ok),
+                (AgentKind::Claude, missing.clone()),
+            ],
+        );
+        assert_eq!(report.imported_files, 1);
+        assert_eq!(report.failed_total, 1);
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].path, missing.to_string_lossy());
+        assert!(!report.failures[0].reason.is_empty());
+    }
+
+    #[test]
+    fn report_caps_the_detail_list_but_counts_every_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let files: Vec<_> = (0..BackfillReport::MAX_FAILURE_DETAILS + 7)
+            .map(|i| {
+                (
+                    AgentKind::Claude,
+                    tmp.path().join(format!("missing-{i}.jsonl")),
+                )
+            })
+            .collect();
+        let report = ingest_files_report(&store, files);
+        assert_eq!(report.imported_files, 0);
+        assert_eq!(
+            report.failed_total as usize,
+            BackfillReport::MAX_FAILURE_DETAILS + 7
+        );
+        assert_eq!(report.failures.len(), BackfillReport::MAX_FAILURE_DETAILS);
+    }
+
+    #[test]
+    fn a_clean_run_reports_no_failures() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let report = ingest_files_report(&store, Vec::new());
+        assert_eq!(report, dozer_core::protocol::BackfillReport::default());
     }
 }

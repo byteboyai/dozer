@@ -1301,11 +1301,30 @@ impl Client {
     }
 
     pub async fn backfill_project_transcripts(&self, cwd: &str) -> Result<u32> {
+        Ok(self
+            .backfill_project_transcripts_report(cwd)
+            .await?
+            .imported_files)
+    }
+
+    /// 与 [`Self::backfill_project_transcripts`] 同一请求,多带回失败明细。
+    pub async fn backfill_project_transcripts_report(
+        &self,
+        cwd: &str,
+    ) -> Result<dozer_model::BackfillReport> {
         match self
             .roundtrip(&Request::BackfillProjectTranscripts { cwd: cwd.into() })
             .await?
         {
-            Reply::BackfillDone { imported_files } => Ok(imported_files),
+            Reply::BackfillDone {
+                imported_files,
+                failed_total,
+                failures,
+            } => Ok(dozer_model::BackfillReport {
+                imported_files,
+                failed_total,
+                failures,
+            }),
             other => bail!("意外应答: {other:?}"),
         }
     }
@@ -2200,6 +2219,16 @@ impl TranscriptService for Client {
                 .map_err(into_service_error)
         })
     }
+    fn backfill_project_transcripts_report(
+        &self,
+        cwd: String,
+    ) -> BoxFuture<'_, Result<dozer_model::BackfillReport, ServiceError>> {
+        Box::pin(async move {
+            Client::backfill_project_transcripts_report(self, &cwd)
+                .await
+                .map_err(into_service_error)
+        })
+    }
     fn submit_summary_batch(
         &self,
         cwd: String,
@@ -2846,7 +2875,11 @@ mod project_service_tests {
     async fn a_count_is_carried_back_unchanged() {
         let sock = serve_once(
             "proj-backfill",
-            Some(Reply::BackfillDone { imported_files: 3 }),
+            Some(Reply::BackfillDone {
+                imported_files: 3,
+                failed_total: 0,
+                failures: Vec::new(),
+            }),
         );
         let got = TranscriptService::backfill_project_transcripts(
             &Client::new(sock.clone()),
@@ -2854,6 +2887,32 @@ mod project_service_tests {
         )
         .await;
         assert_eq!(got, Ok(3));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn failure_details_are_carried_back_through_the_service() {
+        let failures = vec![dozer_model::BackfillFailure {
+            path: "/h/a.jsonl".into(),
+            reason: "坏文件".into(),
+        }];
+        let sock = serve_once(
+            "proj-bf-rep",
+            Some(Reply::BackfillDone {
+                imported_files: 2,
+                failed_total: 1,
+                failures: failures.clone(),
+            }),
+        );
+        let got = TranscriptService::backfill_project_transcripts_report(
+            &Client::new(sock.clone()),
+            "/p".into(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.imported_files, 2);
+        assert_eq!(got.failed_total, 1);
+        assert_eq!(got.failures, failures);
         let _ = std::fs::remove_file(&sock);
     }
 

@@ -1,16 +1,17 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub use dozer_model::{
-    AgentKind, AgentState, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
-    CodeHealthReportInfo, ContextItemInfo, ConversationSummary, ConversationSummaryResult,
-    FileEditHistoryInfo, GroupAuthor, GroupCancelScope, GroupInfo, GroupMemberInfo,
-    GroupMessageInfo, GroupMessageStatus, Locale, LocalePreference, LocaleSnapshot,
-    LocaleWriteOutcome, LocateMatch, MemoryDetail, MemoryHistoryEntry, MemoryInfo, MutationOutcome,
-    PREVIEW_COMMAND_TIMEOUT_MS, PREVIEW_SELECTED_TEXT_MAX_CHARS, PreviewCommand,
-    PreviewCommandAction, PreviewCommandOutcome, PreviewCommandTarget, PreviewContext,
-    PreviewTabularContext, ProjectInfo, SessionInfo, SessionSummaryPayload, SummaryBatchInfo,
-    SummaryErrorKind, SummaryJobInfo, SummaryJobStatus, SummaryProviderInfo, SummaryStatus,
-    SummaryTrigger, TodoInfo, TodoStoredStatus, ToolCallInfo, TurnRecord, UsagePayload,
+    AgentKind, AgentState, BackfillFailure, BackfillReport, BookmarkInfo, BookmarkScope,
+    CategoryInfo, CategoryMoveDirection, CodeHealthReportInfo, ContextItemInfo,
+    ConversationSummary, ConversationSummaryResult, FileEditHistoryInfo, GroupAuthor,
+    GroupCancelScope, GroupInfo, GroupMemberInfo, GroupMessageInfo, GroupMessageStatus, Locale,
+    LocalePreference, LocaleSnapshot, LocaleWriteOutcome, LocateMatch, MemoryDetail,
+    MemoryHistoryEntry, MemoryInfo, MutationOutcome, PREVIEW_COMMAND_TIMEOUT_MS,
+    PREVIEW_SELECTED_TEXT_MAX_CHARS, PreviewCommand, PreviewCommandAction, PreviewCommandOutcome,
+    PreviewCommandTarget, PreviewContext, PreviewTabularContext, ProjectInfo, SessionInfo,
+    SessionSummaryPayload, SummaryBatchInfo, SummaryErrorKind, SummaryJobInfo, SummaryJobStatus,
+    SummaryProviderInfo, SummaryStatus, SummaryTrigger, TodoInfo, TodoStoredStatus, ToolCallInfo,
+    TurnRecord, UsagePayload,
 };
 
 /// C/S 协议版本。客户端与守护进程用它握手:不一致时给出可读错误而不是
@@ -532,6 +533,10 @@ pub enum Request {
     },
 }
 
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Reply {
@@ -593,6 +598,12 @@ pub enum Reply {
     /// 出错。
     BackfillDone {
         imported_files: u32,
+        /// 摄取失败的文件总数。线上只追加:旧 daemon 不带、全部成功时不写。
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        failed_total: u32,
+        /// 前若干条失败明细(见 `BackfillReport`)。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        failures: Vec<BackfillFailure>,
     },
     /// `DeleteProjectTranscripts` 应答:这次实际删掉的 conversations 行数
     /// (三家 agent 加总)。0 不代表出错——可能这个项目本来就没被摄取过。
@@ -1037,10 +1048,50 @@ mod tests {
         let back: Request = decode_line(&line).unwrap();
         assert_eq!(req, back);
 
-        let reply = Reply::BackfillDone { imported_files: 3 };
+        let reply = Reply::BackfillDone {
+            imported_files: 3,
+            failed_total: 0,
+            failures: Vec::new(),
+        };
         let line = encode_line(&reply);
         let back: Reply = decode_line(&line).unwrap();
         assert_eq!(reply, back);
+    }
+
+    #[test]
+    fn backfill_done_carries_failure_details_and_stays_wire_compatible() {
+        let reply = Reply::BackfillDone {
+            imported_files: 2,
+            failed_total: 1,
+            failures: vec![BackfillFailure {
+                path: "/home/x/.claude/projects/p/a.jsonl".into(),
+                reason: "文件损坏".into(),
+            }],
+        };
+        let back: Reply = decode_line(&encode_line(&reply)).unwrap();
+        assert_eq!(reply, back);
+
+        // 旧 daemon 的应答(没有失败字段)新客户端照常解码,失败明细为空。
+        let old: Reply =
+            decode_line("{\"type\":\"backfill_done\",\"imported_files\":3}\n").unwrap();
+        assert_eq!(
+            old,
+            Reply::BackfillDone {
+                imported_files: 3,
+                failed_total: 0,
+                failures: Vec::new(),
+            }
+        );
+        // 没有失败时不往线上多写字段,旧客户端看到的形状与原来一致。
+        let clean = encode_line(&Reply::BackfillDone {
+            imported_files: 3,
+            failed_total: 0,
+            failures: Vec::new(),
+        });
+        assert!(
+            !clean.contains("failed_total") && !clean.contains("failures"),
+            "{clean}"
+        );
     }
 
     #[test]

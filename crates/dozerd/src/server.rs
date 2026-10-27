@@ -1100,8 +1100,12 @@ async fn handle_conn(
                             }
                         }
                         Request::BackfillProjectTranscripts { cwd } => {
-                            let imported_files = transcripts.backfill_project(&cwd);
-                            Reply::BackfillDone { imported_files }
+                            let report = transcripts.backfill_project_report(&cwd);
+                            Reply::BackfillDone {
+                                imported_files: report.imported_files,
+                                failed_total: report.failed_total,
+                                failures: report.failures,
+                            }
                         }
                         Request::RemoveProject { id } => match projects.remove(id) {
                             Ok(()) => Reply::Ok,

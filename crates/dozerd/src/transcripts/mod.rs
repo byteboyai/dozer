@@ -785,16 +785,22 @@ impl TranscriptStore {
     /// 项目"/"修复项目"按需触发。返回本次实际摄取的文件数,0 不代表出错
     /// (可能这个项目此前已经全部摄取过)。
     pub fn backfill_project(&self, cwd: &str) -> u32 {
+        self.backfill_project_report(cwd).imported_files
+    }
+
+    /// 与 [`Self::backfill_project`] 同一流程,多带回失败明细(含 Codex SQLite 来源)。
+    pub fn backfill_project_report(&self, cwd: &str) -> dozer_core::protocol::BackfillReport {
         let files =
             crate::transcripts::scan::discover_project_transcript_files(std::path::Path::new(cwd));
-        let legacy = crate::backfill::ingest_files(self, files);
+        let mut report = crate::backfill::ingest_files_report(self, files);
         match self.ingest_codex_sqlite(Some(cwd)) {
-            Ok(count) => legacy.saturating_add(count),
+            Ok(count) => report.imported_files = report.imported_files.saturating_add(count),
             Err(e) => {
                 dozer_core::log_warn!(LOG, error = %e, "Codex SQLite 项目回填失败");
-                legacy
+                report.record_failure("Codex SQLite".into(), e.to_string());
             }
         }
+        report
     }
 
     /// 生产入口,内部用 `dozer_core::agent_paths::home_dir()`。按项目根目录
@@ -1870,6 +1876,44 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    /// 钉住 Digger 的「删除项目只清副本」(收尾计划 D1=A)依赖的事实:这个接口只删
+    /// 数据库里的副本,用户 home 下的 transcript 原文件原样留着。真正会把 agent 缓存
+    /// 目录移进回收站的是项目面板的 `spawn_delete_project`,不是这里。
+    #[test]
+    fn delete_project_transcripts_in_leaves_the_source_files_untouched() {
+        let home = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&home.path().join("t.db")).unwrap();
+        let cwd = "/work/proj-a";
+        let dir =
+            dozer_core::agent_paths::claude_project_dir_in(home.path(), std::path::Path::new(cwd));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("s1.jsonl");
+        let body = "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"你好\"}}\n";
+        std::fs::write(&source, body).unwrap();
+        let files = super::scan::discover_project_transcript_files_in(
+            home.path(),
+            std::path::Path::new(cwd),
+        );
+        crate::backfill::ingest_files(&store, files);
+
+        let deleted = store
+            .delete_project_transcripts_in(home.path(), cwd)
+            .unwrap();
+        assert_eq!(deleted, 1);
+        assert!(
+            store
+                .get_conversation_turns("s1", -1, 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&source).unwrap(),
+            body,
+            "原文件不能被动"
+        );
+        assert!(dir.is_dir(), "项目的 agent 存储目录也不能被动");
     }
 
     /// Codex 删除按 cwd 不按 dir(它的 dir 是日期目录,同目录混着所有项目),
