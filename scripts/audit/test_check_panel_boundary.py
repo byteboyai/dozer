@@ -136,5 +136,28 @@ class Compare(unittest.TestCase):
         base = {"extensions/a.rs": {"R-APP": 1}}
         cur = {"extensions/a.rs": {"R-APP": 2}, "extensions/b.rs": {"R-WS": 1}}
         self.assertEqual(g.compare(base, cur), [("extensions/a.rs", "R-APP", 1, 2), ("extensions/b.rs", "R-WS", 0, 1)])
+class LibraryDependencies(unittest.TestCase):
+    """共享面板库的依赖闭包不得含产品 / 原生窗口 crate(conversations 与 browser 同规则)。"""
+    def manifest(self, body):
+        import tempfile
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "Cargo.toml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+        return path
+    def test_browser_forbidden_dependencies_reported(self):
+        path = self.manifest('[package]\nname = "dozer-panel-browser"\n[dependencies]\n'
+                             'dozer-app = { path = "x" }\ndozer-client = { path = "x" }\ndozer-core = { path = "x" }\n'
+                             'wry = "0.1"\nwinit = "0.1"\nserde = "1"\n'
+                             '[target.\'cfg(unix)\'.dev-dependencies]\nrenamed = { package = "wry", version = "1" }\n')
+        problems = g.check_forbidden_dependencies("dozer-panel-browser", path, g.BROWSER_FORBIDDEN)
+        self.assertEqual(len(problems), 6)
+        self.assertTrue(all(p.startswith("dozer-panel-browser: forbidden") for p in problems))
+        self.assertFalse(any("serde" in p for p in problems))
+    def test_clean_manifest_passes(self):
+        path = self.manifest('[package]\nname = "x"\n[dependencies]\nserde = "1"\n')
+        self.assertEqual(g.check_forbidden_dependencies("x", path, g.BROWSER_FORBIDDEN), [])
+    def test_real_libraries_are_clean(self):
+        self.assertEqual(g.check_library_dependencies(), [])
 if __name__ == "__main__":
     unittest.main()

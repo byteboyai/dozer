@@ -140,5 +140,6 @@ fn view_builds_with_no_tabs() {
         false,
     );
     assert_eq!(display.tab_calls.get(), 0);
+    assert_eq!(display.tab_divider_calls.get(), 1);
     assert_eq!(display.bookmarks_divider_calls.get(), 0);
 }

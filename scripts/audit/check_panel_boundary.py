@@ -233,12 +233,14 @@ def load_sources():
     return files
 
 
-def check_conversations_dependencies():
-    """The shared conversation library must not import product or native-window crates."""
-    manifest = os.path.join(edges.ROOT, "crates", "dozer-panel-conversations", "Cargo.toml")
+CONVERSATIONS_FORBIDDEN = {"dozer-app", "dozer-client", "dozer-core", "dozerd", "wry", "winit"}
+BROWSER_FORBIDDEN = {"dozer-app", "dozer-client", "dozer-core", "wry", "winit"}
+
+
+def check_forbidden_dependencies(label, manifest, forbidden):
+    """Shared panel libraries must not import product or native-window crates."""
     with open(manifest, "rb") as f:
         package = tomllib.load(f)
-    forbidden = {"dozer-app", "dozer-client", "dozer-core", "dozerd", "wry", "winit"}
     sections = [package, *package.get("target", {}).values()]
     problems = []
     for section in sections:
@@ -246,12 +248,23 @@ def check_conversations_dependencies():
             for name, dependency in section.get(kind, {}).items():
                 actual = dependency.get("package", name) if isinstance(dependency, dict) else name
                 if actual in forbidden:
-                    problems.append(f"dozer-panel-conversations: forbidden {kind} {actual}")
+                    problems.append(f"{label}: forbidden {kind} {actual}")
+    return problems
+
+
+def check_library_dependencies():
+    problems = []
+    for crate, forbidden in (
+        ("dozer-panel-conversations", CONVERSATIONS_FORBIDDEN),
+        ("dozer-panel-browser", BROWSER_FORBIDDEN),
+    ):
+        manifest = os.path.join(edges.ROOT, "crates", crate, "Cargo.toml")
+        problems += check_forbidden_dependencies(crate, manifest, forbidden)
     return problems
 
 
 def main(argv):
-    dependency_problems = check_conversations_dependencies()
+    dependency_problems = check_library_dependencies()
     if dependency_problems:
         print("\n".join(dependency_problems), file=sys.stderr)
         return 1

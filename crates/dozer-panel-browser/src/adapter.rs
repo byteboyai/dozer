@@ -1,5 +1,10 @@
 //! 产品注入 / 产出的适配类型。
 
+use iced_widget::Theme;
+use iced_widget::core::{Color, Element, Padding};
+
+type Renderer = iced_renderer::Renderer;
+
 /// 浏览器页签期望的 webview(纯数据):由库产出,宿主转成自己的 webview 池规格。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserWebviewSpec {
@@ -18,11 +23,6 @@ pub struct TextInputTarget {
 
 /// 页签标题悬停多久后弹全称 tooltip(与 Dozer 顶栏同一取值)。
 pub const TAB_TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
-
-use iced_widget::Theme;
-use iced_widget::core::{Color, Element, Padding};
-
-type Renderer = iced_renderer::Renderer;
 
 /// 浏览器面板区域样式:产品主题里 `browser_pane` 区域的投影(背景 / 内边距 / 行间距)。
 #[derive(Debug, Clone, Copy)]

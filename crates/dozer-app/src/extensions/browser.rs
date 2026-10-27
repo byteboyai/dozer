@@ -15,8 +15,6 @@
 
 use crate::preview::WebviewSpec;
 
-dozer_core::scope!(LOG, panel, "web");
-
 /// 库产出的纯数据 webview 清单项 → 宿主的 `WebviewSpec`。其余字段的取值与搬迁前
 /// `Tabs::desired_webviews` 里逐项相同:浏览器 webview 不参与预览资源 reserve、不走
 /// Surface、没有隐藏预创建所以不需要离屏停放。

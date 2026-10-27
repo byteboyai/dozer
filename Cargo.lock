@@ -2181,8 +2181,6 @@ dependencies = [
  "dozer-services",
  "iced_renderer",
  "iced_widget",
- "serde",
- "serde_json",
  "tokio",
  "tracing",
 ]
