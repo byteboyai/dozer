@@ -897,3 +897,69 @@ fn reorder_tab_moves_tooltip_timer_with_the_slot() {
     assert!(!state.hover_tooltip_ready(0));
     assert!(state.hover_tooltip_ready(2), "计时跟着被拖动的页签走");
 }
+
+#[test]
+fn addr_select_all_pending_is_one_shot() {
+    let mut state = State::default();
+    assert!(!state.take_addr_select_all_pending());
+    state.set_addr_focused(true);
+    assert!(state.take_addr_select_all_pending());
+    assert!(!state.take_addr_select_all_pending());
+    // 已持有焦点时重复置 true 不再触发全选位。
+    state.set_addr_focused(true);
+    assert!(!state.take_addr_select_all_pending());
+}
+
+#[tokio::test]
+async fn addr_submit_rejects_local_paths_and_blank_input() {
+    let handle = tokio::runtime::Handle::current();
+    let service = service_for_test();
+    let submit = |input: String| {
+        let mut state = State::default();
+        update(
+            &mut state,
+            Message::AddrInput(input),
+            Some(1),
+            &service,
+            &handle,
+            |_| {},
+        );
+        update(
+            &mut state,
+            Message::AddrSubmit,
+            Some(1),
+            &service,
+            &handle,
+            |_| {},
+        );
+        state
+    };
+    for blank in ["", "   "] {
+        let st = submit(blank.to_string());
+        assert_eq!(st.tabs.tabs().len(), 1, "{blank:?}");
+        assert_eq!(st.tabs.tabs()[0].url, "about:blank", "{blank:?}");
+        assert!(st.error.is_none(), "{blank:?}");
+    }
+    // 黄金(取自搬迁前 dozer-app 的旧行为):`file://` 带 `://` 被原样接受并导航激活 tab,
+    // 不报错;只有以 `/` 或 `~/` 开头的裸路径才被拒。
+    let st = submit("file:///etc/passwd".to_string());
+    assert_eq!(st.tabs.tabs().len(), 1);
+    assert_eq!(st.tabs.tabs()[0].url, "file:///etc/passwd");
+    assert!(st.error.is_none());
+    let st = submit("/Users/x/a.html".to_string());
+    assert_eq!(st.tabs.tabs().len(), 1);
+    assert_eq!(st.tabs.tabs()[0].url, "about:blank");
+    assert_eq!(
+        st.error,
+        Some(dozer_model::LocalizedText::keyed(
+            WEB_OWNER,
+            "error.local_path",
+            "Opening local files is not supported in the browser"
+        ))
+    );
+    let long = format!("https://example.com/{}", "a".repeat(10_000));
+    let st = submit(long.clone());
+    assert_eq!(st.tabs.tabs().len(), 1);
+    assert_eq!(st.tabs.tabs()[0].url, long);
+    assert!(st.error.is_none());
+}

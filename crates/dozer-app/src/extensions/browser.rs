@@ -15,18 +15,13 @@ use crate::theme;
 use crate::workspace::{lh, split_portions};
 use byteui::interaction::icons;
 use dozer_model::{BookmarkInfo, BookmarkScope};
-use iced_widget::core::widget::operation::Focusable;
-use iced_widget::core::widget::{Id, Operation};
-use iced_widget::core::{Border, Element, Length, Rectangle};
+use iced_widget::core::{Border, Element, Length};
 use iced_widget::{MouseArea, button, column, container, row, text};
 
 dozer_core::scope!(LOG, panel, "web");
 
 /// 浏览器面板的 i18n owner(资源随 `dozer-panel-browser` 库)。
 pub(crate) use dozer_panel_browser::WEB_OWNER;
-// `BrowserTab` 目前宿主无直接引用,保留出口以维持原 `browser::BrowserTab` 路径。
-#[allow(unused_imports)]
-pub use dozer_panel_browser::BrowserTab;
 
 /// 库产出的纯数据 webview 清单项 → 宿主的 `WebviewSpec`。其余字段的取值与搬迁前
 /// `Tabs::desired_webviews` 里逐项相同:浏览器 webview 不参与预览资源 reserve、不走
@@ -52,44 +47,8 @@ fn t(key: &str, fallback: &str, locale: &str) -> String {
     crate::i18n::panel_text(WEB_OWNER, key, fallback, locale)
 }
 
-/// 地址栏稳定的 iced widget id:`view()` 里 `.id()` 挂给真正的
-/// `text_input`,`CaptureAddrFocus` 每帧靠它在 widget 树里认出这一个(同
-/// `extensions::files::search_field_id` 的既有手法)。
-pub fn addr_field_id() -> Id {
-    Id::new("browser-addr-box")
-}
-
-static ADDR_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
-
-/// 读走并复位(消费式)地址栏上一帧是否持有 iced 内部真实焦点。`main.rs`
-/// 渲染循环每帧跑完 `CaptureAddrFocus` 后立刻调用本函数,把结果塞进当前
-/// `Workspace`(`State::set_addr_focused`)——`static` 只是临时桥接(同
-/// `extensions::files::take_search_focused` 的既有手法,含消费式复位避免
-/// 地址栏不可见的帧卡死上一次 `true` 永久堵死终端键盘转发的理由)。
-pub fn take_addr_focused() -> bool {
-    std::mem::replace(&mut *ADDR_FOCUSED.lock().unwrap(), false)
-}
-
-/// 每帧 `interface.operate()` 跑一遍,把 `addr_field_id()` 命中的
-/// `text_input` 当前是否持有 iced 焦点写进 `ADDR_FOCUSED`。`traverse`
-/// **必须**调用传入的 `operate` 闭包才会继续递归子节点——地址栏嵌在
-/// `row!`/`container!` 里,空 `traverse` 会导致 `Row`/`Column` 的
-/// `operate()` 直接跳过子节点,`focusable()` 永远不会被触达(见
-/// `extensions::files::CaptureSearchFocus` 修复过的同款 Critical bug,
-/// commit `b8281cd`,这次从一开始就不能再犯)。
-pub struct CaptureAddrFocus;
-impl Operation<()> for CaptureAddrFocus {
-    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
-        if id == Some(&addr_field_id()) {
-            *ADDR_FOCUSED.lock().unwrap() = state.is_focused();
-        }
-    }
-
-    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
-        operate(self);
-    }
-}
+/// 地址栏焦点机制(进程级 `ADDR_FOCUSED` 唯一一份,在共享库里)。
+pub use dozer_panel_browser::{CaptureAddrFocus, addr_field_id, take_addr_focused};
 
 /// 状态机 / 消息 / `update` / 收藏夹逻辑已搬进共享库,这里重新导出,`app/` 里的调用点不动。
 pub use dozer_panel_browser::{
@@ -535,14 +494,4 @@ fn bookmarks_toggle_button<'a>(
         |hovered| Message::Hover(STAR_HOVER_KEY, true, hovered),
         t("bookmarks.tooltip", "Bookmarks", locale),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn addr_field_id_is_stable_across_calls() {
-        assert_eq!(addr_field_id(), addr_field_id());
-    }
 }
