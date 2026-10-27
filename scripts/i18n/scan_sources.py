@@ -101,7 +101,6 @@ OWNER_RULES = [
     ("crates/dozer-app/src/extensions/git_log.rs", "dozer.git_log"),
     ("crates/dozer-app/src/extensions/database/", "dozer.database"),
     ("crates/dozer-app/src/extensions/ssh", "dozer.ssh"),
-    ("crates/dozer-app/src/extensions/browser.rs", "dozer.web"),
     ("crates/dozer-app/src/extensions/group_chat/", "dozer.group_chat"),
     ("crates/dozer-app/src/extensions/conversations.rs", "dozer.conversations"),
     ("crates/dozer-app/src/extensions/agent_context.rs", "dozer.agent"),

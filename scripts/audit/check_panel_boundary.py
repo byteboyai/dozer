@@ -234,7 +234,7 @@ def load_sources():
 
 
 CONVERSATIONS_FORBIDDEN = {"dozer-app", "dozer-client", "dozer-core", "dozerd", "wry", "winit"}
-BROWSER_FORBIDDEN = {"dozer-app", "dozer-client", "dozer-core", "wry", "winit"}
+BROWSER_FORBIDDEN = CONVERSATIONS_FORBIDDEN
 
 
 def check_forbidden_dependencies(label, manifest, forbidden):

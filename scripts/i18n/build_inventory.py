@@ -79,7 +79,6 @@ FILE_TASK = [
     ("crates/dozer-app/src/extensions/database/", "10"),
     ("crates/dozer-app/src/extensions/ssh/", "10"),
     ("crates/dozer-app/src/extensions/ssh.rs", "10"),
-    ("crates/dozer-app/src/extensions/browser.rs", "10"),
     ("crates/dozer-app/src/extensions/conversations.rs", "10"),
     ("crates/dozer-app/src/extensions/agent_context.rs", "10"),
     ("crates/dozer-app/src/extensions/group_chat/", "10"),

@@ -6,9 +6,6 @@ use crate::update::NavAction;
 use dozer_model::BookmarkInfo;
 use std::collections::HashMap;
 
-/// 浏览器面板的全部状态。挂在每个 `Workspace` 上(不像 Git Log 挂在
-/// `App` 上)——项目切换靠 `Workspace` 自身生命周期天然隔离,不需要
-/// 手动同步/清空逻辑。
 /// 单个 tab 标题/关闭按钮的 hover 动画状态机,与顶栏 `HoverAnim` 同款
 /// (每拍残余 50%,约 80ms 收敛,snap 0.01):浏览器面板独立 `State`,自带
 /// 进度机,借全局 HOVER_ANIM 定时 redraw 推进(见 `State::advance_hover_anims`)。
@@ -35,6 +32,9 @@ impl TabHover {
     }
 }
 
+/// 浏览器面板的全部状态。挂在每个 `Workspace` 上(不像 Git Log 挂在
+/// `App` 上)——项目切换靠 `Workspace` 自身生命周期天然隔离,不需要
+/// 手动同步/清空逻辑。
 pub struct State {
     pub requests: dozer_panel_host::RequestTrackers,
     pub(crate) tabs: Tabs,
@@ -312,11 +312,11 @@ impl State {
 
 /// 浏览器面板"星标/收藏夹"两个工具栏按钮的 hover 哨兵键——真实 tab 序号
 /// 从 0 递增,不可能等于 `usize::MAX`,用它作键不与 tab 冲突。
-pub const STAR_HOVER_KEY: usize = usize::MAX;
+pub(crate) const STAR_HOVER_KEY: usize = usize::MAX;
 /// 后退/前进/刷新三颗导航按钮的 hover 哨兵键,依次紧挨 `STAR_HOVER_KEY`
 /// 往下排,同样远离真实 tab 序号空间。
-pub const NAV_BACK_KEY: usize = usize::MAX - 1;
-pub const NAV_FORWARD_KEY: usize = usize::MAX - 2;
-pub const NAV_REFRESH_KEY: usize = usize::MAX - 3;
+pub(crate) const NAV_BACK_KEY: usize = usize::MAX - 1;
+pub(crate) const NAV_FORWARD_KEY: usize = usize::MAX - 2;
+pub(crate) const NAV_REFRESH_KEY: usize = usize::MAX - 3;
 /// tab 栏末尾"新标签页"(+)按钮的 hover 哨兵键,继续沿用上面的哨兵键空间。
-pub const NEW_TAB_KEY: usize = usize::MAX - 4;
+pub(crate) const NEW_TAB_KEY: usize = usize::MAX - 4;

@@ -147,11 +147,12 @@ class LibraryDependencies(unittest.TestCase):
         return path
     def test_browser_forbidden_dependencies_reported(self):
         path = self.manifest('[package]\nname = "dozer-panel-browser"\n[dependencies]\n'
-                             'dozer-app = { path = "x" }\ndozer-client = { path = "x" }\ndozer-core = { path = "x" }\n'
+                             'dozer-app = { path = "x" }\ndozer-client = { path = "x" }\ndozer-core = { path = "x" }\ndozerd = { path = "x" }\n'
                              'wry = "0.1"\nwinit = "0.1"\nserde = "1"\n'
                              '[target.\'cfg(unix)\'.dev-dependencies]\nrenamed = { package = "wry", version = "1" }\n')
         problems = g.check_forbidden_dependencies("dozer-panel-browser", path, g.BROWSER_FORBIDDEN)
-        self.assertEqual(len(problems), 6)
+        self.assertEqual(len(problems), 7)
+        self.assertTrue(any("dozerd" in p for p in problems))
         self.assertTrue(all(p.startswith("dozer-panel-browser: forbidden") for p in problems))
         self.assertFalse(any("serde" in p for p in problems))
     def test_clean_manifest_passes(self):
