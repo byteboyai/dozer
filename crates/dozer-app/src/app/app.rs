@@ -4186,6 +4186,7 @@ impl App {
                 .home_browser
                 .desired_webviews()
                 .into_iter()
+                .map(crate::preview::WebviewSpec::from)
                 .map(|mut s| {
                     if app_modal_open {
                         s.visible = false;
@@ -4213,6 +4214,7 @@ impl App {
         ws.browser
             .desired_webviews()
             .into_iter()
+            .map(crate::preview::WebviewSpec::from)
             .map(|mut s| {
                 if app_modal_open {
                     s.visible = false;

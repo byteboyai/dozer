@@ -37,6 +37,20 @@ pub fn t(key: &str, fallback: &str, locale: &str) -> String {
         .text
 }
 
+/// 构造一条带具名参数的 `dozer.web` 文案(不解析,渲染端按 locale 解析)。
+pub fn panel_keyed_args(
+    owner: &str,
+    key: &str,
+    fallback: &str,
+    args: &[(&str, &str)],
+) -> LocalizedText {
+    let mut t = LocalizedText::keyed(owner, key, fallback);
+    for (name, value) in args {
+        t = t.with_arg(*name, *value);
+    }
+    t
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

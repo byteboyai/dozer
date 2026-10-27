@@ -293,7 +293,7 @@ impl HoverAnim {
 /// 避免短暂停留就弹气泡打扰。计时起点记在 `App::hover_tooltip_starts`,由
 /// `Message::Hover` 进入/离开驱动;main.rs 的自驱 redraw 负责在满 2s 那一刻
 /// 重绘出气泡(见 `next_tooltip_wake`)。
-pub(crate) const HOVER_TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+pub(crate) const HOVER_TOOLTIP_DELAY: std::time::Duration = dozer_panel_browser::TAB_TOOLTIP_DELAY;
 /// 顶层级页面：工作区(默认,左右面板区+页签) / 首页落地页(点顶栏 Dozer 进入)。
 /// 默认 `Workspace`——有项目页签时程序启动照常进工作区,Home 是用户主动点击 Dozer 才进;
 /// 一个项目页签都没有时(启动没恢复出项目、关掉/删掉最后一个项目)自动进 Home,见 `app::should_enter_home`。
