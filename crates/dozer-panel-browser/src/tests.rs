@@ -839,9 +839,6 @@ fn global_instance_never_shows_project_bookmark_status() {
     assert_eq!(status.global, None);
 }
 
-// 已知真实缺陷(搬迁前就存在):`CloseTab` 不重排/清理按下标索引的 hover / tooltip_starts,
-// 关中间页签后后面的页签继承悬停状态。按任务要求不在搬迁里修复,单独成提交后去掉 ignore。
-#[ignore = "known bug: CloseTab leaves index-keyed hover/tooltip state stale"]
 #[tokio::test]
 async fn closing_middle_tab_clears_hover_and_tooltip_state() {
     let mut state = State::default();
@@ -887,4 +884,16 @@ async fn closing_middle_tab_clears_hover_and_tooltip_state() {
         !state.hover_tooltip_ready(1),
         "新的第 2 个页签不该继承被关页签的 tooltip 计时"
     );
+}
+
+#[test]
+fn reorder_tab_moves_tooltip_timer_with_the_slot() {
+    let mut state = State::default();
+    state.tabs.open_url("http://b.com".into());
+    state.tabs.open_url("http://c.com".into());
+    let started = std::time::Instant::now() - std::time::Duration::from_secs(3);
+    state.tooltip_starts.insert(0, started);
+    state.reorder_tab(0, 2);
+    assert!(!state.hover_tooltip_ready(0));
+    assert!(state.hover_tooltip_ready(2), "计时跟着被拖动的页签走");
 }

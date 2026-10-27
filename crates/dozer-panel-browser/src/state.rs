@@ -228,7 +228,54 @@ impl State {
             for (i, is_close, h) in remap {
                 self.hover.insert((i, is_close), h);
             }
+            // tooltip 计时同样按页签序号索引,跟着槽位一起挪。
+            let mut starts = Vec::new();
+            for i in lo..=hi {
+                if let Some(t) = self.tooltip_starts.remove(&i) {
+                    let new_i = if i == from {
+                        to
+                    } else if from < to {
+                        i - 1
+                    } else {
+                        i + 1
+                    };
+                    starts.push((new_i, t));
+                }
+            }
+            self.tooltip_starts.extend(starts);
         }
+    }
+
+    /// 关闭页签:关掉 `idx` 的同时丢弃它的 hover / tooltip 状态,并把更高序号页签的
+    /// 按序号索引的状态整体前移一位(哨兵键不受影响)。
+    pub fn close_tab(&mut self, idx: usize) {
+        let old_len = self.tabs.tabs().len();
+        self.tabs.close(idx);
+        if idx >= old_len {
+            return;
+        }
+        let hover = std::mem::take(&mut self.hover);
+        self.hover = hover
+            .into_iter()
+            .filter_map(|((i, c), h)| {
+                if i >= old_len || i < idx {
+                    Some(((i, c), h))
+                } else if i == idx {
+                    None
+                } else {
+                    Some(((i - 1, c), h))
+                }
+            })
+            .collect();
+        let starts = std::mem::take(&mut self.tooltip_starts);
+        self.tooltip_starts = starts
+            .into_iter()
+            .filter_map(|(i, t)| match i.cmp(&idx) {
+                std::cmp::Ordering::Less => Some((i, t)),
+                std::cmp::Ordering::Equal => None,
+                std::cmp::Ordering::Greater => Some((i - 1, t)),
+            })
+            .collect();
     }
 
     /// 收藏夹下拉按钮的 hover 进度,哨兵键 `(STAR_HOVER_KEY, true)`。

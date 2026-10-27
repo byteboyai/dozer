@@ -113,7 +113,7 @@ pub fn update(
         // `Message::Browser(Nav(..))` 执行,这里不碰状态(no-op)。
         Message::Nav(_) => {}
         Message::CloseTab(idx) => {
-            state.tabs.close(idx);
+            state.close_tab(idx);
         }
         Message::Hover(idx, is_close, hovered) => {
             state.hover.entry((idx, is_close)).or_default().set(hovered);
