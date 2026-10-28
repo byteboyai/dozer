@@ -1,0 +1,179 @@
+# Digger 浏览器面板 Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 给 Digger 加一个浏览器面板(多页签、地址栏、后退/前进/刷新、页内跳转地址栏跟随、`target=_blank` 新开页签、收藏夹),复用共享库 `dozer-panel-browser` 的状态机与视图,**网页由独立的、按"不可信内容"设计的 wry 子视图承载**。
+
+**Architecture:** 三层。① `dozer-panel-browser`(已有、已共享):页签/地址栏/收藏夹状态机与视图,仅加两个只读访问器。② **bytehost 新增两块**:`bytehost-webview::browse`(纯策略:导航白名单、IPC 白名单)与 `bytehost-desktop::web_child`(多页签 wry 子视图池 + 受限 builder),Dozer 不改、不迁。③ Digger 侧薄适配:`BrowserDisplay` 实现(用 byteui 页签部件)、`browser_native.rs` 驱动池、`product.rs` 接线、`shell.rs` 注册面板。收藏夹**不新建存储**:`dozer_client::Client` 已实现 `BookmarkService`,`diggerd` 的库里本来就有书签表。
+
+**Tech Stack:** Rust workspace;iced 0.14(标准 `iced::application`,**没有** Dozer 那套每帧运行的自定义事件环);wry 0.55.1(`with_document_title_changed_handler` / `with_on_page_load_handler` / `with_new_window_req_handler` / `with_navigation_handler` / `with_download_started_handler` / `with_incognito` 都有);byteui `v0.5.0`;bytehost `v0.4.14`;Dozer libs `libs-2026-10-28d`。
+
+**Spec:** 无独立设计稿。依据:`docs/superpowers/plans/2026-10-27-panel-browser-lib.md` 及其报告(库的边界与已知缺口);`2026-10-28-x1-cross-repo-migration.md`(byteui 页签/菜单部件、bytehost `native_child` 已就位);Digger `docs/adr/ADR-013`(markdown 宿主的 wry 设置钉死先例);`CLAUDE.md`「应用 webview 走独立 builder,不得复用预览/浏览器的构建路径」;`2026-10-27-panel-browser-lib.md`「不在本 plan 内」里"Digger 接入浏览器面板,另起一期"就是本计划。
+
+## 已裁决与待裁决
+
+**用户已裁决(2026-10-28):**
+- **`file://` 必须支持**,地址栏不拒绝。这条直接决定下面的安全设计:能打开本地文件的页面也**不得**拿到任何宿主权限。
+
+**我的默认(Task 5 前请用户确认,可改):**
+1. 面板放**右栏、单栏(无配对)、紧随 `conversations`**;wire id `digger.browser` 一旦发布不可改。
+2. 状态**按项目**(没有 Dozer 那种"首页全局浏览器");收藏夹仍分全局 / 本项目两档(服务层已支持)。
+3. 切换项目时**销毁**前一个项目的页面(各页签的网址保留在状态里,切回来重新加载),与 Dozer 一致;不做"后台常驻"。原因:库里页签 id 是每个 `Tabs` 自己的计数器,不同项目会撞号,池若常驻必须按 `(项目, 页签)` 建键,v1 不值得。
+4. **v1 不做**:⌘F 页内查找、页面里的 ⌘V 剪贴板回灌(待 Task 0 的 S2 结论再定)、下载、开发者工具、多窗口。
+5. 数据存储**持久**(登录态保留),不用无痕。
+
+**需要你裁决:**
+- **裸路径 `/Users/x/a.html` 仍被拒**,提示"浏览器不支持打开本地文件"——和"`file://` 要支持"矛盾。Digger 是新面板,建议**自动补成 `file://`**(库侧改一处,Dozer 同步变化);或保持现状。**建议补。**
+
+## Global Constraints
+
+- **不可信内容原则:** 浏览器子视图**不注册任何自定义协议**(没有 `dozer://`、没有 `digger-*://`)、**不注入含业务能力的脚本**、IPC 只认带随机 nonce 的最小白名单(焦点 / 鼠标抬起 / 缩放),标题与页面加载**走 wry 原生回调,不靠页面脚本回报**。禁止复用 `build_app_child` 或 Digger 现有可信 `native_child` 的 builder。
+- **wry 默认值不是安全默认**:下载、开发者工具、媒体/定位权限、链接预览、新窗口、导航,每一项必须在 builder 里显式写,并有**读生产源码的钉死测试 + 变异验证**(改一项值,测试必须变红)。
+- 导航白名单:`http`、`https`、`file`、`about:blank`;其余(`javascript:`、`data:`、`blob:`、`view-source:`、`dozer:`、自定义 scheme、`tel:`、`mailto:`…)一律拒绝,**新窗口请求走同一白名单**才新开页签。
+- 共享库发版联动沿用 X1 的教训:bytehost 先发,Dozer 重钉并发 libs tag,Digger 同日重钉;byteui/bytehost/bytegit 钉版两边一致(`check-shared-deps.sh` 0 阻断);**每次推送、打 tag 前先问用户**。
+- Dozer 的外观与行为**不变**(本计划不碰 Dozer 的浏览器 webview 路径与 `runtime.rs`)。`dozer-panel-browser` 只加只读访问器,不改既有公开项。
+- Digger 约束:不碰工作区里 13 份已删除的 S6 文档;**Digger 没有远端,提交只在本地**;提交带 `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`;提交前 `git diff --cached --stat`;**检查类命令单独跑、单独读退出码,通过后再提交**(不要用分号串联);**不在用户主工作区用 `git stash`**。
+- 门禁一律在干净快照跑;面板 UI 字体用系统默认;面板日志来源名用 `browser`(Digger 无 `check-log-scope`,沿用现有 adapters 的日志写法)。
+- 测试覆盖只算"能自动化的";webview 真实渲染、焦点、输入法、层级无头测不了,**全部落到验收清单 I 区**(见 Task 10)。
+
+## Review Focus
+
+1. **页面拿到宿主权限**:`file://` 页面或恶意站点调用 `window.ipc`、访问自定义协议、通过 `window.open`/重定向跳到 `dozer://`/`javascript:`。→ Task 1 `browse_navigation_*`(逐个 scheme 的允许/拒绝表)、Task 2 `web_child_pins_untrusted_content_settings`(无 `with_custom_protocol`、IPC 白名单、默认拒绝媒体权限等)。
+2. **媒体/定位权限被静默批准**:wry 对未信任页面的默认行为需实测,不能假设。→ Task 0 S3(实测),Task 2 把结论钉成测试。
+3. **webview 与 iced 层级**:webview 恒在 iced 之上。iced 浮层(收藏星菜单、页签溢出菜单、输入框右键)打开时,若 webview 仍可见会盖住菜单;切到别的面板后 webview 残留成"幽灵"。→ Task 7 `native_menus_do_not_need_hiding_but_iced_overlays_hide_the_webview`、`leaving_the_panel_destroys_or_parks_every_webview`,Task 2 的 `Probe` 读真实 NSView 状态。
+4. **页签 id 跨项目撞号与池生命周期**:切项目、关项目、关最后一个页签(库回落到 `about:blank`)时池与状态不一致。→ Task 7 `project_switch_destroys_the_previous_projects_webviews`、`closing_the_last_tab_keeps_one_blank_webview`。
+5. **地址栏在标准 iced 下的焦点与全选**:Dozer 靠每帧 `interface.operate` 读焦点;Digger 没有这个循环。焦点判断滞后会让"全选一次性位"重复触发或丢失,中文输入法候选被打断。→ Task 6 `addr_focus_bridge_*`;输入法本身落验收清单 I 区。
+
+---
+
+## 文件结构
+
+| 位置 | 动作 | 职责 |
+|------|------|------|
+| `bytehost/crates/bytehost-webview/src/browse.rs`(新) | 纯策略 | `allows_browse_navigation(url)`、`BrowseIpc` + nonce 白名单,无 wry/iced |
+| `bytehost/crates/bytehost-desktop/src/web_child.rs`(新) | 执行器 | 多页签子视图池、受限 builder、事件回报、`Probe` |
+| `dozer/crates/dozer-panel-browser/src/state.rs` | 加只读访问器 | `State::addr_text() -> &str`(仅此一项,除非 Task 0 的 S4 证明还需要别的) |
+| `digger/crates/desktop/src/shell.rs` | 注册 | `browser_id()`、meta、rules、默认布局、旧布局迁移 |
+| `digger/crates/desktop/src/adapters/browser.rs`(新) | 面板 | 按项目的 `State`、服务、`update` 路由、焦点桥、地址栏菜单 |
+| `digger/crates/desktop/src/adapters/browser_display.rs`(新) | 展示 | `BrowserDisplay` 实现(byteui `panel_tabs` + 分隔条) |
+| `digger/crates/desktop/src/adapters/browser_native.rs`(新) | 原生层 | 驱动 `web_child`:几何、可见性、事件→库 `Message` |
+| `digger/crates/desktop/src/product.rs` | 接线 | `Msg` 变体、激活/可见、几何、订阅、关项目清理 |
+| `digger/crates/desktop/examples/browser_gallery.rs`(新) | 示例 | 仿现有 gallery,人工看视图 |
+| `digger/docs/adr/ADR-016-browser-panel-security.md`(新;当前最新是 ADR-015) | 文档 | 不可信内容的 wry 设置与理由 |
+
+---
+
+### Task 0: 技术探针(先做,出报告,不进产品代码)
+
+六个会推翻设计的未知项,每项在一个**一次性的小程序**里实测(放 `spike/`,随时可删),结论写进 `digger/docs/superpowers/reviews/2026-10-28-browser-panel-spikes.md`。**S1、S3 的结论要用户看过再往下。**
+
+- [ ] **S1 `file://` 能否显示:** wry 0.55 子视图 `load_url("file:///…/a.html")` 在 WKWebView 里是否真的渲染(WKWebView 对 `file://` 常需要 `loadFileURL:allowingReadAccessTo:`);含空格、中文路径;同目录相对资源(`<img src>`、`<link>`)是否能加载;`file://` 页面能否 `fetch` 其它 `file://`。**若普通 `load_url` 渲染不了,记下需要的 wry/objc2 调用,计划 Task 2 据此加分支。**
+- [ ] **S2 子视图里的键盘:** 在 Digger 的 winit 窗口上,点进页面输入框后:能否打字、⌘C/⌘V/⌘A/⌘X 是否直达页面、中文输入法候选是否正常、焦点是否需要 Dozer 那样的"JS mousedown → IPC → `webview.focus()`"桥。**决定 Task 2 要不要注入 init 脚本。**
+- [ ] **S3 未信任页面的权限默认值:** 打开一个请求摄像头/麦克风/定位的测试页:wry 0.55 是静默批准、弹系统提示还是拒绝?能否显式改成拒绝(`WebViewBuilderExtDarwin` 有无对应项,或需 objc2 实现 `WKUIDelegate`)?
+- [ ] **S4 标准 iced 下的焦点读取:** `iced::widget::operation::is_focused(addr_field_id())` 作为 `Task<bool>`,在鼠标点击 / 键盘 Tab / 失焦后触发,能否在一帧内拿到正确值;全选一次性位用 `operation::select_all` 是否稳定。
+- [ ] **S5 层级与隐藏:** 子视图可见时,Digger 现有的原生菜单(`byteui::native_menu`)是否天然盖在它上面;iced 自绘浮层(`menu_overlay`)是否被盖;隐藏(`set_visible(false)` / 移出屏)后 WKWebView 是否继续消耗 CPU。
+- [ ] **S6 池成本:** 同时存活 8 个页签的内存、创建/销毁耗时;隐藏页签是否被系统挂起。
+
+提交:报告 + `spike/` 小程序(**不进 workspace 默认成员**,避免拖慢 CI)。
+
+### Task 1: `bytehost-webview::browse`(纯策略,先写测试)
+
+**Files:** Create `bytehost/crates/bytehost-webview/src/browse.rs`;Modify `lib.rs`。
+
+**Interfaces:**
+- Produces:`pub fn allows_browse_navigation(url: &str) -> bool`;`pub enum BrowseIpc { Focus, MouseUp, ZoomIn, ZoomOut, ZoomReset }` 与 `impl BrowseIpc { pub fn parse(body: &str, nonce: &str) -> Option<Self> }`(与现有 `AppIpc::parse` 同形,**复用它的 nonce 生成 `new_ipc_nonce()`**,不另写一份)。
+
+- [ ] **Step 1: 失败测试** `browse_navigation_allows_only_the_listed_schemes`:允许表 `https://a.com`、`http://a.com:8080/x?y#z`、`file:///Users/me/My%20File.html`、`file:///Users/me/中文.html`、`about:blank`;拒绝表 `javascript:alert(1)`、`data:text/html,x`、`blob:https://a.com/x`、`view-source:https://a.com`、`dozer://a/b`、`digger-review://review-trace/x`、`tel:123`、`mailto:a@b.c`、`ftp://a`、空串、含控制字符/反斜杠的 URL(`https://a.com/\n`、`https://a.com\\@evil/`)、大小写 `HTTPS://A.COM`(**允许**,scheme 不区分大小写)。`browse_ipc_requires_the_nonce_and_a_known_verb`:无 nonce / 错 nonce / 未知动词 / 超长 body 全部 `None`。
+- [ ] **Step 2: 确认失败。**
+- [ ] **Step 3: 实现。** 一行方法说明:用 `url` crate 解析太重,按 `strip_prefix` + 小写 scheme 比对,和 `AppOrigin::allows_navigation` 同风格(拒绝控制字符与反斜杠)。
+- [ ] **Step 4: 通过 + clippy/fmt。Step 5: 提交。**
+
+### Task 2: `bytehost-desktop::web_child`(多页签池 + 受限 builder)
+
+**Files:** Create `bytehost/crates/bytehost-desktop/src/web_child.rs`;Modify `lib.rs`。
+
+**Interfaces:**
+- Consumes:Task 1 的 `allows_browse_navigation`、`BrowseIpc`、`new_ipc_nonce`。
+- Produces(形状,以 `native_child` 的 `Desired`/`plan`/`Host` 为参照,但**按页签池而非单槽**):`WebTabSpec { id: usize, url: String, visible: bool }`;`pub fn plan_pool(existing: &[(usize, String)], desired: &[WebTabSpec], active: Option<usize>) -> Vec<PoolAction>`(纯函数:`Create/Navigate/Show/Hide/Destroy`);`pub struct WebPool`(`new(epoch)`、`sync(window, generation, desired, rect, scale) -> Task<E>`、`nav(window, id, WebNav::{Back,Forward,Refresh})`、`probe(..)`);事件 `WebEvent::{PageLoaded{id,url}, TitleChanged{id,title}, NewTabRequested{url}, Ipc(BrowseIpc)}`。
+
+- [ ] **Step 1: 失败测试(纯函数)** `plan_pool_*`:空→创建;URL 变→只 `Navigate`;只有激活页签可见;页签消失→`Destroy`;关最后一个页签后库回落的 `about:blank` 仍有一个视图;项目切换(换 `generation`)→全部 `Destroy` 再 `Create`。
+- [ ] **Step 2: 失败测试(钉死,读生产源码)** `web_child_pins_untrusted_content_settings`:**必须出现** `.with_devtools(false)`、`.with_download_started_handler(|_, _| false)`、`.with_navigation_handler(`(且内部调 `allows_browse_navigation`)、`.with_new_window_req_handler(`(且同走白名单)、`.with_document_title_changed_handler(`、`.with_on_page_load_handler(`、`.with_allow_link_preview(false)`,以及 S3 结论里的权限拒绝写法;**不得出现** `with_custom_protocol`、`with_initialization_script`(除非 S2 判定需要焦点桥,届时只允许一段带 nonce 的固定脚本)、`NewWindowResponse::Allow`、`.with_devtools(true)`、`.with_incognito(true)`(v1 要持久)。
+- [ ] **Step 3: 确认失败 → 实现。** 池的句柄表是模块私有 `thread_local`,**与 `native_child`、`app_webview` 的永不共用**;所有 wry 调用在 `iced::window::run` 里。`file://` 的特殊加载路径按 S1 结论实现。
+- [ ] **Step 4: 变异验证:** 依次把 devtools 改 `true`、下载处理改放行、导航处理改恒 `true`、删掉新窗口白名单检查,**每一种都必须让钉死测试变红**,再恢复(用 python 改,不要用多行 `sed`)。
+- [ ] **Step 5:** `cargo test --workspace --lib --tests`、clippy、fmt、`scripts/check-deps.sh`;提交。
+
+### Task 3: 库只读访问器
+
+**Files:** Modify `dozer/crates/dozer-panel-browser/src/state.rs`;Test `tests.rs`。
+
+- [ ] **Step 1: 失败测试** `addr_text_mirrors_the_address_buffer`:`State` 在 `AddrInput("abc")` 后 `addr_text() == "abc"`,`AddrSubmit` 后为空。
+- [ ] **Step 2: 实现** `pub fn addr_text(&self) -> &str`(转发 `Tabs::addr_buffer`)。**仅此一项**;若 Task 0 的 S4 发现还需要别的只读入口(例如当前激活页签的 URL 以便"复制网址"),在这里一并加,每个配一条测试。
+- [ ] **Step 3:** 若 裁决「裸路径自动补 `file://`」:改 `Tabs::addr_submit` 对以 `/`、`~/` 开头的输入返回 `file://` URL,**更新**现有测试 `addr_submit_rejects_local_paths_and_blank_input` 与 `addr_focus_and_submit_parses_url_and_rejects_local_paths` 的期望(这是用户裁决带来的有意变化,提交说明单独写明),并在验收清单 H13 里同步。
+- [ ] **Step 4:** 库全部测试 + Dozer 全 workspace 测试通过。提交。
+
+### Task 4: 发版联动
+
+- [ ] **Step 1:** bytehost 版本 `v0.4.14` → **`v0.4.15`**(纯追加,两个新模块),**请求用户确认**后推送并打 tag。
+- [ ] **Step 2:** Dozer 重钉 bytehost、门禁(全 workspace 测试、`check-i18n`、`check-log-scope`、`check-shared-deps`、fmt),发新 libs tag,**请求确认**后推送。
+- [ ] **Step 3:** Digger 同日重钉,先不改代码,现有测试须 0 失败(基线 836)。提交。
+
+### Task 5: Digger 注册面板(`shell.rs`)
+
+**Files:** Modify `digger/crates/desktop/src/shell.rs`。
+
+- [ ] **Step 1: 失败测试:** `browser_panel_id_is_the_persisted_wire_name`(`digger.browser`)、`the_default_layout_places_the_browser_after_conversations`、`an_old_file_without_the_browser_gets_it_after_conversations_and_keeps_selection`、`browser_migration_is_idempotent`、`an_old_file_with_an_empty_right_rail_gets_the_browser_first`、`browser_has_no_pair_rules_like_markdown`(`rules(&browser_id())` 为 `None`,与 `digger.markdown`/`digger.info`/`digger.apps` 同类:单栏、不配对,所在侧由 `defaults()` 与迁移决定)——**逐条仿群聊(`group_chat_after_agent`)的同名测试**。
+- [ ] **Step 2: 实现:** `browser_id()`、`all_panels()`、`meta`(标题"浏览器",图标 `IconKind::Globe`)、`rules` **不加条目**(同 markdown,落到 `_ => None`)、`defaults()` 右栏顺序、读盘前 JSON 迁移 `browser_after_conversations`(幂等、只改读入文本不写盘、更高版本文件不覆盖)。
+- [ ] **Step 3:** `shell.json` 的 wire 名**发布即冻结**,在测试里钉死。门禁 + 提交。
+
+### Task 6: 面板适配(`adapters/browser.rs` + `browser_display.rs`)
+
+**Interfaces:**
+- Consumes:库 `State`/`Message`/`update`/`view`/`BrowserDisplay`/`addr_field_id`;byteui `panel_tabs`;`dozer_client::Client`(`BookmarkService`);G1 的"整框语义"菜单模式(`conversations_search_menu.rs`)。
+- Produces:`BrowserPanel { states: HashMap<i64, State>, … }`,`update(pid, Message, project) -> Task<Msg>`,`view(project, area)`,`close_project(pid)`。
+
+- [ ] **Step 1: 失败测试(`BrowserDisplay`)**:`tab_uses_byteui_panel_tab_and_carries_hover_and_tooltip`(用 byteui 部件,悬停值透传)、`region_projection_uses_digger_tokens`、`bookmarks_divider_only_built_when_open`(沿用库已有的 fake 思路)。
+- [ ] **Step 2: 失败测试(焦点桥,Review Focus 5)** `addr_focus_bridge_sets_state_once_per_change`、`select_all_runs_once_after_focus_gain_and_not_again`:点击或按键后触发 `operation::is_focused(addr_field_id())`,结果经 `State::set_addr_focused` 写入;`take_addr_select_all_pending()` 为真时发一次 `operation::select_all`。**S4 的结论决定触发时机**(鼠标事件 / 键盘事件 / 定时)。
+- [ ] **Step 3: 失败测试(地址栏菜单)** 复用 G1 的 `SearchEdit` 形状:剪切/复制/粘贴/全选,整框语义,文本来自 Task 3 的 `addr_text()`;`Message::TextInputMenuOpen` 弹原生菜单(仅 macOS)。收藏星与页签溢出也走原生菜单(`tab_overflow_items`、库的 `StarClick` 菜单)。
+- [ ] **Step 4: 实现。** 日志、错误走 Digger 现有 notice 机制(库的 `State.error` 是内联持久错误,留在原位)。**提交。**
+
+### Task 7: 原生层(`browser_native.rs`)
+
+**Interfaces:** Consumes `bytehost_desktop::web_child::{WebPool, WebTabSpec, WebEvent, WebNav}`;库 `State::desired_webviews()`、`chrome_top_px()`。Produces:`BrowserNative`(`desired(rect, visible, generation)`、`take_receiver()`、`nav(NavAction)`),`Event`。
+
+- [ ] **Step 1: 失败测试(几何)** `webview_rect_insets_by_chrome_top_px_and_margins`:`y = content.y + chrome_top_px()`、`h = content.h − chrome_top_px() − 8`、`x = content.x + 8`、`w = content.w − 16`(与 Dozer `webview_geometry.rs` 的 `PanelKind::Web` 分支同式),缩放 1 与 2;并**读 `browser_native.rs` 的生产源码钉住**只读 `chrome_top_px()`、无手写像素常数(同 Dozer 的几何钉死测试)。
+- [ ] **Step 2: 失败测试(可见性与生命周期,Review Focus 3、4)** `hidden_when_panel_not_visible`、`iced_overlays_hide_the_webview_but_native_menus_do_not`、`leaving_the_panel_destroys_or_parks_every_webview`、`project_switch_destroys_the_previous_projects_webviews`、`closing_the_last_tab_keeps_one_blank_webview`、`stale_generation_events_are_ignored`(项目关闭后迟到的页面事件不得改任何状态)。
+- [ ] **Step 3: 失败测试(事件映射)** `page_loaded_becomes_Loaded`、`title_changed_becomes_TitleLoaded`、`new_tab_request_becomes_OpenUrl_only_if_allowed`、`nav_back_forward_use_history_and_refresh_uses_reload`(后退/前进用 `window.history.back()/forward()` 经宿主侧 `evaluate_script`,刷新用原生 `reload()`,与 Dozer 一致;**不向页面注入任何脚本**)。
+- [ ] **Step 4: 实现并提交。**
+
+### Task 8: `product.rs` 接线
+
+- [ ] **Step 1: 失败测试(产品级,用 fake 原生层,仿 `group_chat_native_tests.rs`):** 打开面板→创建 webview;切页签→只有激活者可见;`OpenUrl` 经 `Msg::Browser` 路由到正确的项目;关闭项目→`close_project` 清理;收藏夹分隔条拖动(库发 `ColumnDragStart`,宿主用鼠标移动换算 `bookmarks_split`)夹在合理范围且不为 NaN;`shell.json` 里面板被收起/隐藏时 webview 隐藏。
+- [ ] **Step 2: 实现:** `Msg::Browser(i64, Message)`、`Msg::BrowserNative(Event)`;`panel_visible`/激活钩子;几何 rect 进 `content_of(&shell::browser_id())`;订阅(原生事件 + 悬停动画 tick + tooltip 唤醒);关项目清理;重试/失败进 notice。
+- [ ] **Step 3:** Digger 干净快照整套门禁(build/test/clippy/fmt、`check-host-deps.sh`(含 `--self-test`)、`check-shared-deps.sh`、`check-shell-regions.sh`)。提交。
+
+### Task 9: 示例与文档
+
+- [ ] `examples/browser_gallery.rs`(仿其它 gallery,无真实 webview,看视图);ADR-016 写明不可信内容的 wry 设置、导航白名单、`file://` 的取舍与已知风险(**本地文件页面能读同源的其它本地文件**,不是宿主权限,但用户要知道);Digger 的 open-items 与 README 里面板清单更新。提交。
+
+### Task 10: 验收清单与收口
+
+- [ ] 在 `digger/docs/superpowers/reviews/2026-10-28-s7-s8-closeout-acceptance.md` 加 **I 区「Digger 浏览器面板」**(沿用 H 区的 15 项,外加):`file://` 打开(含空格/中文路径)、页面请求摄像头/定位**不被静默批准**、点页面里任何 `dozer://`/`javascript:` 链接**不跳走**、下载被拒、`target=_blank` 开新页签、切项目后旧页面被销毁、iced 浮层(收藏星菜单)打开时网页不盖住它、地址栏中文输入法、⌘C/⌘V 在页面里、关最后一个页签回到空白页、webview 顶边紧贴地址栏下沿(缩放 1 与 1.5)。
+- [ ] 记忆:当前版本组与"Digger 浏览器面板"状态;**请用户目测验收后停下**。
+
+---
+
+## 范围外(明确不做)
+
+- 把 Dozer 的浏览器 webview 迁到 `web_child`(Dozer 现在装着 `dozer://` 协议和完整 IPC 的预览 builder 去承载网页,**这是既有的安全隐患,但不是本计划**;建议另立一份计划评估)。
+- ⌘F 页内查找、下载管理、书签导入导出、历史记录页面、多窗口、扩展、无痕模式、自定义 User-Agent。
+- 非 macOS 的功能(只要求能编译)。
+
+## 顺序与依赖
+
+Task 0 → (用户看 S1/S3)→ Task 1 → Task 2 → Task 3 → Task 4(发版联动)→ Task 5 → Task 6 → Task 7 → Task 8 → Task 9 → Task 10。Task 5(`shell.rs` 注册)与 Task 1–3 互不依赖,可并行,但**注册面板之前必须先有能用的原生层**,否则用户打开一个空面板。我没有可靠的工时依据,不给估计。
+
+## 最大的未知
+
+1. **S1:`file://` 在 WKWebView 子视图里能不能直接显示。** 用户要求必须支持,如果需要 `loadFileURL` 级别的 objc2 调用,Task 2 会变大。
+2. **S3:未信任页面的媒体/定位权限能不能在 wry 0.55 里显式拒绝。** 如果 wry 没有对应开关、必须自己实现 `WKUIDelegate`,这是个独立的风险点,可能要先发 bytehost 的一个小版本。
+3. **S2:是否必须注入脚本做焦点桥。** 注入就意味着页面能看到 `window.ipc`;白名单 + nonce 限制了影响,但"页面能向宿主发消息"这件事本身要写进 ADR。
