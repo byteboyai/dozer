@@ -27,7 +27,7 @@
 
 ## Global Constraints
 
-- **不可信内容原则:** 浏览器子视图**不注册任何自定义协议**(没有 `dozer://`、没有 `digger-*://`)、**不注入含业务能力的脚本**、IPC 只认带随机 nonce 的最小白名单(焦点 / 鼠标抬起 / 缩放),标题与页面加载**走 wry 原生回调,不靠页面脚本回报**。禁止复用 `build_app_child` 或 Digger 现有可信 `native_child` 的 builder。
+- **不可信内容原则:** 浏览器子视图**不注册任何自定义协议**(没有 `dozer://`、没有 `digger-*://`)、**不注入脚本**、**不装 IPC 处理器、不注入任何初始化脚本**(S2 实测:Edit 菜单足以让 ⌘C/⌘V/⌘X 生效,中文输入法本来就正常),标题与页面加载**走 wry 原生回调**。禁止复用 `build_app_child` 或 Digger 现有可信 `native_child` 的 builder。
 - **wry 默认值不是安全默认**:下载、开发者工具、媒体/定位权限、链接预览、新窗口、导航,每一项必须在 builder 里显式写,并有**读生产源码的钉死测试 + 变异验证**(改一项值,测试必须变红)。
 - 导航白名单:`http`、`https`、`file`、`about:blank`;其余(`javascript:`、`data:`、`blob:`、`view-source:`、`dozer:`、自定义 scheme、`tel:`、`mailto:`…)一律拒绝,**新窗口请求走同一白名单**才新开页签。
 - 共享库发版联动沿用 X1 的教训:bytehost 先发,Dozer 重钉并发 libs tag,Digger 同日重钉;byteui/bytehost/bytegit 钉版两边一致(`check-shared-deps.sh` 0 阻断);**每次推送、打 tag 前先问用户**。
@@ -38,7 +38,7 @@
 
 ## Review Focus
 
-1. **页面拿到宿主权限**:`file://` 页面或恶意站点调用 `window.ipc`、访问自定义协议、通过 `window.open`/重定向跳到 `dozer://`/`javascript:`。→ Task 1 `browse_navigation_*`(逐个 scheme 的允许/拒绝表)、Task 2 `web_child_pins_untrusted_content_settings`(无 `with_custom_protocol`、IPC 白名单、默认拒绝媒体权限等)。
+1. **页面拿到宿主权限**:`file://` 页面或恶意站点调用 `window.ipc`、访问自定义协议、通过 `window.open`/重定向跳到 `dozer://`/`javascript:`。→ Task 1 `browse_navigation_*`(逐个 scheme 的允许/拒绝表)、Task 2 `web_child_pins_untrusted_content_settings`(无 `with_custom_protocol`、默认拒绝媒体权限等)。
 2. **媒体/定位权限被静默批准**:S3 已证实 wry 对摄像头/麦克风请求**无条件 `Grant`**,目前只因 `navigator.mediaDevices` 没暴露而够不着(休眠的隐患,依赖 wry/WebKit 默认值)。定位未测。→ Task 2 `media_capture_requests_are_denied_by_the_proxy_delegate`(代理拒绝,纵深防御)。
 3. **webview 与 iced 层级**:webview 恒在 iced 之上。iced 浮层(收藏星菜单、页签溢出菜单、输入框右键)打开时,若 webview 仍可见会盖住菜单;切到别的面板后 webview 残留成"幽灵"。→ Task 7 `native_menus_do_not_need_hiding_but_iced_overlays_hide_the_webview`、`leaving_the_panel_destroys_or_parks_every_webview`,Task 2 的 `Probe` 读真实 NSView 状态。
 4. **页签 id 跨项目撞号与池生命周期**:切项目、关项目、关最后一个页签(库回落到 `about:blank`)时池与状态不一致。→ Task 7 `project_switch_destroys_the_previous_projects_webviews`、`closing_the_last_tab_keeps_one_blank_webview`。
@@ -50,7 +50,7 @@
 
 | 位置 | 动作 | 职责 |
 |------|------|------|
-| `bytehost/crates/bytehost-webview/src/browse.rs`(新) | 纯策略 | `allows_browse_navigation(url)`、`BrowseIpc` + nonce 白名单,无 wry/iced |
+| `bytehost/crates/bytehost-webview/src/browse.rs`(新) | 纯策略 | `allows_browse_navigation(url)`,无 wry/iced |
 | `bytehost/crates/bytehost-desktop/src/web_child.rs`(新) | 执行器 | 多页签子视图池、受限 builder、事件回报、`Probe` |
 | `dozer/crates/dozer-panel-browser/src/state.rs` | 加只读访问器 | `State::addr_text() -> &str`(仅此一项,除非 Task 0 的 S4 证明还需要别的) |
 | `digger/crates/desktop/src/shell.rs` | 注册 | `browser_id()`、meta、rules、默认布局、旧布局迁移 |
@@ -68,7 +68,7 @@
 六个会推翻设计的未知项,在一个**一次性的小程序**里实测(`dozer/spike/browser-probe/`,已在仓库根 `Cargo.toml` 的 `exclude` 里,随时可删),结论与原始输出在 `digger/docs/superpowers/reviews/2026-10-28-browser-panel-spikes.md`。**结论速览:**
 
 - **S1 ✅ `file://` 直接能用**,不需要 `loadFileURL`;同目录子资源能加载;页面 `fetch` 不到其它本地文件。含空格/中文的 URL 在 macOS 26 上被自动百分号编码、不 panic(旧系统未测)。**发现:wry 没有"导航失败"回调。**
-- **S2 ⏳ 待你手动试**(报告里有运行步骤)。静态证据:子 webview 的 `performKeyEquivalent` 恒 `NO`,⌘C/V/X/A 很可能不直达页面。
+- **S2 ✅ 装一个标准 Edit 菜单即可,不需要注入任何脚本。** 打字、中文输入法本来就正常;没有 Edit 菜单时 ⌘C/⌘V/⌘X 完全不生效(`copy`/`paste`/`cut` 事件 0 次),装了就生效(2/4/2 次)。待确认:⌘A 是否全选、Edit 菜单是否影响 iced 输入框的 ⌘ 组合键。
 - **S3 ✅ wry 对所有来源的摄像头/麦克风请求无条件 `Grant`,但当前 WKWebView 里 `navigator.mediaDevices` 是 `undefined`,够不着(休眠的隐患)**;用 objc2 代理委托拒绝并转发其余方法**已验证可行**。
 - **S4 ✅ 标准 iced 下 `focus`/`is_focused` 可用。**
 - **S5 ➖ 未做**(项目既有定论)。
@@ -89,9 +89,9 @@
 **Files:** Create `bytehost/crates/bytehost-webview/src/browse.rs`;Modify `lib.rs`。
 
 **Interfaces:**
-- Produces:`pub fn allows_browse_navigation(url: &str) -> bool`;`pub enum BrowseIpc { Focus, MouseUp, ZoomIn, ZoomOut, ZoomReset }` 与 `impl BrowseIpc { pub fn parse(body: &str, nonce: &str) -> Option<Self> }`(与现有 `AppIpc::parse` 同形,**复用它的 nonce 生成 `new_ipc_nonce()`**,不另写一份)。
+- Produces:`pub fn allows_browse_navigation(url: &str) -> bool`;(S2 实测后**不再需要 IPC 白名单**:浏览器子视图不装 IPC,所以这里只有导航策略这一个函数。)
 
-- [ ] **Step 1: 失败测试** `browse_navigation_allows_only_the_listed_schemes`:允许表 `https://a.com`、`http://a.com:8080/x?y#z`、`file:///Users/me/My%20File.html`、`file:///Users/me/中文.html`、`about:blank`;拒绝表 `javascript:alert(1)`、`data:text/html,x`、`blob:https://a.com/x`、`view-source:https://a.com`、`dozer://a/b`、`digger-review://review-trace/x`、`tel:123`、`mailto:a@b.c`、`ftp://a`、空串、含控制字符/反斜杠的 URL(`https://a.com/\n`、`https://a.com\\@evil/`)、大小写 `HTTPS://A.COM`(**允许**,scheme 不区分大小写)。`browse_ipc_requires_the_nonce_and_a_known_verb`:无 nonce / 错 nonce / 未知动词 / 超长 body 全部 `None`。
+- [ ] **Step 1: 失败测试** `browse_navigation_allows_only_the_listed_schemes`:允许表 `https://a.com`、`http://a.com:8080/x?y#z`、`file:///Users/me/My%20File.html`、`file:///Users/me/中文.html`、`about:blank`;拒绝表 `javascript:alert(1)`、`data:text/html,x`、`blob:https://a.com/x`、`view-source:https://a.com`、`dozer://a/b`、`digger-review://review-trace/x`、`tel:123`、`mailto:a@b.c`、`ftp://a`、空串、含控制字符/反斜杠的 URL(`https://a.com/\n`、`https://a.com\\@evil/`)、大小写 `HTTPS://A.COM`(**允许**,scheme 不区分大小写)。
 - [ ] **Step 2: 确认失败。**
 - [ ] **Step 3: 实现。** 一行方法说明:用 `url` crate 解析太重,按 `strip_prefix` + 小写 scheme 比对,和 `AppOrigin::allows_navigation` 同风格(拒绝控制字符与反斜杠)。
 - [ ] **Step 4: 通过 + clippy/fmt。Step 5: 提交。**
@@ -101,17 +101,18 @@
 **Files:** Create `bytehost/crates/bytehost-desktop/src/web_child.rs`;Modify `lib.rs`。
 
 **Interfaces:**
-- Consumes:Task 1 的 `allows_browse_navigation`、`BrowseIpc`、`new_ipc_nonce`。
-- Produces(形状,以 `native_child` 的 `Desired`/`plan`/`Host` 为参照,但**按页签池而非单槽**):`WebTabSpec { id: usize, url: String, visible: bool }`;`pub fn plan_pool(existing: &[(usize, String)], desired: &[WebTabSpec], active: Option<usize>) -> Vec<PoolAction>`(纯函数:`Create/Navigate/Show/Hide/Destroy`);`pub struct WebPool`(`new(epoch)`、`sync(window, generation, desired, rect, scale) -> Task<E>`、`nav(window, id, WebNav::{Back,Forward,Refresh})`、`probe(..)`);事件 `WebEvent::{PageLoaded{id,url}, TitleChanged{id,title}, NewTabRequested{url}, Ipc(BrowseIpc)}`。
+- Consumes:Task 1 的 `allows_browse_navigation`。
+- Produces(形状,以 `native_child` 的 `Desired`/`plan`/`Host` 为参照,但**按页签池而非单槽**):`WebTabSpec { id: usize, url: String, visible: bool }`;`pub fn plan_pool(existing: &[(usize, String)], desired: &[WebTabSpec], active: Option<usize>) -> Vec<PoolAction>`(纯函数:`Create/Navigate/Show/Hide/Destroy`);`pub struct WebPool`(`new(epoch)`、`sync(window, generation, desired, rect, scale) -> Task<E>`、`nav(window, id, WebNav::{Back,Forward,Refresh})`、`probe(..)`);事件 `WebEvent::{PageLoaded{id,url}, TitleChanged{id,title}, NewTabRequested{url}, NavigationStalled{id,url}}`。
 
 - [ ] **Step 1: 失败测试(纯函数)** `plan_pool_*`:空→创建;URL 变→只 `Navigate`;只有激活页签可见;页签消失→`Destroy`;关最后一个页签后库回落的 `about:blank` 仍有一个视图;项目切换(换 `generation`)→全部 `Destroy` 再 `Create`。
-- [ ] **Step 2: 失败测试(钉死,读生产源码)** `web_child_pins_untrusted_content_settings`:**必须出现** `.with_devtools(false)`、`.with_download_started_handler(|_, _| false)`、`.with_navigation_handler(`(且内部调 `allows_browse_navigation`)、`.with_new_window_req_handler(`(且同走白名单)、`.with_document_title_changed_handler(`、`.with_on_page_load_handler(`、`.with_allow_link_preview(false)`,以及 S3 结论里的权限拒绝写法;**不得出现** `with_custom_protocol`、`with_initialization_script`(除非 S2 判定需要焦点桥,届时只允许一段带 nonce 的固定脚本)、`NewWindowResponse::Allow`、`.with_devtools(true)`、`.with_incognito(true)`(v1 要持久)。
+- [ ] **Step 2: 失败测试(钉死,读生产源码)** `web_child_pins_untrusted_content_settings`:**必须出现** `.with_devtools(false)`、`.with_download_started_handler(|_, _| false)`、`.with_navigation_handler(`(且内部调 `allows_browse_navigation`)、`.with_new_window_req_handler(`(且同走白名单)、`.with_document_title_changed_handler(`、`.with_on_page_load_handler(`、`.with_allow_link_preview(false)`,以及 S3 结论里的权限拒绝写法;**不得出现** `with_custom_protocol`、`with_initialization_script`、`with_ipc_handler`、`NewWindowResponse::Allow`、`.with_devtools(true)`、`.with_incognito(true)`(v1 要持久)。
 - [ ] **Step 3: 确认失败 → 实现。** 池的句柄表是模块私有 `thread_local`,**与 `native_child`、`app_webview` 的永不共用**;所有 wry 调用在 `iced::window::run` 里。**`file://` 不需要特殊加载路径**(S1:普通 `with_url`/`load_url` 即可)。
 - [ ] **Step 3b(探针带来的新增项,先写失败测试):**
   - `urls_are_percent_encoded_before_reaching_wry`:纯函数 `encode_for_wry(url) -> String`,含空格 / 中文 / 已编码 / 非法字符的 `http`、`file` URL 都得到合法 URL,**幂等**(编码两次结果不变),不改动已编码部分(S1:macOS 26 上 wry 自己会编码、不 panic,但旧系统可能返回 nil 然后 `unwrap` panic,所以宿主自己编码,并在 ADR 写明最低 macOS)。
   - `a_navigation_that_never_starts_is_reported_as_failed`:wry 没有"导航失败"回调(S1:不可达地址不会有 `Started`/`Finished`);池在发出导航后 N 秒内没收到该页签的 `Started` 就产出 `WebEvent::NavigationStalled{id,url}`,宿主据此提示"无法打开"。
   - `media_capture_requests_are_denied_by_the_proxy_delegate`:把 S3 的 `DenyMediaProxy` 搬进来(依赖 `objc2`、`objc2-web-kit` 的 `WKUIDelegate`/`WKFrameInfo`/`WKSecurityOrigin`);断言:装上后 `UIDelegate` 的类是代理、对新窗口 / 文件选择 / 媒体捕获三个可选方法 `respondsToSelector` 仍为真、直接调用媒体捕获给 `Deny`;代理被 `thread_local` 保活(WKWebView 对委托是 weak 引用);源码钉死测试里加上"必须调用代理安装函数"。
-  - **S2 的结果决定**:若 Edit 菜单能让 ⌘C/⌘V 直达页面 → 不注入任何脚本(最佳);否则才引入带 nonce 的最小脚本(只有 focus / mouseup / ⌘ 组合键桥),并在 ADR 写明"页面能看到 `window.ipc`"。
+  - **S2 已决(实测)**:Edit 菜单让 ⌘C/⌘V/⌘X 直达页面 → **`web_child` 不注入任何初始化脚本、不装 IPC 处理器**,页面看不到 `window.ipc`。钉死测试里 `with_initialization_script` 与 `with_ipc_handler` 都进"不得出现"。因此 Task 1 的 `BrowseIpc`(nonce 白名单)**不再需要,删除**。
+  - `standard_edit_menu_items() -> Vec<EditItem>`(纯函数:Cut `cut:` ⌘X、Copy `copy:` ⌘C、Paste `paste:` ⌘V、Select All `selectAll:` ⌘A,目标为空)与 `install_standard_edit_menu()`(objc2,仅 macOS,必须在主线程,幂等);测试断言四项的标题、选择器、快捷键。
 - [ ] **Step 4: 变异验证:** 依次把 devtools 改 `true`、下载处理改放行、导航处理改恒 `true`、删掉新窗口白名单检查、跳过代理委托安装,**每一种都必须让钉死测试变红**,再恢复(用 python 改,不要用多行 `sed`)。
 - [ ] **Step 5:** `cargo test --workspace --lib --tests`、clippy、fmt、`scripts/check-deps.sh`;提交。
 
@@ -161,6 +162,7 @@
 ### Task 8: `product.rs` 接线
 
 - [ ] **Step 1: 失败测试(产品级,用 fake 原生层,仿 `group_chat_native_tests.rs`):** 打开面板→创建 webview;切页签→只有激活者可见;`OpenUrl` 经 `Msg::Browser` 路由到正确的项目;关闭项目→`close_project` 清理;收藏夹分隔条拖动(库发 `ColumnDragStart`,宿主用鼠标移动换算 `bookmarks_split`)夹在合理范围且不为 NaN;`shell.json` 里面板被收起/隐藏时 webview 隐藏。
+- [ ] **Step 1b: Edit 菜单(S2 实测的必要条件):** Digger 自己不装主菜单,浏览器面板第一次显示时(或应用启动时)调 `install_standard_edit_menu()`,macOS 限定、幂等。**风险:** 菜单会接管 ⌘C/⌘V/⌘X/⌘A;理论上 first responder 是 winit 视图(不响应 `copy:`)时菜单项被禁用、按键落到 `keyDown`,iced 输入框不受影响,但**这是推论没实测**——先在探针里确认(见验收 I 区),再接入;失败的话改为只在 webview 是 first responder 时启用。
 - [ ] **Step 2: 实现:** `Msg::Browser(i64, Message)`、`Msg::BrowserNative(Event)`;`panel_visible`/激活钩子;几何 rect 进 `content_of(&shell::browser_id())`;订阅(原生事件 + 悬停动画 tick + tooltip 唤醒);关项目清理;重试/失败进 notice。
 - [ ] **Step 3:** Digger 干净快照整套门禁(build/test/clippy/fmt、`check-host-deps.sh`(含 `--self-test`)、`check-shared-deps.sh`、`check-shell-regions.sh`)。提交。
 
@@ -170,7 +172,7 @@
 
 ### Task 10: 验收清单与收口
 
-- [ ] 在 `digger/docs/superpowers/reviews/2026-10-28-s7-s8-closeout-acceptance.md` 加 **I 区「Digger 浏览器面板」**(沿用 H 区的 15 项,外加):`file://` 打开(含空格/中文路径)、页面请求摄像头/定位**不被静默批准**、点页面里任何 `dozer://`/`javascript:` 链接**不跳走**、下载被拒、`target=_blank` 开新页签、切项目后旧页面被销毁、iced 浮层(收藏星菜单)打开时网页不盖住它、地址栏中文输入法、⌘C/⌘V 在页面里、关最后一个页签回到空白页、webview 顶边紧贴地址栏下沿(缩放 1 与 1.5)、`file://` 页面的同目录图片/样式能加载、页面读不到其它本地文件(`fetch` 失败)、**导航失败(不可达地址)有明确提示而不是地址栏已变页面不变**、点击 / Tab / 失焦后地址栏焦点与全选的时机。
+- [ ] 在 `digger/docs/superpowers/reviews/2026-10-28-s7-s8-closeout-acceptance.md` 加 **I 区「Digger 浏览器面板」**(沿用 H 区的 15 项,外加):`file://` 打开(含空格/中文路径)、页面请求摄像头/定位**不被静默批准**、**Edit 菜单装上后,iced 输入框(地址栏、会话搜索框、群聊输入)里的 ⌘C/⌘V/⌘X/⌘A 仍然可用**、页面里 ⌘A 真的全选、⌘C/⌘V/⌘X 在页面里生效、点页面里任何 `dozer://`/`javascript:` 链接**不跳走**、下载被拒、`target=_blank` 开新页签、切项目后旧页面被销毁、iced 浮层(收藏星菜单)打开时网页不盖住它、地址栏中文输入法、⌘C/⌘V 在页面里、关最后一个页签回到空白页、webview 顶边紧贴地址栏下沿(缩放 1 与 1.5)、`file://` 页面的同目录图片/样式能加载、页面读不到其它本地文件(`fetch` 失败)、**导航失败(不可达地址)有明确提示而不是地址栏已变页面不变**、点击 / Tab / 失焦后地址栏焦点与全选的时机。
 - [ ] 记忆:当前版本组与"Digger 浏览器面板"状态;**请用户目测验收后停下**。
 
 ---
