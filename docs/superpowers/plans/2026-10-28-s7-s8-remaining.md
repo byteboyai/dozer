@@ -9,7 +9,7 @@
 | R1 | ~~D4 风险:已存为「收起」的群聊布局无入口展开~~ **已完成** | 核实+修复 | 无 | Digger | 1 |
 | R2 | 新行为的人工 GUI 验收 | 验收 | 是 | 无 | 2(与 R1 同一次) |
 | R3 | Digger 没有远端,提交只在本地 | 配置 | 给仓库地址 | Digger | 随时,越早越好 |
-| R4 | Codebuddy 群聊发言 | 验证+小改 | 登录 CodeBuddy | Dozer `group_adapter.rs` | 3 |
+| R4 | ~~Codebuddy 群聊发言~~ **已完成**(Dozer `53a7100a`,tag `libs-2026-10-28b`;Digger 已重钉) | 验证+小改 | 无 | Dozer `group_adapter.rs` | 3 |
 | R5 | G1 搜索框右键菜单 | 新功能 | 中文输入法人工验证 | Digger | 4(独立立项) |
 | R6 | Opencode 群聊发言 | 阻塞于上游 | 无 | Dozer | 搁置,见触发条件 |
 | R7 | X1 跨仓库迁移 | 跨仓库 | 排期 | byteui、bytehost、双方重钉 | 单独计划 |
@@ -50,7 +50,9 @@
 - [ ] 推送前看 `git log origin/main..main`(首次推送则是整个历史),确认不含不该公开的内容;**工作区里 13 份已删除的 S6 文档仍是未提交状态,不要被一并提交**。
 - [ ] 推送后 `check-shared-deps.sh` 里「本地领先 origin」类提示应消失;记入记忆索引。
 
-## R4 Codebuddy 群聊发言
+## R4 Codebuddy 群聊发言 —— 已完成(2026-10-28)
+
+**结果:** 登录后金丝雀实测通过,已实现并经真实 runner 冒烟 5/5;`libs-2026-10-28b` 已推送,Digger 同日重钉、弹窗说明已加入 Codebuddy。下面的勾选项保留作记录。
 
 **阻塞:** 调研时 CodeBuddy 未登录(401),没有只读的行为证据。参数面与 Claude 同构(`--tools`、`--allowedTools`/`--disallowedTools`、`--no-session-persistence`)。
 
