@@ -91,8 +91,13 @@ pub fn content_pane_bounds_for(
             // 浏览器(Web)是单栏(无配对),放大态占满整条放大盒子,side
             // 不影响它的矩形——但仍需先过上面的 `side != showing_side` 判断。
             PanelKind::Web => {
-                let y = y0 + byteui::theme::geometry::browser_chrome_top_px();
-                let h = (avail_h - byteui::theme::geometry::browser_chrome_top_px() - 8.0).max(0.0);
+                let find = state.browser_find_extra_px;
+                let y = y0 + byteui::theme::geometry::browser_chrome_top_px() + find;
+                let h = (avail_h
+                    - byteui::theme::geometry::browser_chrome_top_px()
+                    - find
+                    - 8.0)
+                    .max(0.0);
                 let x = x0 + 8.0;
                 let w = (avail_w - 16.0).max(0.0);
                 (x, y, w, h)
@@ -198,7 +203,9 @@ pub fn content_pane_bounds_for(
         // Web 单栏没有配对,占用**整条**左/右面板区宽——不是 `pair_x0_and_width`
         // 返回的 `zone_w`(扣过中间分隔线的配对宽),要用原始区宽。
         PanelKind::Web => {
-            let y = y_top(byteui::theme::geometry::browser_chrome_top_px());
+            let y = y_top(
+                byteui::theme::geometry::browser_chrome_top_px() + state.browser_find_extra_px,
+            );
             let h = h_for(y);
             let zone_raw_w = match side {
                 Side::Left => left_zone_width(window_width, state),
@@ -942,6 +949,7 @@ mod tests {
             right_view: PanelKind::Agent,
             right_collapsed: false,
             browser_bookmarks_open: false,
+            browser_find_extra_px: 0.0,
             maximized: None,
         }
     }
@@ -1213,11 +1221,13 @@ mod tests {
         let closed = ShellState {
             left_view: PanelKind::Web,
             browser_bookmarks_open: false,
+            browser_find_extra_px: 0.0,
             ..test_state()
         };
         let open = ShellState {
             left_view: PanelKind::Web,
             browser_bookmarks_open: true,
+            browser_find_extra_px: 0.0,
             ..test_state()
         };
         let (_, _, w_closed, _) = content_pane_bounds_for(Side::Left, 1440.0, 900.0, &closed);
@@ -1245,6 +1255,7 @@ mod tests {
     fn content_pane_bounds_web_view_mirrored_bookmarks_content_follows_render_order() {
         let mut state = ShellState {
             browser_bookmarks_open: true,
+            browser_find_extra_px: 0.0,
             ..test_state()
         };
         state
@@ -2173,6 +2184,28 @@ mod tests {
         let (x0, avail_w) = maximized_box_x_range(1600.0);
         assert!(x >= x0 && x + w <= x0 + avail_w, "x={x} w={w}");
         assert!(y + h <= maximized_box_height(900.0) + 200.0);
+    }
+
+    /// 页内查找条打开时,浏览器网页整体下移、变矮同样的高度(`browser_find_extra_px`),左右不变;
+    /// 没打开(0)时与原来逐值相等。
+    #[test]
+    fn the_find_bar_pushes_the_browser_page_down_by_its_extra_height() {
+        for side in [Side::Left, Side::Right] {
+            let base = ShellState {
+                left_view: PanelKind::Web,
+                right_view: PanelKind::Web,
+                ..test_state()
+            };
+            let with_find = ShellState {
+                browser_find_extra_px: 31.0,
+                ..base.clone()
+            };
+            let (x0, y0, w0, h0) = content_pane_bounds_for(side, 1600.0, 900.0, &base);
+            let (x1, y1, w1, h1) = content_pane_bounds_for(side, 1600.0, 900.0, &with_find);
+            assert_eq!((x1, w1), (x0, w0), "左右不变");
+            assert_eq!(y1, y0 + 31.0);
+            assert_eq!(h1, h0 - 31.0);
+        }
     }
 
     /// 浏览器 webview 让位给页签栏 + 地址栏的高度,在几何这一侧只能来自 `browser_chrome_top_px()`:

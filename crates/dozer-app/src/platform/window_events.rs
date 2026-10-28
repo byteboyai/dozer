@@ -1177,7 +1177,8 @@ impl Runner {
             Vec<crate::preview::WebviewSpec>,
             (f32, f32, f32, f32),
         ) = if app.is_home() {
-            let (r, _) = Self::home_browser_bounds(logical_w, logical_h);
+            let (r, _) =
+                Self::home_browser_bounds(logical_w, logical_h, app.home_browser_find_extra_px());
             webview_rects.push(r);
             (
                 app.browser_desired(logical_w, logical_h)
@@ -1221,6 +1222,20 @@ impl Runner {
         }
         // 把等得太久的导航报出来(不碰 webview)。
         browser_native.poll_stalled();
+        // 页内查找:库把用户操作变成请求放进发件箱,这里对激活页签执行;结果作为 `WebEvent::FindResult` 经桥线程
+        // 送回 `Message::Browser(FindResult)`,慢的旧结果由库按查找词丢弃。
+        if let Some((tab, requests)) = app.take_browser_find_requests() {
+            for request in requests {
+                match request {
+                    crate::extensions::browser::FindRequest::Search { query, backwards } => {
+                        browser_native.find(tab, &query, backwards);
+                    }
+                    crate::extensions::browser::FindRequest::Clear => {
+                        browser_native.clear_find(tab);
+                    }
+                }
+            }
+        }
         // 卸载"连数据一起删"的应用:它的 webview 已经不在池里了才能清它的 WKWebsiteDataStore
         // (wry 要求先 drop 所有用这个存储的 WebView;`remove_data_store` 需在主线程且有事件循环)。
         for (app_id, store) in app.take_ready_store_removals(|slot| {
@@ -2251,11 +2266,13 @@ impl Runner {
     fn home_browser_bounds(
         window_width: f32,
         window_height: f32,
+        find_extra: f32,
     ) -> ((f32, f32, f32, f32), wry::Rect) {
         let rail = byteui::theme::geometry::icon_rail_width();
         let sidebar = byteui::theme::geometry::h0_sidebar_width();
         let divider = byteui::theme::geometry::divider_width();
-        let chrome = byteui::theme::geometry::browser_chrome_top_px();
+        // 页内查找条打开时再让出它的高度(没打开为 0)。
+        let chrome = byteui::theme::geometry::browser_chrome_top_px() + find_extra;
         let m = crate::theme::region::right_zone().margin;
         let x = rail + sidebar + divider + m.left + 8.0;
         let w = (window_width - rail - sidebar - divider - rail - m.left - m.right - 16.0).max(0.0);
@@ -3190,7 +3207,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // Edit,不替换;幂等、仅主线程。first responder 是 iced 的视图时没人响应 `copy:` 等,菜单项被禁用,
             // 按键照常落到 `keyDown`,Dozer 自己的预览查找 / 复制粘贴不受影响。
             #[cfg(target_os = "macos")]
-            bytehost_desktop::web_child::install_standard_edit_menu();
+            {
+                bytehost_desktop::web_child::install_standard_edit_menu();
+                // ⌘F:Edit 菜单里的 Find…,只在浏览器池里的 webview 有焦点时启用(Dozer 预览 webview 的 ⌘F 仍由页面脚本处理)。
+                let find_proxy = proxy.clone();
+                bytehost_desktop::web_child::install_find_shortcut(move || {
+                    let _ = find_proxy.send_event(Message::BrowserFindShortcut);
+                });
+            }
             let logical: LogicalSize<f32> = physical_size.to_logical(window.scale_factor());
             app.set_window_size(logical.width, logical.height);
 
@@ -3899,6 +3923,8 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             // 当前网址"的一次性位(单击即选中整条,见
                             // `App::take_addr_select_all_pending`)。
                             let addr_select_all_pending = app.take_addr_select_all_pending();
+                            // 同理,消费"⌘F 刚打开浏览器查找条、查找输入框需要拿焦点"的一次性位。
+                            let browser_find_focus_pending = app.take_browser_find_focus_pending();
 
                             // 同理,右键输入框弹菜单时把焦点移到被右键的输入
                             // (右键不聚焦 iced 输入框,菜单复制/粘贴要作用到它,
@@ -4049,6 +4075,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 let mut op =
                                     iced_widget::core::widget::operation::text_input::select_all::<()>(
                                         extensions::browser::addr_field_id(),
+                                    );
+                                crate::runtime::run_operate(&mut interface, renderer, &mut op);
+                            }
+                            // 查找条刚打开:程序化聚焦查找输入框(真 `text_input` 下一帧才出现、不会自己拿焦点)。
+                            if browser_find_focus_pending {
+                                let mut op =
+                                    iced_widget::core::widget::operation::focusable::focus::<()>(
+                                        extensions::browser::find_field_id(),
                                     );
                                 crate::runtime::run_operate(&mut interface, renderer, &mut op);
                             }

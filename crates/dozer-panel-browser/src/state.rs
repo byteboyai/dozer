@@ -53,6 +53,10 @@ pub struct State {
     /// `main.rs` 的 draw 循环用 `interface.operate` 跑 `text_input::
     /// select_all`)。一次性位,消费即复位(见 `take_addr_select_all_pending`)。
     pub(crate) addr_select_all_pending: bool,
+    /// 页内查找条;`None` = 没打开(见 `find.rs`)。
+    pub(crate) find: Option<crate::find::FindState>,
+    /// 宿主要对激活页签执行的查找动作(`take_find_requests` 取走)。
+    pub(crate) find_requests: Vec<crate::find::FindRequest>,
 }
 
 impl Default for State {
@@ -78,6 +82,8 @@ impl State {
             hover: HashMap::new(),
             tooltip_starts: HashMap::new(),
             addr_select_all_pending: false,
+            find: None,
+            find_requests: Vec::new(),
         };
         s.tabs.open_url(url.to_string());
         s
@@ -305,6 +311,14 @@ impl State {
             .unwrap_or(0.0)
     }
 
+    /// 查找条按钮的 hover 进度(键见 `FIND_*_KEY`)。
+    pub(crate) fn find_button_hover(&self, key: usize) -> f32 {
+        self.hover
+            .get(&(key, false))
+            .map(|h| h.progress)
+            .unwrap_or(0.0)
+    }
+
     /// tab 栏末尾"新标签页"(+)按钮的 hover 进度,哨兵键
     /// `(NEW_TAB_KEY, false)`,远离真实 tab 序号空间。
     pub(crate) fn new_tab_hover(&self) -> f32 {
@@ -325,3 +339,7 @@ pub(crate) const NAV_FORWARD_KEY: usize = usize::MAX - 2;
 pub(crate) const NAV_REFRESH_KEY: usize = usize::MAX - 3;
 /// tab 栏末尾"新标签页"(+)按钮的 hover 哨兵键,继续沿用上面的哨兵键空间。
 pub(crate) const NEW_TAB_KEY: usize = usize::MAX - 4;
+/// 查找条上一个 / 下一个 / 关闭按钮的 hover 哨兵键。
+pub(crate) const FIND_PREV_KEY: usize = usize::MAX - 5;
+pub(crate) const FIND_NEXT_KEY: usize = usize::MAX - 6;
+pub(crate) const FIND_CLOSE_KEY: usize = usize::MAX - 7;

@@ -2358,6 +2358,46 @@ impl App {
         }
     }
 
+    /// 浏览器查找条打开时网页要多让出的高度(没打开为 0):库的 `find_bar_extra_px(区域 gap)`。
+    pub(crate) fn find_extra_px(state: &browser::State) -> f32 {
+        if state.find_open() {
+            dozer_panel_browser::find_bar_extra_px(crate::theme::region::browser_pane().gap)
+        } else {
+            0.0
+        }
+    }
+
+    /// 首页全局浏览器的查找条额外高度(`home_browser_bounds` 用)。
+    pub fn home_browser_find_extra_px(&self) -> f32 {
+        Self::find_extra_px(&self.home_browser)
+    }
+
+    /// 当前显示的浏览器状态(首页全局浏览器 / 当前工作区浏览器)。
+    pub(crate) fn active_browser_state_mut(&mut self) -> Option<&mut browser::State> {
+        if self.is_home() {
+            return Some(&mut self.home_browser);
+        }
+        self.active_workspace_mut().map(|ws| &mut ws.browser)
+    }
+
+    /// 取走"查找输入框需要拿焦点"的一次性标记(⌘F 刚打开查找条)。
+    pub fn take_browser_find_focus_pending(&mut self) -> bool {
+        self.active_browser_state_mut()
+            .is_some_and(|b| b.take_find_focus_pending())
+    }
+
+    /// 取走宿主要对激活页签执行的查找动作,连同激活页签的 webview id。
+    pub fn take_browser_find_requests(
+        &mut self,
+    ) -> Option<(usize, Vec<dozer_panel_browser::FindRequest>)> {
+        let state = self.active_browser_state_mut()?;
+        let requests = state.take_find_requests();
+        if requests.is_empty() {
+            return None;
+        }
+        Some((state.active_webview_id()?, requests))
+    }
+
     /// 取走"地址栏需全选"的一次性标记(消费即复位),路由同
     /// `set_browser_addr_focused`(首页 `home_browser` / 当前工作区
     /// `ws.browser` 二选一)。
@@ -3105,6 +3145,10 @@ impl App {
                 .active_workspace()
                 .map(|ws| ws.browser.bookmarks_open())
                 .unwrap_or(false),
+            browser_find_extra_px: self
+                .active_workspace()
+                .map(|ws| Self::find_extra_px(&ws.browser))
+                .unwrap_or(0.0),
             maximized: self.maximized,
         }
     }
@@ -5073,6 +5117,7 @@ mod tests {
             right_view: PanelKind::Agent,
             right_collapsed: false,
             browser_bookmarks_open: false,
+            browser_find_extra_px: 0.0,
             maximized: None,
         }
     }
