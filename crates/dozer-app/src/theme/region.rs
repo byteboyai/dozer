@@ -95,7 +95,8 @@ struct RawRegions {
     review_content_pane: RawRegion,
     status_bar: RawRegion,
     maximize_overlay: RawMaximizeOverlay,
-    context_menu: RawRegion,
+    // `context_menu` 不在这里读:外框已搬进 `byteui::theme::region::context_menu`(X1)。JSON 里那一项
+    // 保留,是 Digger `scripts/check-shell-regions.sh` 比对 byteui 的唯一真相源;serde 忽略未知字段。
     left_zone: RawRegion,
     right_zone: RawRegion,
 }
@@ -336,17 +337,20 @@ pub fn status_bar() -> RegionStyle {
 pub fn maximize_overlay() -> MaximizeOverlayStyle {
     scaled_overlay(resolve_maximize_overlay(&REGIONS.maximize_overlay))
 }
-/// 背景取 `PANEL` 色 + 半透明 alpha(≈0.98,模拟原生右键菜单磨砂观感)。
-/// 弹窗(右键菜单/下拉/溢出菜单)统一走 `panel` 主题色:暗色 `#0a0e16`、
-/// 浅色对应浅色 panel——所以这里不走通用 `resolve_region`(它只按 JSON 里
-/// 写的字面量/令牌名解析),显式用 `current().panel` 现读再自己叠 alpha,
-/// 让浅色主题也能拿到对应的浅色磨砂效果。
+/// 右键菜单/下拉/溢出菜单的外框,实现在 `byteui::theme::region::context_menu`(与 Digger 共用)。
+/// 背景是 `panel` 主题色且**不透明**(2026-10-28 裁决统一为 alpha 1.0;原先是 0xfa/255 ≈ 0.98,
+/// 但 wgpu 线性混合下 0.98 仍会让底下的亮字约 15% 透出)。度量(圆角 9、内边距 8、项间距 1)
+/// 与本仓 `assets/theme/workspace.json` 的 `context_menu` 项相同,跨仓库一致性由 Digger 的
+/// `scripts/check-shell-regions.sh` 守住。
 pub fn context_menu() -> RegionStyle {
-    let mut s = scaled_region(resolve_region(&REGIONS.context_menu));
-    let mut bg = byteui::theme::color::current().panel;
-    bg.a = 0xfa as f32 / 255.0;
-    s.background = Some(bg);
-    s
+    let r = byteui::theme::region::context_menu();
+    RegionStyle {
+        background: r.background,
+        border: r.border,
+        padding: r.padding,
+        gap: r.gap,
+        margin: r.margin,
+    }
 }
 /// 左面板区(项目树+预览,或单个 Web 预览)整体外边框——把"左1左2两栏"
 /// 框成一个视觉整体,不是某一栏自己的边框。
@@ -469,12 +473,11 @@ mod tests {
     fn context_menu_matches_pre_migration_literals() {
         let _guard = lock_scheme();
         let s = context_menu();
-        // 背景取 `PANEL` 色 + alpha,模拟 macOS 原生右键菜单的磨砂/半透明观感
-        // (iced 无实时高斯模糊可用,退而求其次用半透明打底 + `shell()` 的
-        // 软阴影一起近似"浮起且透光"的质感)。alpha 0xfa(≈0.98,2026-09-13
-        // 用户反馈原 0xf0/0.94 透得太明显、菜单后面内容看着太清楚,调高压
-        // 暗透光,仍留一丝透明感而非彻底不透明)。暗色 PANEL = #0a0e16。
-        assert_eq!(s.background, Some(parse_hex_color("#0a0e16fa")));
+        // 背景取 `PANEL` 色,**完全不透明**。历史:2026-09-13 用户反馈 0xf0/0.94 透得太明显,
+        // 调到 0xfa/0.98 并刻意留一丝透明感;2026-10-28 用户裁决统一为 1.0(X1 把菜单外框迁进
+        // byteui 与 Digger 共用,Digger 的测试证明 0.98 在 wgpu 线性混合下仍让底下亮字约 15%
+        // 透出)。暗色 PANEL = #0a0e16。
+        assert_eq!(s.background, Some(parse_hex_color("#0a0e16ff")));
         let border = s.border.expect("context_menu 应有边框");
         assert_eq!(border.color, byteui::theme::color::current().border);
         assert_eq!(border.width, 1.0);
