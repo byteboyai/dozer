@@ -10,7 +10,7 @@
 | R2 | 新行为的人工 GUI 验收 | 验收 | 是 | 无 | 2(与 R1 同一次) |
 | R3 | Digger 没有远端,提交只在本地 | 配置 | 给仓库地址 | Digger | 随时,越早越好 |
 | R4 | ~~Codebuddy 群聊发言~~ **已完成**(Dozer `53a7100a`,tag `libs-2026-10-28b`;Digger 已重钉) | 验证+小改 | 无 | Dozer `group_adapter.rs` | 3 |
-| R5 | G1 搜索框右键菜单 | 新功能 | 中文输入法人工验证 | Digger | 4(独立立项) |
+| R5 | ~~G1 搜索框右键菜单~~ **已完成(整框语义,待人工验证)**(Digger `2a23894`) | 新功能 | 中文输入法人工验证 | Digger | 4 |
 | R6 | Opencode 群聊发言 | 阻塞于上游 | 无 | Dozer | 搁置,见触发条件 |
 | R7 | X1 跨仓库迁移 | 跨仓库 | 排期 | byteui、bytehost、双方重钉 | 单独计划 |
 | R8 | 零碎:门禁脚本重新 vendor、Dozer 项目面板用失败明细 | 可选 | 否 | Digger / Dozer | 有空再做 |
@@ -64,7 +64,13 @@
 - [ ] 若验证不通过:结论写进调研记录,保持 `Unsupported`,不放宽。
 - [ ] 通过后:更新调研记录、Digger 弹窗说明加入 Codebuddy、`CREATABLE_AGENTS` 与可发言集合保持一致。随下一次 libs tag 发出,Digger 同日重钉。
 
-## R5 G1 搜索框右键菜单
+## R5 G1 搜索框右键菜单 —— 已完成(2026-10-28,待人工验证)
+
+**结果(Digger `2a23894`):** 用户选定「整框语义」。会话搜索框右键弹 `byteui::native_menu`:剪切/复制作用于整个搜索词(剪切后清空),粘贴追加到末尾(多行折成空格),全选精确;搜索词为空时剪切/复制置灰。仅 macOS。**没有按计划照搬 Dozer 的做法:** Digger 是标准 `iced::application`,没有能合成键盘事件回灌的自定义事件循环,且 iced 0.14 的输入框操作读不到选区。搜索词由 `ConversationsPanel` 在 `SearchInput` 经过时缓存(库的 `search_draft` 是 crate 私有)。要做到按选区的菜单,需要在 byteui 输入框上加「读选区」(新 byteui 版本、双方重钉),未做。
+
+**待人工验证(R2 清单追加):** 右键搜索框 → 菜单弹在光标处;输入词后「复制」再粘贴到别处一致;「剪切」清空搜索框;「粘贴」追加;「全选」后输入会替换;**中文输入法:拼音候选未提交时右键,候选不丢**;⌘C/V/X/A 快捷键仍是按选区。
+
+下面的勾选项是原计划,保留作记录。
 
 **背景:** `TextInputMenuOpen` 在 Digger 是空操作(`product.rs` 的 `PM::TextInputMenuOpen(..) => {}`、files 的 `F::TextInputMenuOpen` 被忽略,会话搜索框同理)。Dozer 的做法:`byteui::native_menu::show(text_input_menu_items(..), last_right_click)` 弹原生菜单,选中后把动作映射成 ⌘X/C/V/A(`menu_edit_key`),记入 `pending_native_menu_edit_key`,下一帧由 `window_events` 先聚焦目标输入框再合成键盘事件回灌。
 
