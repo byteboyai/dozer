@@ -63,12 +63,12 @@
 
 ---
 
-### Task 0: 技术探针 —— 已完成 S1/S3/S4/S6,S2 待用户手动试(2026-10-28)
+### Task 0: 技术探针 —— 全部完成(2026-10-28;S5 沿用既有定论未做)
 
 六个会推翻设计的未知项,在一个**一次性的小程序**里实测(`dozer/spike/browser-probe/`,已在仓库根 `Cargo.toml` 的 `exclude` 里,随时可删),结论与原始输出在 `digger/docs/superpowers/reviews/2026-10-28-browser-panel-spikes.md`。**结论速览:**
 
 - **S1 ✅ `file://` 直接能用**,不需要 `loadFileURL`;同目录子资源能加载;页面 `fetch` 不到其它本地文件。含空格/中文的 URL 在 macOS 26 上被自动百分号编码、不 panic(旧系统未测)。**发现:wry 没有"导航失败"回调。**
-- **S2 ✅ 装一个标准 Edit 菜单即可,不需要注入任何脚本。** 打字、中文输入法本来就正常;没有 Edit 菜单时 ⌘C/⌘V/⌘X 完全不生效(`copy`/`paste`/`cut` 事件 0 次),装了就生效(2/4/2 次)。待确认:⌘A 是否全选、Edit 菜单是否影响 iced 输入框的 ⌘ 组合键。
+- **S2 ✅ 装一个标准 Edit 菜单即可,不需要注入任何脚本。** 打字、中文输入法本来就正常;没有 Edit 菜单时 ⌘C/⌘V/⌘X 完全不生效(`copy`/`paste`/`cut` 事件 0 次),装了就生效(2/4/2 次)。**用户已确认:** 装了 Edit 菜单后 webview 里 ⌘A 能全选,iced 输入框的 ⌘C/⌘V/⌘X/⌘A 不受影响;不装的话 webview 里这些快捷键都不能用。
 - **S3 ✅ wry 对所有来源的摄像头/麦克风请求无条件 `Grant`,但当前 WKWebView 里 `navigator.mediaDevices` 是 `undefined`,够不着(休眠的隐患)**;用 objc2 代理委托拒绝并转发其余方法**已验证可行**。
 - **S4 ✅ 标准 iced 下 `focus`/`is_focused` 可用。**
 - **S5 ➖ 未做**(项目既有定论)。
@@ -162,7 +162,7 @@
 ### Task 8: `product.rs` 接线
 
 - [ ] **Step 1: 失败测试(产品级,用 fake 原生层,仿 `group_chat_native_tests.rs`):** 打开面板→创建 webview;切页签→只有激活者可见;`OpenUrl` 经 `Msg::Browser` 路由到正确的项目;关闭项目→`close_project` 清理;收藏夹分隔条拖动(库发 `ColumnDragStart`,宿主用鼠标移动换算 `bookmarks_split`)夹在合理范围且不为 NaN;`shell.json` 里面板被收起/隐藏时 webview 隐藏。
-- [ ] **Step 1b: Edit 菜单(S2 实测的必要条件):** Digger 自己不装主菜单,浏览器面板第一次显示时(或应用启动时)调 `install_standard_edit_menu()`,macOS 限定、幂等。**风险:** 菜单会接管 ⌘C/⌘V/⌘X/⌘A;理论上 first responder 是 winit 视图(不响应 `copy:`)时菜单项被禁用、按键落到 `keyDown`,iced 输入框不受影响,但**这是推论没实测**——先在探针里确认(见验收 I 区),再接入;失败的话改为只在 webview 是 first responder 时启用。
+- [ ] **Step 1b: Edit 菜单(S2 实测的必要条件):** Digger 自己不装主菜单,浏览器面板第一次显示时(或应用启动时)调 `install_standard_edit_menu()`,macOS 限定、幂等。**已在探针里确认(用户 2026-10-28):** 装了菜单后 iced 输入框的 ⌘ 组合键照常可用、webview 里 ⌘A 能全选,所以可以直接接入;验收 I 区仍保留一条回归。
 - [ ] **Step 2: 实现:** `Msg::Browser(i64, Message)`、`Msg::BrowserNative(Event)`;`panel_visible`/激活钩子;几何 rect 进 `content_of(&shell::browser_id())`;订阅(原生事件 + 悬停动画 tick + tooltip 唤醒);关项目清理;重试/失败进 notice。
 - [ ] **Step 3:** Digger 干净快照整套门禁(build/test/clippy/fmt、`check-host-deps.sh`(含 `--self-test`)、`check-shared-deps.sh`、`check-shell-regions.sh`)。提交。
 
@@ -185,11 +185,10 @@
 
 ## 顺序与依赖
 
-Task 0 →(S2 由用户手动试)→ Task 1 → Task 2 → Task 3 → Task 4(发版联动)→ Task 5 → Task 6 → Task 7 → Task 8 → Task 9 → Task 10。Task 5(`shell.rs` 注册)与 Task 1–3 互不依赖,可并行,但**注册面板之前必须先有能用的原生层**,否则用户打开一个空面板。我没有可靠的工时依据,不给估计。
+Task 0 → Task 1 → Task 2 → Task 3 → Task 4(发版联动)→ Task 5 → Task 6 → Task 7 → Task 8 → Task 9 → Task 10。Task 5(`shell.rs` 注册)与 Task 1–3 互不依赖,可并行,但**注册面板之前必须先有能用的原生层**,否则用户打开一个空面板。我没有可靠的工时依据,不给估计。
 
 ## 仍然未决的未知(探针之后)
 
-1. **S2:子视图里 ⌘C/⌘V/⌘X/⌘A 与中文输入法**——等你按报告里的步骤手动试(有 / 没有 Edit 菜单各一遍)。它决定 Task 2 要不要注入脚本、Task 6 要不要装 Edit 菜单。
-2. **旧 macOS 上含空格 URL 会不会 panic**——没有旧系统可测;已用"宿主自己百分号编码"绕开,并要在 ADR 写明最低支持版本。
-3. **定位权限**——wry 没有钩子,未测;若面板要对外使用,上线前人工确认。
-4. **导航失败**——wry 无回调,靠超时兜底,需要定超时秒数与文案(设计决定,实现前问用户)。
+1. **旧 macOS 上含空格 URL 会不会 panic**——没有旧系统可测;已用"宿主自己百分号编码"绕开,并要在 ADR 写明最低支持版本。
+2. **定位权限**——wry 没有钩子,未测;若面板要对外使用,上线前人工确认。
+3. **导航失败**——wry 无回调,靠超时兜底,需要定超时秒数与文案(设计决定,实现前问用户)。
