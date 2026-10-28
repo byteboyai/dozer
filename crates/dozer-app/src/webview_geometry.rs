@@ -2174,4 +2174,29 @@ mod tests {
         assert!(x >= x0 && x + w <= x0 + avail_w, "x={x} w={w}");
         assert!(y + h <= maximized_box_height(900.0) + 200.0);
     }
+
+    /// 浏览器 webview 让位给页签栏 + 地址栏的高度,在几何这一侧只能来自 `browser_chrome_top_px()`:
+    /// 读生产源码,钉住 `PanelKind::Web` 分支用它定 `y` 与 `h`,且没有手写的像素常数。
+    /// **只证明几何侧不自己算一份**;视图实际排出来的高度(页签栏 + 分割线 + 地址栏 + 间距 + 内边距)
+    /// 是否等于这个数,没有无头渲染器能量,靠人工验收(验收清单 H 区「webview 顶边紧贴地址栏下沿」)。
+    #[test]
+    fn browser_geometry_takes_its_inset_only_from_browser_chrome_top_px() {
+        let src = include_str!("webview_geometry.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap()];
+        let arm = prod
+            .split("PanelKind::Web =>")
+            .nth(1)
+            .and_then(|rest| rest.split("// 应用面板").next())
+            .expect("PanelKind::Web 分支在生产源码里");
+        assert_eq!(
+            arm.matches("byteui::theme::geometry::browser_chrome_top_px()")
+                .count(),
+            2,
+            "y 与 h 都要读 browser_chrome_top_px():{arm}"
+        );
+        assert!(
+            !arm.contains("preview_chrome_top_px"),
+            "浏览器不得读预览的 chrome 高度"
+        );
+    }
 }

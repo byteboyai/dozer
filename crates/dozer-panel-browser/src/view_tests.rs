@@ -86,7 +86,12 @@ fn state_with(bookmarks_open: bool) -> State {
     s
 }
 
-/// 评审关注点 3:视图里页签栏+地址栏让给 webview 的高度只有一个源头。
+/// 评审关注点 3:页签栏+地址栏让给 webview 的高度只有一个源头 `browser_chrome_top_px()`。
+///
+/// **局限(2026-10-28 复验):** 这条只证明 `chrome_top_px()` 转发给 byteui,是同义反复;视图实际排出的高度
+/// 是否等于它量不出来——库里 `iced_renderer::Renderer` 随特性统一在 `()` 与真渲染器之间变,无头布局测量不稳;
+/// 页签与分割线又是宿主注入的,fake 的高度会把待测的东西写进假设。几何侧的另一半在 `dozer-app` 的
+/// `browser_geometry_takes_its_inset_only_from_browser_chrome_top_px`;视图侧靠人工验收。
 #[test]
 fn chrome_height_has_one_source() {
     assert_eq!(

@@ -910,6 +910,57 @@ fn addr_select_all_pending_is_one_shot() {
     assert!(!state.take_addr_select_all_pending());
 }
 
+/// 评审补测(用户 2026-10-28 同意补):地址栏提交含空白、超长的 URL 时的现状行为,取自抽库后的实现
+/// (与搬迁前一致),钉成黄金:**只 trim 两端空白**,内部空白原样保留,不拒绝、不报错;带 `://` 的原样,
+/// 否则补 `https://`。`file://` 带空格同样原样接受(用户 2026-10-28 裁决:`file://` 要支持,不拒绝)。
+#[tokio::test]
+async fn addr_submit_keeps_inner_whitespace_and_long_urls_verbatim() {
+    let handle = tokio::runtime::Handle::current();
+    let service = service_for_test();
+    let submit = |input: String| {
+        let mut state = State::default();
+        update(
+            &mut state,
+            Message::AddrInput(input),
+            Some(1),
+            &service,
+            &handle,
+            |_| {},
+        );
+        update(
+            &mut state,
+            Message::AddrSubmit,
+            Some(1),
+            &service,
+            &handle,
+            |_| {},
+        );
+        state
+    };
+    for (input, expected) in [
+        // 两端空白(含制表符、换行)被 trim。
+        ("  https://a.com/x \t\n", "https://a.com/x"),
+        // 内部空白原样保留,不拒绝。
+        ("https://a.com/x y", "https://a.com/x y"),
+        // 无 scheme 的含空白输入照样补 https://,空白留在里面。
+        ("exa mple.com", "https://exa mple.com"),
+        // file:// 带空格:原样接受(要支持本地文件)。
+        ("file:///Users/me/My File.html", "file:///Users/me/My File.html"),
+        // 单冒号 scheme 原样保留。
+        ("about:blank", "about:blank"),
+    ] {
+        let st = submit(input.to_string());
+        assert_eq!(st.tabs.tabs().len(), 1, "{input:?}");
+        assert_eq!(st.tabs.tabs()[0].url, expected, "{input:?}");
+        assert!(st.error.is_none(), "{input:?}");
+    }
+    // 超长 URL:不 panic,原样接受(没有长度上限)。
+    let long = format!("https://a.com/{}", "x".repeat(100_000));
+    let st = submit(long.clone());
+    assert_eq!(st.tabs.tabs()[0].url, long);
+    assert!(st.error.is_none());
+}
+
 #[tokio::test]
 async fn addr_submit_rejects_local_paths_and_blank_input() {
     let handle = tokio::runtime::Handle::current();
