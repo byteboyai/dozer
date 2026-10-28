@@ -20,16 +20,16 @@ dozer-i18n = { path = "../dozer-i18n" }
 dozer-preview-core = { path = "../dozer-preview-core" }
 dozer-client = { path = "../dozer-client" }
 dozer-services = { path = "../dozer-services" }
-bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.12" }
-bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.12" }
-bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.12" }
-bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.12" }
+bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.13" }
+bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.13" }
+bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.13" }
+bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.13" }
 # 公共桌面宿主契约:稳定身份、请求身份、布局 DTO(bytehost-core,本地 patch 联调)。
-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.12" }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.13" }
 # 共享桌面宿主执行层:Surface 生命周期/路由/几何(iced + wry 平台实现)。
 # `overlay` feature(C10 方案 C):浮层共用 wgpu 渲染管线 + 遮罩外壳
 # (`bytehost_desktop::overlay_gpu`),dozer-app 侧不再自写建窗/alpha 机制。
-bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.12", features = ["overlay"] }
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.13", features = ["overlay"] }
 dozer-codehealth = { path = "../dozer-codehealth" }
 # 同源 Usage 面板库(Task 19):Dozer 只做 ctor/重导出包装,数据层/视图层/资源
 # 都在此 crate;其依赖闭包不含 dozer-app(见 crate 文档)。
@@ -51,7 +51,7 @@ dozer-panel-files = { path = "../dozer-panel-files" }
 dozer-hook = { path = "../dozer-hook" }
 # 新建 agent 会话时静默注册对应 CLI 的 dozer-mcp（第一个写工具 2026-08-27）。
 dozer-mcp = { path = "../dozer-mcp" }
-byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.6" }
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.5.0" }
 bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1", features = ["watch"] }
 serde.workspace = true
 serde_json.workspace = true
