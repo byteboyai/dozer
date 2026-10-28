@@ -175,6 +175,8 @@
 
 ### Task 8: `product.rs` 接线
 
+**已完成(2026-10-28,Digger 本地 `86aa99b`):** 大部分接线在 Task 6/7 里已随各自功能完成(`Msg` 变体、事件流、`sync_native`、探针订阅、项目关闭钩子、目录登记)。本 Task 补的:① 浏览器第一次显示时 `install_standard_edit_menu()`(macOS、幂等,`on_visible` 的浏览器分支;测试钉住只出现一次且在该分支内);② `on_current_project_changed`:面板已显示时切项目,新项目立刻建状态;③ 5 条产品级测试(目录登记、面板切入 / 切项目建状态、消息按信封项目路由、关项目清理、Edit 菜单钉死),2 个变异(去掉切项目激活、去掉 Edit 菜单)均变红。Digger 882 通过/0 失败,fmt/clippy 干净,`check-host-deps`(含 `--self-test`)、`check-shared-deps`、`check-shell-regions` 全过;新文件均已入库,无被 `.gitignore` 吞掉的。**未做(与计划原文不同):** 收藏夹分隔条拖动——Task 6 已定 v1 固定 28% 不可拖,故没有 `bookmarks_split` 换算;悬停动画 tick / tooltip 唤醒由 Task 6 的 16ms 探针承担,没有另开订阅。真实窗口的 webview 层级、焦点、输入法、Edit 菜单对 iced 输入框的回归,落验收 I 区(Task 10)。
+
 - [ ] **Step 1: 失败测试(产品级,用 fake 原生层,仿 `group_chat_native_tests.rs`):** 打开面板→创建 webview;切页签→只有激活者可见;`OpenUrl` 经 `Msg::Browser` 路由到正确的项目;关闭项目→`close_project` 清理;收藏夹分隔条拖动(库发 `ColumnDragStart`,宿主用鼠标移动换算 `bookmarks_split`)夹在合理范围且不为 NaN;`shell.json` 里面板被收起/隐藏时 webview 隐藏。
 - [ ] **Step 1b: Edit 菜单(S2 实测的必要条件):** Digger 自己不装主菜单,浏览器面板第一次显示时(或应用启动时)调 `install_standard_edit_menu()`,macOS 限定、幂等。**已在探针里确认(用户 2026-10-28):** 装了菜单后 iced 输入框的 ⌘ 组合键照常可用、webview 里 ⌘A 能全选,所以可以直接接入;验收 I 区仍保留一条回归。
 - [ ] **Step 2: 实现:** `Msg::Browser(i64, Message)`、`Msg::BrowserNative(Event)`;`panel_visible`/激活钩子;几何 rect 进 `content_of(&shell::browser_id())`;订阅(原生事件 + 悬停动画 tick + tooltip 唤醒);关项目清理;重试/失败进 notice。
