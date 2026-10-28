@@ -1,0 +1,18 @@
+[package]
+name = "browser-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# 一次性技术验证(Digger 浏览器面板 Task 0),随时可删;自成工作区,不进任何仓库的成员。
+[workspace]
+
+[dependencies]
+iced = { version = "0.14", features = ["tokio"] }
+tokio = { version = "1", features = ["time"] }
+wry = "0.55.1"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["std", "NSString", "NSObject", "NSURL"] }
+objc2-app-kit = { version = "0.3", features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSResponder", "NSEvent"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "WKWebView", "WKUIDelegate", "WKFrameInfo", "WKSecurityOrigin"] }
+block2 = "0.6"

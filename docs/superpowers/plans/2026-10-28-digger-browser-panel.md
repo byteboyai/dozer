@@ -39,7 +39,7 @@
 ## Review Focus
 
 1. **页面拿到宿主权限**:`file://` 页面或恶意站点调用 `window.ipc`、访问自定义协议、通过 `window.open`/重定向跳到 `dozer://`/`javascript:`。→ Task 1 `browse_navigation_*`(逐个 scheme 的允许/拒绝表)、Task 2 `web_child_pins_untrusted_content_settings`(无 `with_custom_protocol`、IPC 白名单、默认拒绝媒体权限等)。
-2. **媒体/定位权限被静默批准**:wry 对未信任页面的默认行为需实测,不能假设。→ Task 0 S3(实测),Task 2 把结论钉成测试。
+2. **媒体/定位权限被静默批准**:S3 已证实 wry 对摄像头/麦克风请求**无条件 `Grant`**,目前只因 `navigator.mediaDevices` 没暴露而够不着(休眠的隐患,依赖 wry/WebKit 默认值)。定位未测。→ Task 2 `media_capture_requests_are_denied_by_the_proxy_delegate`(代理拒绝,纵深防御)。
 3. **webview 与 iced 层级**:webview 恒在 iced 之上。iced 浮层(收藏星菜单、页签溢出菜单、输入框右键)打开时,若 webview 仍可见会盖住菜单;切到别的面板后 webview 残留成"幽灵"。→ Task 7 `native_menus_do_not_need_hiding_but_iced_overlays_hide_the_webview`、`leaving_the_panel_destroys_or_parks_every_webview`,Task 2 的 `Probe` 读真实 NSView 状态。
 4. **页签 id 跨项目撞号与池生命周期**:切项目、关项目、关最后一个页签(库回落到 `about:blank`)时池与状态不一致。→ Task 7 `project_switch_destroys_the_previous_projects_webviews`、`closing_the_last_tab_keeps_one_blank_webview`。
 5. **地址栏在标准 iced 下的焦点与全选**:Dozer 靠每帧 `interface.operate` 读焦点;Digger 没有这个循环。焦点判断滞后会让"全选一次性位"重复触发或丢失,中文输入法候选被打断。→ Task 6 `addr_focus_bridge_*`;输入法本身落验收清单 I 区。
@@ -63,9 +63,17 @@
 
 ---
 
-### Task 0: 技术探针(先做,出报告,不进产品代码)
+### Task 0: 技术探针 —— 已完成 S1/S3/S4/S6,S2 待用户手动试(2026-10-28)
 
-六个会推翻设计的未知项,每项在一个**一次性的小程序**里实测(放 `spike/`,随时可删),结论写进 `digger/docs/superpowers/reviews/2026-10-28-browser-panel-spikes.md`。**S1、S3 的结论要用户看过再往下。**
+六个会推翻设计的未知项,在一个**一次性的小程序**里实测(`dozer/spike/browser-probe/`,已在仓库根 `Cargo.toml` 的 `exclude` 里,随时可删),结论与原始输出在 `digger/docs/superpowers/reviews/2026-10-28-browser-panel-spikes.md`。**结论速览:**
+
+- **S1 ✅ `file://` 直接能用**,不需要 `loadFileURL`;同目录子资源能加载;页面 `fetch` 不到其它本地文件。含空格/中文的 URL 在 macOS 26 上被自动百分号编码、不 panic(旧系统未测)。**发现:wry 没有"导航失败"回调。**
+- **S2 ⏳ 待你手动试**(报告里有运行步骤)。静态证据:子 webview 的 `performKeyEquivalent` 恒 `NO`,⌘C/V/X/A 很可能不直达页面。
+- **S3 ✅ wry 对所有来源的摄像头/麦克风请求无条件 `Grant`,但当前 WKWebView 里 `navigator.mediaDevices` 是 `undefined`,够不着(休眠的隐患)**;用 objc2 代理委托拒绝并转发其余方法**已验证可行**。
+- **S4 ✅ 标准 iced 下 `focus`/`is_focused` 可用。**
+- **S5 ➖ 未做**(项目既有定论)。
+- **S6 ✅ 创建约 33ms/页签;8 页签 WebContent 约 +74MB;销毁不会立刻释放内存。**
+
 
 - [ ] **S1 `file://` 能否显示:** wry 0.55 子视图 `load_url("file:///…/a.html")` 在 WKWebView 里是否真的渲染(WKWebView 对 `file://` 常需要 `loadFileURL:allowingReadAccessTo:`);含空格、中文路径;同目录相对资源(`<img src>`、`<link>`)是否能加载;`file://` 页面能否 `fetch` 其它 `file://`。**若普通 `load_url` 渲染不了,记下需要的 wry/objc2 调用,计划 Task 2 据此加分支。**
 - [ ] **S2 子视图里的键盘:** 在 Digger 的 winit 窗口上,点进页面输入框后:能否打字、⌘C/⌘V/⌘A/⌘X 是否直达页面、中文输入法候选是否正常、焦点是否需要 Dozer 那样的"JS mousedown → IPC → `webview.focus()`"桥。**决定 Task 2 要不要注入 init 脚本。**
@@ -98,8 +106,13 @@
 
 - [ ] **Step 1: 失败测试(纯函数)** `plan_pool_*`:空→创建;URL 变→只 `Navigate`;只有激活页签可见;页签消失→`Destroy`;关最后一个页签后库回落的 `about:blank` 仍有一个视图;项目切换(换 `generation`)→全部 `Destroy` 再 `Create`。
 - [ ] **Step 2: 失败测试(钉死,读生产源码)** `web_child_pins_untrusted_content_settings`:**必须出现** `.with_devtools(false)`、`.with_download_started_handler(|_, _| false)`、`.with_navigation_handler(`(且内部调 `allows_browse_navigation`)、`.with_new_window_req_handler(`(且同走白名单)、`.with_document_title_changed_handler(`、`.with_on_page_load_handler(`、`.with_allow_link_preview(false)`,以及 S3 结论里的权限拒绝写法;**不得出现** `with_custom_protocol`、`with_initialization_script`(除非 S2 判定需要焦点桥,届时只允许一段带 nonce 的固定脚本)、`NewWindowResponse::Allow`、`.with_devtools(true)`、`.with_incognito(true)`(v1 要持久)。
-- [ ] **Step 3: 确认失败 → 实现。** 池的句柄表是模块私有 `thread_local`,**与 `native_child`、`app_webview` 的永不共用**;所有 wry 调用在 `iced::window::run` 里。`file://` 的特殊加载路径按 S1 结论实现。
-- [ ] **Step 4: 变异验证:** 依次把 devtools 改 `true`、下载处理改放行、导航处理改恒 `true`、删掉新窗口白名单检查,**每一种都必须让钉死测试变红**,再恢复(用 python 改,不要用多行 `sed`)。
+- [ ] **Step 3: 确认失败 → 实现。** 池的句柄表是模块私有 `thread_local`,**与 `native_child`、`app_webview` 的永不共用**;所有 wry 调用在 `iced::window::run` 里。**`file://` 不需要特殊加载路径**(S1:普通 `with_url`/`load_url` 即可)。
+- [ ] **Step 3b(探针带来的新增项,先写失败测试):**
+  - `urls_are_percent_encoded_before_reaching_wry`:纯函数 `encode_for_wry(url) -> String`,含空格 / 中文 / 已编码 / 非法字符的 `http`、`file` URL 都得到合法 URL,**幂等**(编码两次结果不变),不改动已编码部分(S1:macOS 26 上 wry 自己会编码、不 panic,但旧系统可能返回 nil 然后 `unwrap` panic,所以宿主自己编码,并在 ADR 写明最低 macOS)。
+  - `a_navigation_that_never_starts_is_reported_as_failed`:wry 没有"导航失败"回调(S1:不可达地址不会有 `Started`/`Finished`);池在发出导航后 N 秒内没收到该页签的 `Started` 就产出 `WebEvent::NavigationStalled{id,url}`,宿主据此提示"无法打开"。
+  - `media_capture_requests_are_denied_by_the_proxy_delegate`:把 S3 的 `DenyMediaProxy` 搬进来(依赖 `objc2`、`objc2-web-kit` 的 `WKUIDelegate`/`WKFrameInfo`/`WKSecurityOrigin`);断言:装上后 `UIDelegate` 的类是代理、对新窗口 / 文件选择 / 媒体捕获三个可选方法 `respondsToSelector` 仍为真、直接调用媒体捕获给 `Deny`;代理被 `thread_local` 保活(WKWebView 对委托是 weak 引用);源码钉死测试里加上"必须调用代理安装函数"。
+  - **S2 的结果决定**:若 Edit 菜单能让 ⌘C/⌘V 直达页面 → 不注入任何脚本(最佳);否则才引入带 nonce 的最小脚本(只有 focus / mouseup / ⌘ 组合键桥),并在 ADR 写明"页面能看到 `window.ipc`"。
+- [ ] **Step 4: 变异验证:** 依次把 devtools 改 `true`、下载处理改放行、导航处理改恒 `true`、删掉新窗口白名单检查、跳过代理委托安装,**每一种都必须让钉死测试变红**,再恢复(用 python 改,不要用多行 `sed`)。
 - [ ] **Step 5:** `cargo test --workspace --lib --tests`、clippy、fmt、`scripts/check-deps.sh`;提交。
 
 ### Task 3: 库只读访问器
@@ -132,7 +145,7 @@
 - Produces:`BrowserPanel { states: HashMap<i64, State>, … }`,`update(pid, Message, project) -> Task<Msg>`,`view(project, area)`,`close_project(pid)`。
 
 - [ ] **Step 1: 失败测试(`BrowserDisplay`)**:`tab_uses_byteui_panel_tab_and_carries_hover_and_tooltip`(用 byteui 部件,悬停值透传)、`region_projection_uses_digger_tokens`、`bookmarks_divider_only_built_when_open`(沿用库已有的 fake 思路)。
-- [ ] **Step 2: 失败测试(焦点桥,Review Focus 5)** `addr_focus_bridge_sets_state_once_per_change`、`select_all_runs_once_after_focus_gain_and_not_again`:点击或按键后触发 `operation::is_focused(addr_field_id())`,结果经 `State::set_addr_focused` 写入;`take_addr_select_all_pending()` 为真时发一次 `operation::select_all`。**S4 的结论决定触发时机**(鼠标事件 / 键盘事件 / 定时)。
+- [ ] **Step 2: 失败测试(焦点桥,Review Focus 5)** `addr_focus_bridge_sets_state_once_per_change`、`select_all_runs_once_after_focus_gain_and_not_again`:点击或按键后触发 `operation::is_focused(addr_field_id())`,结果经 `State::set_addr_focused` 写入;`take_addr_select_all_pending()` 为真时发一次 `operation::select_all`。S4 已验证 `focus`/`is_focused` 在标准 iced 下可用;**触发时机**(鼠标点击 / 键盘 / 失焦之后是否一帧内读到正确值)需要真实窗口,放验收清单。
 - [ ] **Step 3: 失败测试(地址栏菜单)** 复用 G1 的 `SearchEdit` 形状:剪切/复制/粘贴/全选,整框语义,文本来自 Task 3 的 `addr_text()`;`Message::TextInputMenuOpen` 弹原生菜单(仅 macOS)。收藏星与页签溢出也走原生菜单(`tab_overflow_items`、库的 `StarClick` 菜单)。
 - [ ] **Step 4: 实现。** 日志、错误走 Digger 现有 notice 机制(库的 `State.error` 是内联持久错误,留在原位)。**提交。**
 
@@ -157,7 +170,7 @@
 
 ### Task 10: 验收清单与收口
 
-- [ ] 在 `digger/docs/superpowers/reviews/2026-10-28-s7-s8-closeout-acceptance.md` 加 **I 区「Digger 浏览器面板」**(沿用 H 区的 15 项,外加):`file://` 打开(含空格/中文路径)、页面请求摄像头/定位**不被静默批准**、点页面里任何 `dozer://`/`javascript:` 链接**不跳走**、下载被拒、`target=_blank` 开新页签、切项目后旧页面被销毁、iced 浮层(收藏星菜单)打开时网页不盖住它、地址栏中文输入法、⌘C/⌘V 在页面里、关最后一个页签回到空白页、webview 顶边紧贴地址栏下沿(缩放 1 与 1.5)。
+- [ ] 在 `digger/docs/superpowers/reviews/2026-10-28-s7-s8-closeout-acceptance.md` 加 **I 区「Digger 浏览器面板」**(沿用 H 区的 15 项,外加):`file://` 打开(含空格/中文路径)、页面请求摄像头/定位**不被静默批准**、点页面里任何 `dozer://`/`javascript:` 链接**不跳走**、下载被拒、`target=_blank` 开新页签、切项目后旧页面被销毁、iced 浮层(收藏星菜单)打开时网页不盖住它、地址栏中文输入法、⌘C/⌘V 在页面里、关最后一个页签回到空白页、webview 顶边紧贴地址栏下沿(缩放 1 与 1.5)、`file://` 页面的同目录图片/样式能加载、页面读不到其它本地文件(`fetch` 失败)、**导航失败(不可达地址)有明确提示而不是地址栏已变页面不变**、点击 / Tab / 失焦后地址栏焦点与全选的时机。
 - [ ] 记忆:当前版本组与"Digger 浏览器面板"状态;**请用户目测验收后停下**。
 
 ---
@@ -170,10 +183,11 @@
 
 ## 顺序与依赖
 
-Task 0 → (用户看 S1/S3)→ Task 1 → Task 2 → Task 3 → Task 4(发版联动)→ Task 5 → Task 6 → Task 7 → Task 8 → Task 9 → Task 10。Task 5(`shell.rs` 注册)与 Task 1–3 互不依赖,可并行,但**注册面板之前必须先有能用的原生层**,否则用户打开一个空面板。我没有可靠的工时依据,不给估计。
+Task 0 →(S2 由用户手动试)→ Task 1 → Task 2 → Task 3 → Task 4(发版联动)→ Task 5 → Task 6 → Task 7 → Task 8 → Task 9 → Task 10。Task 5(`shell.rs` 注册)与 Task 1–3 互不依赖,可并行,但**注册面板之前必须先有能用的原生层**,否则用户打开一个空面板。我没有可靠的工时依据,不给估计。
 
-## 最大的未知
+## 仍然未决的未知(探针之后)
 
-1. **S1:`file://` 在 WKWebView 子视图里能不能直接显示。** 用户要求必须支持,如果需要 `loadFileURL` 级别的 objc2 调用,Task 2 会变大。
-2. **S3:未信任页面的媒体/定位权限能不能在 wry 0.55 里显式拒绝。** 如果 wry 没有对应开关、必须自己实现 `WKUIDelegate`,这是个独立的风险点,可能要先发 bytehost 的一个小版本。
-3. **S2:是否必须注入脚本做焦点桥。** 注入就意味着页面能看到 `window.ipc`;白名单 + nonce 限制了影响,但"页面能向宿主发消息"这件事本身要写进 ADR。
+1. **S2:子视图里 ⌘C/⌘V/⌘X/⌘A 与中文输入法**——等你按报告里的步骤手动试(有 / 没有 Edit 菜单各一遍)。它决定 Task 2 要不要注入脚本、Task 6 要不要装 Edit 菜单。
+2. **旧 macOS 上含空格 URL 会不会 panic**——没有旧系统可测;已用"宿主自己百分号编码"绕开,并要在 ADR 写明最低支持版本。
+3. **定位权限**——wry 没有钩子,未测;若面板要对外使用,上线前人工确认。
+4. **导航失败**——wry 无回调,靠超时兜底,需要定超时秒数与文案(设计决定,实现前问用户)。
