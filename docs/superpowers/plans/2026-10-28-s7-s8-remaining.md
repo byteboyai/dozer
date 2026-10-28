@@ -12,7 +12,7 @@
 | R4 | ~~Codebuddy 群聊发言~~ **已完成**(Dozer `53a7100a`,tag `libs-2026-10-28b`;Digger 已重钉) | 验证+小改 | 无 | Dozer `group_adapter.rs` | 3 |
 | R5 | ~~G1 搜索框右键菜单~~ **已完成(整框语义,待人工验证)**(Digger `2a23894`) | 新功能 | 中文输入法人工验证 | Digger | 4 |
 | R6 | Opencode 群聊发言 | 阻塞于上游 | 无 | Dozer | 搁置,见触发条件 |
-| R7 | X1 跨仓库迁移(**计划已写**) | 跨仓库 | 排期 | byteui、bytehost、双方重钉 | 单独计划 |
+| R7 | X1 跨仓库迁移(**阶段 A 已完成**,阶段 B 未开始) | 跨仓库 | 排期 | byteui、bytehost、双方重钉 | 单独计划 |
 | R8 | 零碎:门禁脚本重新 vendor、Dozer 项目面板用失败明细 | 可选 | 否 | Digger / Dozer | 有空再做 |
 
 依赖:R1 的结论决定要不要追加修复;R4 需要新的 libs tag(与下一次库改动合并发,不为它单发);R5、R7 互不依赖也不挡其它项。

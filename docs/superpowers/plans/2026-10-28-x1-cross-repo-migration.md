@@ -51,7 +51,9 @@
 
 ---
 
-# 阶段 A:byteui(页签部件 + 菜单弹层)
+# 阶段 A:byteui(页签部件 + 菜单弹层) —— 已完成(2026-10-28)
+
+**结果:** byteui `v0.5.0`、bytehost `v0.4.13`(只跟升 byteui 钉版)、Dozer `libs-2026-10-28c`(`d03511f2`)已推送;Digger `main` `c9ec001` 已重钉并消费(Digger 无远端,未推送)。门禁:Dozer 全 workspace 3585 通过/0 失败;Digger 干净快照 847 通过/0 失败(849 − 3 条 `overflow_geometry` 测试 + 1 条极端锚点构造测试),clippy/fmt 零警告,四个检查脚本通过。**可见变化:** ① 菜单背景统一不透明(alpha 1.0);② Digger 预览页签提示气泡改为 byteui 统一样式;③ Digger Agent 溢出下拉的宽高上限不再随 UI 缩放(scale=1 时不变)。**待人工验证:** 以上三处真实视觉,以及 Dozer 的页签/右键菜单外观没有漂移。下面各 Task 的勾选项保留作记录。
 
 ### Task 1: 盘点三份实现的差异 —— 已完成(2026-10-28)
 
@@ -139,7 +141,9 @@
 
 ---
 
-# 阶段 B:bytehost-desktop(可信原生子 webview 执行器)
+# 阶段 B:bytehost-desktop(可信原生子 webview 执行器) —— 未开始
+
+注意版本号:`v0.4.13` 已被阶段 A 用于跟升 byteui 钉版,本阶段的 `native_child` 发 `v0.4.14`。
 
 ### Task 7: 把 `native_host.rs` 搬进 `bytehost-desktop::native_child`
 
