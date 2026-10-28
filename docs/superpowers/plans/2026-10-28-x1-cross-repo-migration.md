@@ -109,16 +109,21 @@
 - [ ] **Step 4:** byteui 全量测试通过;`cargo build` 非 macOS 目标至少 `cargo check` 通过(能交叉则交叉,不能则在报告里写"未验证")。
 - [ ] **Step 5:** 提交。
 
-### Task 5: byteui 发版与 Dozer 重钉
+### Task 5: byteui 发版、bytehost 跟升、Dozer 重钉
+
+**为什么多一环(Task 5 动手时发现):** `bytehost-chrome` 自己钉着 byteui `v0.4.6`。Dozer 只升 byteui 的话,锁文件里会出现**两份 byteui**,而 bytehost-chrome 的函数收发的是 byteui 的类型,编译不过。所以发版顺序是 **byteui → bytehost(只跟升 byteui 钉版,不含代码改动)→ Dozer 重钉两者**。bytehost 的这次跟升版本号取 `v0.4.13`;阶段 B 的 `native_child` 改发 `v0.4.14`(Task 8)。
 
 **Files:**
-- Modify: byteui `Cargo.toml` 版本、`CHANGELOG.md`;Dozer `Cargo.toml`/`Cargo.lock`;`chrome/menu.rs`、`tab_widget.rs` 中已迁出的实现缩成重导出
+- byteui:`Cargo.toml` 版本 0.5.0、`CHANGELOG.md`
+- bytehost:`crates/bytehost-chrome/Cargo.toml`(byteui 钉版 → `v0.5.0`)、`Cargo.lock`
+- Dozer:11 个 crate 的 `Cargo.toml`(`dozer-app` + 10 个 `dozer-panel-*`)里 byteui 钉版;所有 `bytehost-*` 钉版 → `v0.4.13`;`Cargo.lock`
 
-- [ ] **Step 1:** byteui 版本递增(0.4.x → 0.5.0,因为新增模块属于 API 追加但对下游是新 minor,**此为我的决定**,可由用户改),CHANGELOG 写明迁入的模块,并**单列一条行为变化**:`theme::region::context_menu()` 的背景 alpha 为 1.0。
-- [ ] **Step 2:** **请求用户确认**后推送 byteui 并打 tag。
-- [ ] **Step 3:** Dozer 改 `byteui = { tag = ... }` 为新 tag;`chrome/menu.rs`、`chrome/tab_widget.rs` 缩成重导出;**调用点不动**。
-- [ ] **Step 4:** Dozer 门禁:全 workspace 测试数与迁移前相同(记基线数字)且 0 失败;`check-i18n.sh`、`check-log-scope.sh`、`check-shared-deps.sh`;`cargo tree -d` 里 byteui/iced 各 1 份。
-- [ ] **Step 5:** Dozer 发新 libs tag(`libs-YYYY-MM-DD`);**请求用户确认**后推送 main 与 tag。
+- [x] **Step 1(已在本地完成):** byteui 版本 0.4.6 → **0.5.0**(此为我的决定,可改),CHANGELOG 写明迁入的模块并**单列一条行为变化**(菜单背景 alpha 1.0,`spec_dump` 多一个区域)。byteui 测试 115 通过。bytehost 在本地 `[patch]` 到新 byteui 后,`bytehost-chrome/-desktop/-core/-panel/-webview` 333 个测试通过。注意:带 `[patch]` 验证时必须 `cargo update -p byteui`,否则锁文件仍指旧版、补丁"未使用"而验证落空。
+- [ ] **Step 2:** **请求用户确认**后:byteui 合并进 `main`、推送 `main`、打并推送 `v0.5.0`。
+- [ ] **Step 3:** bytehost:`bytehost-chrome` 钉 `v0.5.0`,`cargo update -p byteui` 生成锁文件,全 workspace 测试(`bytehost-client` 的 `embed` 示例在 `main` 上本来就编不过,是既有问题,不算本次回归)。**请求用户确认**后推送并打 `v0.4.13`。
+- [ ] **Step 4:** Dozer(`feat/x1-byteui`):byteui → `v0.5.0`,bytehost → `v0.4.13`;删掉本地 `[patch]`;`cargo update` 后确认 `cargo tree -d` 里 byteui/iced 各 1 份;**调用点不动**。
+- [ ] **Step 5:** Dozer 门禁(全 workspace 测试数记基线,与 Task 4 结束时的 3585 比对)、`check-i18n.sh`、`check-log-scope.sh`、`check-shared-deps.sh`。
+- [ ] **Step 6:** Dozer 分支合并进 `main`,发新 libs tag(`libs-YYYY-MM-DD`);**请求用户确认**后推送 `main` 与 tag。
 
 ### Task 6: Digger 同日重钉并消费
 
@@ -153,7 +158,7 @@
 
 ### Task 8: bytehost 发版,Dozer 与 Digger 同日重钉
 
-- [ ] **Step 1:** bytehost 版本递增(`v0.4.12` → `v0.4.13`,仅追加模块;此为我的决定),**请求用户确认**后推送并打 tag。
+- [ ] **Step 1:** bytehost 版本递增(`v0.4.13` → `v0.4.14`,仅追加模块;`v0.4.13` 已在 Task 5 用于跟升 byteui 钉版;此为我的决定),**请求用户确认**后推送并打 tag。
 - [ ] **Step 2:** Dozer 重钉 bytehost(它不使用新模块,重钉只为两边钉版一致)、门禁全绿、发新 libs tag、**请求确认**后推送。
 - [ ] **Step 3:** Digger 同日重钉,`check-shared-deps.sh` 0 阻断。
 
@@ -194,7 +199,7 @@
 3. **悬停**:Digger 保持阶跃,不收敛成渐变(产品约定 D2)。
 
 仍是我的默认(可改):
-1. byteui 版本号 0.4.x → **0.5.0**;bytehost **v0.4.13**。
+1. byteui **0.5.0**;bytehost:Task 5 跟升 **v0.4.13**,阶段 B 的 `native_child` 发 **v0.4.14**。
 2. 阶段 A、B **分开**做,A 全部完成并验收后再开 B,互不依赖。
 3. `markdown/host.rs` 是否并入 `native_child`(Task 9 Step 2):以 diff 结果为准,设置不同就不并。
 
