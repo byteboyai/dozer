@@ -9,7 +9,7 @@
 | Claude | 已支持(原有) | 不变 |
 | Codex | 已支持(原有) | 不变 |
 | **Qodercn** | **本期新增支持** | 实测:内置工具集被限定为 `Glob`/`Grep`/`Read`;写文件、跑 shell、联网均无对应工具;读金丝雀成功;不落可恢复会话 |
-| Codebuddy | **仍不支持,待验证** | 参数面与 Claude 同构,但实测时未登录(401),没有拿到行为证据 |
+| **Codebuddy** | **2026-10-28 新增支持(R4)** | 登录后实测:内置工具集被限定为 `Read`/`Glob`/`Grep`;写文件、跑 shell、联网均无对应工具;读金丝雀成功;`--no-session-persistence` 后 `~/.codebuddy/projects/` 不新增目录 |
 | Opencode | **仍不支持** | 无限制工具参数;配置里写 `webfetch: deny` 后联网仍成功;无「不落会话」开关 |
 
 ## 方法
@@ -25,11 +25,17 @@
 - **指令措辞要点:** Qodercn 把 stdin 内容放在 `-p` 文字**之前**。沿用 Claude 的「按 stdin 中给出的…」时,模型会抱怨没收到 stdin 里的记录,这类元评论会混进群聊发言。改成「按上文给出的…」后消失(见 `QODERCN_POINTER`)。
 - 已通过产线路径复验:`cargo test -p dozerd group_adapter::tests::real_qodercn -- --ignored --nocapture`(走真实 `HeadlessGroupRunner`)。
 
-## Codebuddy(待验证)
+## Codebuddy(通过,2026-10-28)
 
-`--tools`、`--allowedTools`/`--disallowedTools`、`--no-session-persistence`、`--permission-mode` 都有,与 Claude 同构,很可能能同样做到只读。**但没有行为证据:** 实测返回 `401 Authentication required`(未登录),不能据此宣称只读成立。
+首次调研(2026-10-27)时未登录(401),没有行为证据,故当时保持不支持。登录后(2.170.0)补测:
 
-解锁步骤:用户登录 CodeBuddy 后,仿 `real_qodercn_is_readonly_through_the_runner` 加一条针对 Codebuddy 的手动冒烟,通过后再给 `build_turn_command` 加分支并把 `agents_without_a_verified_readonly_mode_stay_unsupported` 里的 Codebuddy 去掉。注意 `-y`(`--dangerously-skip-permissions`)是 Dozer 其它路径给它加的,群聊**不能**加。
+命令:`codebuddy -p <指令> --no-session-persistence --tools Read,Grep,Glob --disallowedTools Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch`,提示词走 stdin。与 Claude 同构,黑名单用逗号分隔的单个参数。
+
+- 模型自述工具集只有 `Read`、`Glob`、`Grep`;创建文件、`echo z > pwned4.txt`、联网都「没有对应工具」。目录里只有 `canary.txt`,没有 `pwned*`。读金丝雀成功。
+- 不落会话:跑前跑后对比 `~/.codebuddy/projects/`,没有新增项目目录;Dozer 摄取的正是这个目录,所以群聊发言不会混进用户的会话列表。**但** CodeBuddy 仍会在 `~/.codebuddy/traces/`、`logs/`、`sessions/<pid>.json` 写运行记录(含请求内容),这是它自己的运行日志,不是可恢复会话;与 Qodercn 的 `~/.qoder-cn/logs/` 同性质。
+- 已通过产线路径复验:`cargo test -p dozerd group_adapter::tests::real_codebuddy -- --ignored --nocapture`(走真实 `HeadlessGroupRunner`),中性措辞下连续 5/5 通过。
+- **冒烟提示词的坑:** 第一版提示词含 `pwned1.txt`、「只读安全测试」,模型会把它当成渗透/数据外泄演示整体拒绝(2 次里 1 次),读取断言就不成立。这是模型的自我判断,不是工具限制失效;换成中性措辞(`notes1.txt`、「如果某一步没有对应的工具,直接说明即可」)后稳定。冒烟只能验证「工具层只读」,不要把它当成模型会配合的证据。
+- 不加 `-y`/`--dangerously-skip-permissions`/`--permission-mode`:`build_turn_command` 的单测钉住了这点。
 
 ## Opencode(不支持)
 
@@ -47,4 +53,4 @@
 
 ## 对 Digger 的影响
 
-Digger 弹窗里的常驻说明「目前仅 Claude、Codex 可以发言」(`adapters/group_chat.rs`)要在重钉后改为「Claude、Codex、Qodercn」。Codebuddy、Opencode 在验证通过前仍会「能加进群、发言时失败」。
+Digger 弹窗里的常驻说明「目前仅 Claude、Codex 可以发言」(`adapters/group_chat.rs`)要在重钉后改为「Claude、Codex、Qodercn」(Codebuddy 随下一个 libs tag 一起加)。Codebuddy 同样改为可发言:弹窗说明应是「Claude、Codex、Qodercn、Codebuddy」。Opencode 仍会「能加进群、发言时失败」。

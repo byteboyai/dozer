@@ -3,8 +3,8 @@
 //! - 不用分隔符 JSON 协议,直接取最终文本作为回复;
 //! - 子进程 `kill_on_drop(true)`,超时/取消时真正杀掉,不留孤儿;
 //! - 检查退出码,stderr 尾部进入失败原因;
-//! - **只读**:Codex `--sandbox read-only`,Claude 工具白/黑名单,Qodercn 限定内置
-//!   工具集为读/搜。Opencode、Codebuddy 没有经实测验证的只读模式,保持不支持。**严禁**加
+//! - **只读**:Codex `--sandbox read-only`,Claude 工具白/黑名单,Qodercn、Codebuddy
+//!   限定内置工具集为读/搜。Opencode 没有经实测验证的只读模式,保持不支持。**严禁**加
 //!   `--dangerously-skip-permissions`/`-y`(Todo 任务处理里有,群聊不能抄)。
 
 use crate::headless_agent::{bare_program_name, resolve_binary_path};
@@ -34,6 +34,18 @@ const QODERCN_POINTER: &str = "请严格按上文给出的群聊记录与规则�
 /// Claude 只读:允许读/搜,禁止写、执行、联网。**以 Task 0 findings 为准**。
 const CLAUDE_READONLY_ARGS: [&str; 4] = [
     "--allowedTools",
+    "Read,Grep,Glob",
+    "--disallowedTools",
+    "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch",
+];
+
+/// Codebuddy 只读(2.170.0,收尾计划 R4 金丝雀实测):`--tools` 把内置工具集限定为
+/// 读/搜(模型自述工具集只有 `Read`/`Glob`/`Grep`),写文件、跑 shell、联网都没有对应
+/// 工具;`--disallowedTools` 是第二道防线。`--no-session-persistence` 后
+/// `~/.codebuddy/projects/` 下不新增项目目录(它另在 `traces/`、`logs/` 写运行记录,
+/// 不是可恢复会话)。不加 `-y`/`--permission-mode`。
+const CODEBUDDY_READONLY_ARGS: [&str; 4] = [
+    "--tools",
     "Read,Grep,Glob",
     "--disallowedTools",
     "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch",
@@ -135,6 +147,16 @@ pub(crate) fn build_turn_command(
             for tool in QODERCN_DENIED_TOOLS {
                 cmd.arg("--disallowed-tools").arg(tool);
             }
+            Some((cmd, Some(prompt.as_bytes().to_vec())))
+        }
+        AgentKind::Codebuddy => {
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.current_dir(project_dir)
+                .env_remove(dozer_core::paths::session_env())
+                .arg("-p")
+                .arg(CLAUDE_STDIN_POINTER)
+                .arg("--no-session-persistence")
+                .args(CODEBUDDY_READONLY_ARGS);
             Some((cmd, Some(prompt.as_bytes().to_vec())))
         }
         AgentKind::Codex => {
@@ -246,7 +268,7 @@ impl GroupAgentRunner for HeadlessGroupRunner {
         Box::pin(async move {
             if !matches!(
                 req.agent,
-                AgentKind::Claude | AgentKind::Codex | AgentKind::Qodercn
+                AgentKind::Claude | AgentKind::Codex | AgentKind::Qodercn | AgentKind::Codebuddy
             ) {
                 return Err(TurnError::Unsupported);
             }
@@ -419,23 +441,64 @@ mod tests {
         assert!(cleared);
     }
 
-    /// 这两个在收尾计划 T3c 的实测里**没能证明**能在执行层只读,所以保持不支持:
-    /// - Opencode(v2.1.2):`run` 没有限制工具/禁会话落库的参数;用
-    ///   `OPENCODE_CONFIG_CONTENT` 写了 `webfetch: deny` 后联网仍然成功(HTTP 200),
-    ///   且发言会进用户的 Opencode 会话库。
-    /// - Codebuddy(2.170.0):参数面与 Claude 同构(`--tools`/`--disallowedTools`/
-    ///   `--no-session-persistence`),但实测时未登录(401),没有拿到行为验证。
+    #[test]
+    fn codebuddy_command_is_readonly_and_prompt_goes_through_stdin() {
+        let (cmd, stdin) = build_turn_command(
+            AgentKind::Codebuddy,
+            "codebuddy",
+            Path::new("/proj"),
+            "提示词",
+            None,
+        )
+        .unwrap();
+        let args = args_of(&cmd);
+        assert_eq!(args[0], "-p");
+        assert!(args.contains(&"--no-session-persistence".to_string()));
+        // 内置工具集被限定为只读三件套;不是「放开再黑名单」。
+        let i = args.iter().position(|a| a == "--tools").unwrap();
+        assert_eq!(args[i + 1], "Read,Grep,Glob");
+        // 黑名单是第二道防线:写、执行、联网都列出。
+        let i = args.iter().position(|a| a == "--disallowedTools").unwrap();
+        let denied: Vec<&str> = args[i + 1].split(',').collect();
+        for t in [
+            "Bash",
+            "Edit",
+            "Write",
+            "NotebookEdit",
+            "WebFetch",
+            "WebSearch",
+        ] {
+            assert!(denied.contains(&t), "黑名单缺 {t}: {denied:?}");
+        }
+        assert!(
+            !args.iter().any(|a| a.contains("dangerously")
+                || a.contains("bypass")
+                || a == "-y"
+                || a == "--permission-mode"
+                || a == "--allowedTools"),
+            "群聊不得放宽权限: {args:?}"
+        );
+        assert_eq!(stdin.as_deref(), Some("提示词".as_bytes()));
+        assert_eq!(cmd.as_std().get_current_dir(), Some(Path::new("/proj")));
+        let cleared = cmd
+            .as_std()
+            .get_envs()
+            .any(|(k, v)| k.to_str() == Some(dozer_core::paths::session_env()) && v.is_none());
+        assert!(cleared);
+    }
+
+    /// Opencode 在收尾计划 T3c 的实测里**没能证明**能在执行层只读,所以保持不支持
+    /// (v2.1.2):`run` 没有限制工具/禁会话落库的参数;用 `OPENCODE_CONFIG_CONTENT`
+    /// 写了 `webfetch: deny` 后联网仍然成功(HTTP 200),且发言会进用户的 Opencode 会话库。
     ///
     /// 加支持之前必须先用金丝雀文件实测「写/执行/联网被拒、读成功」,见
     /// `docs/superpowers/specs/2026-10-27-group-chat-agents-readonly-research.md`。
     #[test]
     fn agents_without_a_verified_readonly_mode_stay_unsupported() {
-        for a in [AgentKind::Opencode, AgentKind::Codebuddy] {
-            assert!(
-                build_turn_command(a, "x", Path::new("/p"), "p", None).is_none(),
-                "{a:?} 没有经实测验证的只读模式,不能进群聊"
-            );
-        }
+        assert!(
+            build_turn_command(AgentKind::Opencode, "x", Path::new("/p"), "p", None).is_none(),
+            "Opencode 没有经实测验证的只读模式,不能进群聊"
+        );
     }
 
     #[test]
@@ -660,6 +723,40 @@ mod tests {
             .await
             .unwrap_or_else(|e| panic!("qodercn 失败: {e}"));
         println!("qodercn => {reply}");
+        assert!(reply.contains("CANARY-7f3a"), "读取应成功: {reply}");
+        let mut files: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        files.sort();
+        assert_eq!(files, ["canary.txt"], "只读:目录里不能出现新文件");
+    }
+
+    /// 手动冒烟:走真实的 `HeadlessGroupRunner` 验证 Codebuddy 在执行层只读
+    /// (需要本机装好并登录 codebuddy)。读成功、写和执行被拒、目录里不出现新文件。
+    /// `cargo test -p dozerd group_adapter::tests::real_codebuddy -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn real_codebuddy_is_readonly_through_the_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("canary.txt"), "CANARY-7f3a").unwrap();
+        let (_tx, rx) = watch::channel(false);
+        let reply = HeadlessGroupRunner
+            .run(
+                TurnRequest {
+                    agent: AgentKind::Codebuddy,
+                    project_dir: dir.path().to_path_buf(),
+                    prompt: "请依次完成并如实报告每一步:1. 创建文件 notes1.txt,内容为 x;\
+                             2. 用 shell 执行 echo y > notes2.txt;3. 读取 canary.txt 并复述内容。\
+                             如果某一步没有对应的工具,直接说明即可。最后一行总结哪些成功、哪些没做到。"
+                        .into(),
+                    timeout: Duration::from_secs(150),
+                },
+                rx,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("codebuddy 失败: {e}"));
+        println!("codebuddy => {reply}");
         assert!(reply.contains("CANARY-7f3a"), "读取应成功: {reply}");
         let mut files: Vec<String> = std::fs::read_dir(dir.path())
             .unwrap()
