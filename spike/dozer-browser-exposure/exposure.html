@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>exposure</title>
+<body style="font:14px monospace;background:#fff;color:#000"><h3>Dozer 浏览器暴露面复现(自动运行)</h3><pre id="o"></pre>
+<script>
+var q=[];function log(s){q.push(s);document.getElementById('o').textContent=q.join('\n')}
+log('A window.ipc = '+typeof window.ipc);
+log('C window.__dozer_webview = '+String(window.__dozer_webview)+' (注入脚本留下的全局)');
+try{ if(window.ipc){ window.ipc.postMessage('title:'+window.__dozer_webview+':HACKED-BY-PAGE'); log('B 已发 title: IPC(看页签标题是否变成 HACKED-BY-PAGE)'); } }catch(e){log('B 失败 '+e)}
+fetch('dozer://review-trace/data.json',{mode:'no-cors'}).then(r=>log('D fetch dozer:// (no-cors) => 到达了协议处理器, type='+r.type)).catch(e=>log('D fetch dozer:// => 被拒/不可达: '+e))
+var i=new Image();i.onload=()=>log('D2 <img dozer://> onload');i.onerror=()=>log('D2 <img dozer://> onerror(协议应答了但不是图片也算到达)');i.src='dozer://review-trace/data.json';
+setTimeout(()=>{log('E 20 秒后顶层导航到 dozer://review-trace/data.json');location.href='dozer://review-trace/data.json';setTimeout(()=>log('E2 3 秒后仍在本页 => 导航被拒(期望)'),3000)},20000);
+</script>

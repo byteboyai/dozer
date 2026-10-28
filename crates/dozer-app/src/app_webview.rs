@@ -225,6 +225,43 @@ mod tests {
         }
     }
 
+    /// 浏览器面板的网页是**不可信内容**,但目前和可信预览共用同一个构建器分支(根治是改用 `web_child`,见
+    /// `docs/superpowers/plans/2026-10-28-dozer-browser-untrusted-webview.md`)。在那之前,浏览器分支必须自己带上
+    /// 这几道闸:导航只放行白名单(否则页面能把自己导航到 `dozer://…` 变成宿主来源)、下载拒绝(这个分支里
+    /// wry 默认放行)、`target=_blank` 的地址也过白名单。真机复现:没有这些时 `location.href = "dozer://review-trace/data.json"`
+    /// 会成功,地址栏变成 `dozer://…`。
+    #[test]
+    fn the_browser_webview_branch_gates_navigation_downloads_and_new_windows() {
+        let src = include_str!("runtime.rs");
+        let start = src
+            .find("// 浏览器面板 webview 额外挂")
+            .expect("浏览器钩子段落");
+        let end = start
+            + src[start..]
+                .find("// `dozer://` 自定义协议只对可信宿主安装")
+                .expect("协议段落");
+        let block = &src[start..end];
+        for required in [
+            ".with_navigation_handler(",
+            "allows_browse_navigation(",
+            ".with_download_started_handler(|_, _| false)",
+            "allows_new_tab(",
+        ] {
+            assert!(block.contains(required), "浏览器分支缺少 {required}");
+        }
+        // 白名单必须在导航处理器里真的被调用,而不是只出现在注释里。
+        let nav = &block[block.find(".with_navigation_handler(").unwrap()..];
+        assert!(
+            nav[..nav.len().min(300)].contains("allows_browse_navigation("),
+            "导航处理器必须调用白名单"
+        );
+        // 新窗口请求:只有白名单放行的地址才发 `BrowserNewWindow`。
+        let win = &block[block.find(".with_new_window_req_handler(").unwrap()..];
+        let allow_at = win.find("allows_new_tab(").expect("新窗口白名单");
+        let send_at = win.find("BrowserNewWindow").expect("新窗口消息");
+        assert!(allow_at < send_at, "必须先过白名单再发 BrowserNewWindow");
+    }
+
     /// T6:`AppViews` 捕获 `display_i18n` 后,外壳标题按 locale 解析、语言桥推送脚本按
     /// `build_i18n_snapshot` + `i18n_set_locale_script` 生成;`webview_locale = none` 不装桥。
     #[test]

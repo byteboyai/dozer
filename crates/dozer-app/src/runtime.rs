@@ -696,8 +696,18 @@ pub(crate) fn sync_webview_pool(
                                     .send_event(Message::BrowserNavigated(webview_id, url));
                             }
                         })
+                        // 浏览器页面是不可信内容:导航只放行白名单(http/https、本地 `file://`、`about:blank`),
+                        // 否则页面能把自己导航到 `dozer://…` 而变成宿主来源;下载在这个分支里 wry 默认放行,显式拒绝。
+                        // (根治是改用 `web_child`,见 docs/superpowers/plans/2026-10-28-dozer-browser-untrusted-webview.md)
+                        .with_navigation_handler(|url| {
+                            bytehost_webview::browse::allows_browse_navigation(&url)
+                        })
+                        .with_download_started_handler(|_, _| false)
                         .with_new_window_req_handler(move |url, _features| {
-                            let _ = win_proxy.send_event(Message::BrowserNewWindow(url));
+                            // `target=_blank` / `window.open` 的地址同样过白名单,不过的静默丢弃。
+                            if bytehost_webview::browse::allows_new_tab(&url) {
+                                let _ = win_proxy.send_event(Message::BrowserNewWindow(url));
+                            }
                             wry::NewWindowResponse::Deny
                         });
                 }
