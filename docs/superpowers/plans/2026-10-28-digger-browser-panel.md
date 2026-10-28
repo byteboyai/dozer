@@ -184,6 +184,8 @@
 
 ### Task 9: 示例与文档
 
+**已完成(2026-10-28,Digger 本地 `c5032e7`):** `crates/desktop/examples/browser_gallery.rs`(5 个状态:blank / two-tabs / bookmarks-open / notice / inline-error;`--list`、`--state`、`--check`;合成收藏夹,无真实 webview;三个状态实际启动并保持运行,**未能截图**——没有屏幕录制权限,视觉效果没看);`docs/adr/ADR-016-browser-panel-untrusted-content.md`;`docs/superpowers/notes/2026-10-28-browser-open-items.md`;README 加 ADR-016 与画廊命令。Digger 882 通过/0 失败。**ADR 里如实标为未决:** 最低 macOS 版本(只在 26.6.2 上测过)、定位权限未测、`file://` 页面除 `fetch` 外读本地文件的路径未测。`--check` 契约读不到库的内联错误,`inline-error` 只能在窗口里看。
+
 - [ ] `examples/browser_gallery.rs`(仿其它 gallery,无真实 webview,看视图);ADR-016 写明不可信内容的 wry 设置、导航白名单、`file://` 的取舍与已知风险(**本地文件页面能读同源的其它本地文件**,不是宿主权限,但用户要知道);Digger 的 open-items 与 README 里面板清单更新。提交。
 
 ### Task 10: 验收清单与收口
