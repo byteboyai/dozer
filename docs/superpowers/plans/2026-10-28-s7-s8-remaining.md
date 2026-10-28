@@ -6,7 +6,7 @@
 
 | # | 事项 | 类型 | 需要用户 | 改哪里 | 建议顺序 |
 |---|------|------|----------|--------|----------|
-| R1 | D4 风险:已存为「收起」的群聊布局无入口展开 | 核实+可能修复 | 点一下真实 Digger | Digger | 1 |
+| R1 | ~~D4 风险:已存为「收起」的群聊布局无入口展开~~ **已完成** | 核实+修复 | 无 | Digger | 1 |
 | R2 | 新行为的人工 GUI 验收 | 验收 | 是 | 无 | 2(与 R1 同一次) |
 | R3 | Digger 没有远端,提交只在本地 | 配置 | 给仓库地址 | Digger | 随时,越早越好 |
 | R4 | Codebuddy 群聊发言 | 验证+小改 | 登录 CodeBuddy | Dozer `group_adapter.rs` | 3 |
@@ -17,7 +17,9 @@
 
 依赖:R1 的结论决定要不要追加修复;R4 需要新的 libs tag(与下一次库改动合并发,不为它单发);R5、R7 互不依赖也不挡其它项。
 
-## R1 D4 风险核实
+## R1 D4 风险核实 —— 已完成(2026-10-28,Digger `shell.rs`)
+
+**结论:** 风险属实——布局文件的 `panes` 持久化每个面板的 `collapsed`,且 `ShellMsg::TogglePane` 是唯一把它置位的入口。已按推荐的 A 方案修复:读盘前 JSON 转换 `group_chat_never_collapsed`,保留分栏比例,不写盘,带失败测试先行。下面的勾选项保留作记录。
 
 **问题:** `list_collapse_button` 与展开条删掉后,`ShellMsg::TogglePane(group_chat_id())` 在群聊里不再有发送方。若 Digger 的布局存储(`bytehost_desktop::PaneStore`)把「群聊已收起」持久化,这样的用户重启后看到收起的群聊且无法展开。
 
