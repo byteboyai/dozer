@@ -184,9 +184,10 @@ impl Tabs {
     }
 
     /// 提交解析:`Ok(Some(url))` = 有效网址(裸域名自动补 `https://`);
-    /// `Ok(None)` = 空输入,no-op;`Err(message)` = 本地路径(以 `/` 或
-    /// `~/` 开头),浏览器不支持,`message` 是"浏览器不支持打开本地文件"
-    /// 这条文案。带 `://` 的完整 URL(如 `https://x.com`)和单冒号 scheme
+    /// `Ok(None)` = 空输入,no-op;以 `/` 或 `~/` 开头的本地路径转成
+    /// `file://` URL(`~/` 用 `$HOME` 展开);`Err(message)` 只剩无法转换的
+    /// 本地路径(`//host/..` 或没有 `$HOME` 的 `~/`),`message` 是"浏览器
+    /// 不支持打开本地文件"这条文案。带 `://` 的完整 URL(如 `https://x.com`)和单冒号 scheme
     /// (如 `about:blank`/`data:`/`mailto:`)都原样保留,只有既无 `://` 也
     /// 无 scheme 的裸输入(域名/IP/`host:port`)才补 `https://`。**不**自动
     /// 失焦(同 Files 搜索框 Stage 2 的决定,Enter 提交后光标仍留在输入框
@@ -198,6 +199,10 @@ impl Tabs {
             return Ok(None);
         }
         if input.starts_with('/') || input.starts_with("~/") {
+            let home = std::env::var("HOME").ok();
+            if let Some(url) = local_path_to_file_url(input, home.as_deref()) {
+                return Ok(Some(url));
+            }
             return Err(dozer_model::LocalizedText::keyed(
                 WEB_OWNER,
                 "error.local_path",
@@ -230,6 +235,31 @@ impl Tabs {
             })
             .collect()
     }
+}
+
+/// 把地址栏里的本地路径(`/…` 或 `~/…`)转成 `file://` URL;不是本地路径、`//host/…`
+/// (协议相对 / UNC 形式)、或 `~/` 缺 `home` 时返回 `None`。只转义会改变 URL 结构的
+/// 字符(`%`、空格、`#`、`?`),中文等非 ASCII 原样保留,交给宿主在导航前统一编码。
+fn local_path_to_file_url(input: &str, home: Option<&str>) -> Option<String> {
+    let path = if let Some(rest) = input.strip_prefix("~/") {
+        let home = home.filter(|h| !h.is_empty())?;
+        format!("{}/{rest}", home.trim_end_matches('/'))
+    } else if input.starts_with('/') && !input.starts_with("//") {
+        input.to_string()
+    } else {
+        return None;
+    };
+    let mut url = String::from("file://");
+    for c in path.chars() {
+        match c {
+            '%' => url.push_str("%25"),
+            ' ' => url.push_str("%20"),
+            '#' => url.push_str("%23"),
+            '?' => url.push_str("%3F"),
+            c => url.push(c),
+        }
+    }
+    Some(url)
 }
 
 /// 判定 `input` 是否已带 URI scheme(单冒号形式,如 `about:blank`/`data:`/
@@ -266,7 +296,6 @@ fn has_explicit_scheme(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::WEB_OWNER;
     use crate::adapter::BrowserWebviewSpec;
 
     #[test]
@@ -294,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn addr_focus_and_submit_parses_url_and_rejects_local_paths() {
+    fn addr_focus_and_submit_parses_url_and_opens_local_paths() {
         let mut t = Tabs::default();
         t.set_addr_focused(true);
         assert!(t.addr_focused());
@@ -311,25 +340,7 @@ mod tests {
 
         t.set_addr_focused(true);
         t.set_addr_buffer("/tmp/x".to_string());
-        assert_eq!(
-            t.addr_submit(),
-            Err(dozer_model::LocalizedText::keyed(
-                WEB_OWNER,
-                "error.local_path",
-                "Opening local files is not supported in the browser"
-            ))
-        );
-
-        t.set_addr_focused(true);
-        t.set_addr_buffer("~/x".to_string());
-        assert_eq!(
-            t.addr_submit(),
-            Err(dozer_model::LocalizedText::keyed(
-                WEB_OWNER,
-                "error.local_path",
-                "Opening local files is not supported in the browser"
-            ))
-        );
+        assert_eq!(t.addr_submit(), Ok(Some("file:///tmp/x".into())));
 
         t.set_addr_focused(true);
         t.set_addr_buffer("".to_string());
@@ -341,6 +352,27 @@ mod tests {
         t.set_addr_focused(false);
         assert_eq!(t.addr_buffer(), "");
         assert!(!t.addr_focused());
+    }
+
+    #[test]
+    fn local_paths_become_file_urls_with_reserved_characters_escaped() {
+        let home = Some("/Users/me");
+        for (input, want) in [
+            ("/tmp/x", "file:///tmp/x"),
+            ("/Users/me/My File.html", "file:///Users/me/My%20File.html"),
+            ("/a/b#c?d%e", "file:///a/b%23c%3Fd%25e"),
+            ("/Users/me/中文.html", "file:///Users/me/中文.html"),
+            ("~/x.html", "file:///Users/me/x.html"),
+            ("~/My File.html", "file:///Users/me/My%20File.html"),
+        ] {
+            assert_eq!(local_path_to_file_url(input, home).as_deref(), Some(want));
+        }
+        // `~/` 没有 HOME 可展开时不猜,交回调用方报错。
+        assert_eq!(local_path_to_file_url("~/x", None), None);
+        assert_eq!(local_path_to_file_url("~/x", Some("")), None);
+        // 不是本地路径的输入不处理。
+        assert_eq!(local_path_to_file_url("example.com/a", home), None);
+        assert_eq!(local_path_to_file_url("//host/share", home), None);
     }
 
     #[test]

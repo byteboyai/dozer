@@ -120,7 +120,9 @@
 - [ ] **Step 4: 变异验证:** 依次把 devtools 改 `true`、下载处理改放行、导航处理改恒 `true`、删掉新窗口白名单检查、跳过代理委托安装,**每一种都必须让钉死测试变红**,再恢复(用 python 改,不要用多行 `sed`)。
 - [ ] **Step 5:** `cargo test --workspace --lib --tests`、clippy、fmt、`scripts/check-deps.sh`;提交。
 
-### Task 3: 库只读访问器
+### Task 3: 库只读访问器 —— 已完成(2026-10-28,Dozer main)
+
+**结果:** `State::addr_text()` 已加(`addr_text_mirrors_the_address_buffer`)。用户裁决「裸路径自动补 `file://`」已落地:`Tabs::addr_submit` 对 `/…`、`~/…` 返回 `file://` URL(`~/` 用 `$HOME` 展开;`%`、空格、`#`、`?` 转义,中文原样留给宿主编码);`//host/..` 与无 `$HOME` 的 `~/` 仍报 `error.local_path`。两条旧测试按裁决改期望(`addr_submit_rejects_local_paths_and_blank_input`→`addr_submit_opens_local_paths_and_ignores_blank_input`,另一条同理),新增 `local_paths_become_file_urls_with_reserved_characters_escaped`;验收 H13 已同步。库 56 测试通过,Dozer 全 workspace 通过(`product_isolation` 需先 `cargo build -p dozerd --example product_daemon`)。**注意:** 库 Dozer 也在用,Dozer 浏览器里同样会打开本地路径。下面的勾选项保留作记录。
 
 **Files:** Modify `dozer/crates/dozer-panel-browser/src/state.rs`;Test `tests.rs`。
 

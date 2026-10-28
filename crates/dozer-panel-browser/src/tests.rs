@@ -227,7 +227,33 @@ async fn update_addr_submit_opens_in_active_tab() {
 }
 
 #[tokio::test]
-async fn update_addr_submit_local_path_sets_error_without_opening_tab() {
+async fn addr_text_mirrors_the_address_buffer() {
+    let mut state = State::default();
+    let handle = tokio::runtime::Handle::current();
+    let service = service_for_test();
+    assert_eq!(state.addr_text(), "");
+    update(
+        &mut state,
+        Message::AddrInput("abc".to_string()),
+        Some(1),
+        &service,
+        &handle,
+        |_| {},
+    );
+    assert_eq!(state.addr_text(), "abc");
+    update(
+        &mut state,
+        Message::AddrSubmit,
+        Some(1),
+        &service,
+        &handle,
+        |_| {},
+    );
+    assert_eq!(state.addr_text(), "", "提交取走草稿");
+}
+
+#[tokio::test]
+async fn update_addr_submit_local_path_opens_a_file_url_in_the_active_tab() {
     let mut state = State::default();
     let handle = tokio::runtime::Handle::current();
     let service = service_for_test();
@@ -247,19 +273,9 @@ async fn update_addr_submit_local_path_sets_error_without_opening_tab() {
         &handle,
         |_| {},
     );
-    assert_eq!(
-        state.error,
-        Some(dozer_model::LocalizedText::keyed(
-            WEB_OWNER,
-            "error.local_path",
-            "Opening local files is not supported in the browser"
-        ))
-    );
-    assert_eq!(
-        state.tabs.tabs().len(),
-        1,
-        "仍是默认的 about:blank,未新增 tab"
-    );
+    assert!(state.error.is_none());
+    assert_eq!(state.tabs.tabs().len(), 1, "复用激活 tab,不新增");
+    assert_eq!(state.tabs.tabs()[0].url, "file:///tmp/x");
 }
 
 #[tokio::test]
@@ -965,7 +981,7 @@ async fn addr_submit_keeps_inner_whitespace_and_long_urls_verbatim() {
 }
 
 #[tokio::test]
-async fn addr_submit_rejects_local_paths_and_blank_input() {
+async fn addr_submit_opens_local_paths_and_ignores_blank_input() {
     let handle = tokio::runtime::Handle::current();
     let service = service_for_test();
     let submit = |input: String| {
@@ -994,14 +1010,18 @@ async fn addr_submit_rejects_local_paths_and_blank_input() {
         assert_eq!(st.tabs.tabs()[0].url, "about:blank", "{blank:?}");
         assert!(st.error.is_none(), "{blank:?}");
     }
-    // 黄金(取自搬迁前 dozer-app 的旧行为):`file://` 带 `://` 被原样接受并导航激活 tab,
-    // 不报错;只有以 `/` 或 `~/` 开头的裸路径才被拒。
+    // `file://` 带 `://` 被原样接受并导航激活 tab,不报错;以 `/` 开头的裸路径转成
+    // `file://`(用户裁决 2026-10-28,取代搬迁前"拒绝本地路径"的旧行为);无法转换的
+    // (`//host/..` 协议相对形式)仍报 `error.local_path`。
     let st = submit("file:///etc/passwd".to_string());
     assert_eq!(st.tabs.tabs().len(), 1);
     assert_eq!(st.tabs.tabs()[0].url, "file:///etc/passwd");
     assert!(st.error.is_none());
-    let st = submit("/Users/x/a.html".to_string());
+    let st = submit("/Users/x/My File.html".to_string());
     assert_eq!(st.tabs.tabs().len(), 1);
+    assert_eq!(st.tabs.tabs()[0].url, "file:///Users/x/My%20File.html");
+    assert!(st.error.is_none());
+    let st = submit("//evil.com/x".to_string());
     assert_eq!(st.tabs.tabs()[0].url, "about:blank");
     assert_eq!(
         st.error,

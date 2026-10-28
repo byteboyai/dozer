@@ -89,6 +89,11 @@ impl State {
         self.tabs.addr_focused()
     }
 
+    /// 地址栏当前草稿(只读)。宿主用它把输入框内容与"右键菜单 / 粘贴"等原生交互对账。
+    pub fn addr_text(&self) -> &str {
+        self.tabs.addr_buffer()
+    }
+
     /// 收藏夹侧栏当前是否展开——`app.rs::App::shell_state()` 读这个填
     /// `ShellState::browser_bookmarks_open`,几何计算据此决定网页 webview
     /// 是否要让出侧栏宽度。
