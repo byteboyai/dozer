@@ -133,6 +133,8 @@
 
 ### Task 4: 发版联动
 
+**已完成(2026-10-28):** bytehost `v0.4.15`(`54acfec`)、Dozer `libs-2026-10-28e`(`3fb3e0da`)已推送;Digger 本地重钉提交(无远端),测试 836 通过/0 失败,fmt/clippy 干净。Dozer 全 workspace 3589 通过;全 workspace clippy 有 1 个与本次无关的既有报错(`dozer-hook/src/opencode_install.rs:106` `needless_borrow`,rust 1.98)。Digger 此时还没有 `dozer-panel-browser` 依赖,Task 5/6 再加(用同一 libs tag)。
+
 - [ ] **Step 1:** bytehost 版本 `v0.4.14` → **`v0.4.15`**(纯追加,两个新模块),**请求用户确认**后推送并打 tag。
 - [ ] **Step 2:** Dozer 重钉 bytehost、门禁(全 workspace 测试、`check-i18n`、`check-log-scope`、`check-shared-deps`、fmt),发新 libs tag,**请求确认**后推送。
 - [ ] **Step 3:** Digger 同日重钉,先不改代码,现有测试须 0 失败(基线 836)。提交。
