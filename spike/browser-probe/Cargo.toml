@@ -16,3 +16,19 @@ objc2-foundation = { version = "0.3", features = ["std", "NSString", "NSObject",
 objc2-app-kit = { version = "0.3", features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSResponder", "NSEvent"] }
 objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "WKWebView", "WKUIDelegate", "WKFrameInfo", "WKSecurityOrigin"] }
 block2 = "0.6"
+
+# web_child 池的冒烟(pool-probe / selfnav-probe)用已发布的 bytehost tag,不用本地路径。
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.16" }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.16" }
+
+[[bin]]
+name = "browser-probe"
+path = "src/main.rs"
+
+[[bin]]
+name = "pool-probe"
+path = "src/pool_probe.rs"
+
+[[bin]]
+name = "selfnav-probe"
+path = "src/selfnav_probe.rs"
