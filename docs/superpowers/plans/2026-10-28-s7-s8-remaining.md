@@ -12,7 +12,7 @@
 | R4 | ~~Codebuddy 群聊发言~~ **已完成**(Dozer `53a7100a`,tag `libs-2026-10-28b`;Digger 已重钉) | 验证+小改 | 无 | Dozer `group_adapter.rs` | 3 |
 | R5 | ~~G1 搜索框右键菜单~~ **已完成(整框语义,待人工验证)**(Digger `2a23894`) | 新功能 | 中文输入法人工验证 | Digger | 4 |
 | R6 | Opencode 群聊发言 | 阻塞于上游 | 无 | Dozer | 搁置,见触发条件 |
-| R7 | X1 跨仓库迁移 | 跨仓库 | 排期 | byteui、bytehost、双方重钉 | 单独计划 |
+| R7 | X1 跨仓库迁移(**计划已写**) | 跨仓库 | 排期 | byteui、bytehost、双方重钉 | 单独计划 |
 | R8 | 零碎:门禁脚本重新 vendor、Dozer 项目面板用失败明细 | 可选 | 否 | Digger / Dozer | 有空再做 |
 
 依赖:R1 的结论决定要不要追加修复;R4 需要新的 libs tag(与下一次库改动合并发,不为它单发);R5、R7 互不依赖也不挡其它项。
@@ -87,7 +87,9 @@
 
 **重新评估的触发条件(缺一不可):** 上游提供能禁联网且实测生效的机制;能不落会话库;提示词有非 argv 通道。到时再按 R4 的流程走一遍。在此之前弹窗说明保持如实,不为凑齐而放宽。
 
-## R7 X1 跨仓库迁移
+## R7 X1 跨仓库迁移 —— 计划已写
+
+计划:`docs/superpowers/plans/2026-10-28-x1-cross-repo-migration.md`(阶段 A byteui 页签/菜单,阶段 B bytehost-desktop 可信原生子 webview 执行器;先做 Task 1 盘点)。下面是写计划之前的原始要点。
 
 页签部件(`agent_tabs.rs`)、菜单弹层(`menu_overlay.rs`)、`review_native`/`native_host` 的 wry 样板迁入 byteui / bytehost。**单独写计划**,不并入任何库 tag。动手前先确认:bytehost 稳定窗口;Dozer 的 `native_menu` 重新导出是否已覆盖菜单弹层的非 mac 回退(该回退「非 mac 从未实际编译过」,只要求能编译);两个仓库各自发版、Dozer 与 Digger 同日重钉。
 
