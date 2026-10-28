@@ -28,10 +28,8 @@ use crate::workspace::{
 use byteui::interaction::icons;
 use dozer_core::protocol::{AgentKind, AgentState, SessionInfo};
 use iced_widget::core::border::Radius;
-use iced_widget::core::font::Weight;
 use iced_widget::core::mouse;
 use iced_widget::core::{Border, Color, Element, Font, Length, Padding};
-use iced_widget::tooltip::{Position, Tooltip};
 use iced_widget::{MouseArea, column, container, row, stack};
 
 use super::*;
@@ -416,12 +414,7 @@ fn todo_webview_failed(app: &crate::app::App) -> Option<String> {
 /// Figma 设计稿(Dozer Phase 1 UI,node-id=87:31)里顶栏标题/页签/加号
 /// 文字标的都是 Inter Medium——应用没绑定 Inter,用系统默认字体的
 /// Medium 档位贴近这个字重意图,不引入新字体文件。
-pub(crate) fn top_bar_font() -> Font {
-    Font {
-        weight: Weight::Medium,
-        ..Font::default()
-    }
-}
+pub(crate) use byteui::theme::font::top_bar_font;
 
 /// 上面那个的纯逻辑内核(可单测:构造 `Workspace` 需要 daemon + EventLoop,
 /// headless 测试里造不出来,与本文件既有约定一致)。`agent == Unknown` 的
@@ -1823,28 +1816,7 @@ pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, ice
 /// 所以结构恒定,`show` 只保留为参数以免改动所有调用方(见测试)。`position` 由调用方按
 /// 页签位置定(顶栏页签用 `Bottom`、底部面板页签用 `Top`,免得气泡出屏)。`label` 收
 /// `String`(拥有所有权),使气泡 `Element` 寿命不受调用方局部借用牵制。
-pub(crate) fn controlled_tooltip<'a, M, R>(
-    content: Element<'a, M, iced_widget::Theme, R>,
-    label: String,
-    position: Position,
-    _show: bool,
-) -> Element<'a, M, iced_widget::Theme, R>
-where
-    M: Clone + 'a,
-    R: iced_widget::core::text::Renderer + 'a,
-{
-    let bubble = container(
-        text(label)
-            .size(12)
-            .color(byteui::theme::color::current().cream),
-    )
-    .padding([5, 9]);
-    Tooltip::new(content, bubble, position)
-        .gap(4)
-        .delay(super::state::HOVER_TOOLTIP_DELAY)
-        .style(icons::tooltip_bubble_style())
-        .into()
-}
+pub(crate) use byteui::feedback::tooltip::controlled_tooltip;
 
 /// `host_id` → `HoverId::tab_item`/`tab_close`(`PanelKind::Ssh`) 用的哈希键(`HoverId` 整体
 /// `derive(Copy)`,`String` 不是 `Copy`,退化成 `u64`,不要求无碰撞——
@@ -2301,6 +2273,7 @@ pub(crate) fn ssh_empty_state<'a>(
 #[cfg(test)]
 mod controlled_tooltip_tests {
     use super::*;
+    use iced_widget::tooltip::Position;
 
     /// 控件树的"形状":顶层控件的 tag 与子节点数。
     fn shape(show: bool) -> (iced_widget::core::widget::tree::Tag, usize) {
@@ -2316,5 +2289,15 @@ mod controlled_tooltip_tests {
         // "未悬停":翻转那一帧如果光标已经离开,`on_exit` 永远不会触发,悬停底色和 ×
         // 就卡住不消失。结构必须恒定,是否显示气泡交给 `Tooltip` 自带的延迟。
         assert_eq!(shape(true), shape(false), "show 不同,控件树结构必须相同");
+    }
+
+    /// 气泡延迟的真相源现在是 byteui 的 `TOOLTIP_DELAY`(Digger 同用);Dozer 的悬停计时
+    /// (`HOVER_TOOLTIP_DELAY`,`App::hover_tooltip_ready`)必须与它相同,否则"计时已满"与"气泡弹出"错开。
+    #[test]
+    fn the_hover_timer_matches_byteuis_tooltip_delay() {
+        assert_eq!(
+            crate::app::state::HOVER_TOOLTIP_DELAY,
+            byteui::feedback::tooltip::TOOLTIP_DELAY
+        );
     }
 }
