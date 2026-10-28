@@ -945,7 +945,10 @@ async fn addr_submit_keeps_inner_whitespace_and_long_urls_verbatim() {
         // 无 scheme 的含空白输入照样补 https://,空白留在里面。
         ("exa mple.com", "https://exa mple.com"),
         // file:// 带空格:原样接受(要支持本地文件)。
-        ("file:///Users/me/My File.html", "file:///Users/me/My File.html"),
+        (
+            "file:///Users/me/My File.html",
+            "file:///Users/me/My File.html",
+        ),
         // 单冒号 scheme 原样保留。
         ("about:blank", "about:blank"),
     ] {
