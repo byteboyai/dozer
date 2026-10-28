@@ -293,5 +293,7 @@
   "conversations.generate_summary": "Generate Summary",
   "conversations.no_review_content": "No review content—click a conversation in the list on the left to start reviewing",
   "files.no_project": "No project open",
-  "file_history.project_outside_repo": "{project} is not inside the repository work tree"
+  "file_history.project_outside_repo": "{project} is not inside the repository work tree",
+  "web.nav_stalled": "The page is not responding: {url}",
+  "web.nav_blocked": "This kind of address is not supported ({scheme})"
 }

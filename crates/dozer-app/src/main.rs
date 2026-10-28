@@ -1,6 +1,7 @@
 mod app;
 mod app_webview;
 mod assets;
+mod browser_native;
 mod capabilities;
 mod chrome;
 mod event;

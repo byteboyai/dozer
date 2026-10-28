@@ -319,7 +319,6 @@ pub(crate) fn sync_webview_pool(
     allowed_files: std::sync::Arc<std::sync::Mutex<dozer_panel_preview::assets::AllowedFiles>>,
     review_snapshot: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     proxy: winit::event_loop::EventLoopProxy<Message>,
-    report_title: bool,
 ) -> PoolSyncOutcome {
     let mut outcome = PoolSyncOutcome::default();
     // CodeMirror editor host 在真正创建 WKWebView 之前 reserve；不足时先
@@ -529,7 +528,6 @@ pub(crate) fn sync_webview_pool(
                 let review_snapshot = std::sync::Arc::clone(&review_snapshot);
                 let root = crate::assets::assets_root();
                 let ipc_proxy = proxy.clone();
-                let nav_proxy = proxy.clone();
                 let webview_id = spec.id;
                 let editor_binding = spec.editor_binding.clone();
                 // 该 webview 归属的共享宿主 Surface 身份(固定单槽面板,目前仅
@@ -543,26 +541,16 @@ pub(crate) fn sync_webview_pool(
                 );
                 // 常驻注入脚本:焦点/拖拽/缩放三件套 + 文本编辑 + ⌘F,逐字来自
                 // `dozer-panel-preview::host_script`(搬迁前后由同一份黄金钉住)。
-                // 浏览器面板(`report_title`)额外附一段"页面标题回报":把
-                // `window.__dozer_webview` 记成本 webview 的 id,页面
-                // DOMContentLoaded 与 `document.title` 变化(MutationObserver)
-                // 时经 IPC 发 `title:<id>:<title>`,让 tab 标题在页面加载
-                // 完成后从 URL 切换到 HTML `<title>`。预览面板不掺和。
-                let mut script = dozer_panel_preview::host_script::preview_host_script(
+                // 只服务可信预览;浏览器面板的网页是不可信内容,走 `browser_native`(bytehost `WebPool`),
+                // 不在这里建、也不注入任何脚本。
+                let script = dozer_panel_preview::host_script::preview_host_script(
                     dozer_panel_preview::host_script::HostScriptOptions {
                         text_editing: ipc_context.kind.wants_text_editing(),
                         flyfish: ipc_context.kind
                             == dozer_panel_preview::host_ipc::WebviewKind::Flyfish,
                     },
                 );
-                if report_title {
-                    script.push_str("window.__dozer_webview=");
-                    script.push_str(webview_id.to_string().as_str());
-                    script.push_str(
-                        ";function _dt(){window.ipc.postMessage('title:'+String(__dozer_webview)+':'+document.title)}if(document.readyState==='complete'){_dt()}else{document.addEventListener('DOMContentLoaded',_dt)}new MutationObserver(_dt).observe(document.documentElement||document,{childList:true,subtree:true,attributeFilter:['title']});",
-                    );
-                }
-                let mut builder = wry::WebViewBuilder::new()
+                let builder = wry::WebViewBuilder::new()
                     .with_url(&spec.url)
                     .with_bounds(bounds)
                     // 同更新路径:park_offscreen 的宿主虽然被摆到窗口外,也必须
@@ -615,9 +603,8 @@ pub(crate) fn sync_webview_pool(
                             // ⌘V:页面无权读剪贴板,宿主读文本后回灌
                             // `window.__dozerPaste`(同 find_page 找回句柄)。
                             IpcMessage::PasteRequest => Message::WebViewPasteRequest(webview_id),
-                            IpcMessage::BrowserTitle { webview_id: id, title } => {
-                                Message::BrowserTitle(id, title)
-                            }
+                            // 预览 webview 不上报标题(浏览器页面不在这里,没有脚本也没有 IPC);收到就丢弃。
+                            IpcMessage::BrowserTitle { .. } => return,
                             IpcMessage::Host(event) => Message::Host(*event),
                             // 固定单槽面板(usage/codehealth/todo/group-chat)不是
                             // CodeMirror/JSON/Flyfish 家族,按固定 webview id 识别,
@@ -668,49 +655,6 @@ pub(crate) fn sync_webview_pool(
                         };
                         let _ = ipc_proxy.send_event(message);
                     });
-                // 浏览器面板 webview 额外挂两个导航回报钩子(预览 webview
-                // 不需要):
-                // 1) `on_page_load`:网页内超链接让 webview 自行导航后,把
-                //    真实目标 URL 报回宿主(`Message::BrowserNavigated`),让
-                //    地址栏/页签跟随页面跳转——此前没有任何机制告诉浏览器
-                //    面板"页面自己跳走了",点链接后面板仍停在旧 URL;
-                //    2) `new_window_req`:`target="_blank"`/`window.open`
-                //    请求新窗口,wry 默认 `createWebViewWith:` 返回 nil 会
-                //    静默丢弃这类点击。这里拒绝 OS 新窗口、改在浏览器面板
-                //    里新开一个 tab。
-                if report_title {
-                    // `on_page_load` 与 `new_window_req` 是两个 `move` 闭包,
-                    // 不能共用同一个 `nav_proxy`(第一个构造时就把原始值移走),
-                    // 这里各留一份 clone。
-                    let page_proxy = nav_proxy.clone();
-                    let win_proxy = nav_proxy;
-                    builder = builder
-                        .with_on_page_load_handler(move |event, url| {
-                            // 只在整页**加载完成**时回报一次(`Finished` 对应
-                            // WKWebView `didFinishNavigation`,第二个参数就是
-                            // 主 frame 的当前地址,不会被子 frame/资源加载
-                            // 刷屏)。`Started` 也会触发主 frame 提交,但完成态
-                            // 更稳,避免回报过早。
-                            if matches!(event, wry::PageLoadEvent::Finished) {
-                                let _ = page_proxy
-                                    .send_event(Message::BrowserNavigated(webview_id, url));
-                            }
-                        })
-                        // 浏览器页面是不可信内容:导航只放行白名单(http/https、本地 `file://`、`about:blank`),
-                        // 否则页面能把自己导航到 `dozer://…` 而变成宿主来源;下载在这个分支里 wry 默认放行,显式拒绝。
-                        // (根治是改用 `web_child`,见 docs/superpowers/plans/2026-10-28-dozer-browser-untrusted-webview.md)
-                        .with_navigation_handler(|url| {
-                            bytehost_webview::browse::allows_browse_navigation(&url)
-                        })
-                        .with_download_started_handler(|_, _| false)
-                        .with_new_window_req_handler(move |url, _features| {
-                            // `target=_blank` / `window.open` 的地址同样过白名单,不过的静默丢弃。
-                            if bytehost_webview::browse::allows_new_tab(&url) {
-                                let _ = win_proxy.send_event(Message::BrowserNewWindow(url));
-                            }
-                            wry::NewWindowResponse::Deny
-                        });
-                }
                 // `dozer://` 自定义协议只对可信宿主安装(trust 派生,不散落判断;
                 // 应用在 `build_app_webview` 里从不安装)。
                 debug_assert!(trust.allows_custom_protocol());

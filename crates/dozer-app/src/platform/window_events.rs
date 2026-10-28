@@ -143,10 +143,9 @@ pub(crate) enum Runner {
         /// 预览 webview 池:tab id → (句柄, 当前已加载 URL)。句柄只在
         /// 本事件环存取(spike 约束 2);URL 缓存用于导航去重。
         webviews: std::collections::HashMap<usize, (wry::WebView, String)>,
-        /// 浏览器 webview 池,语义/生命周期同 `webviews`,但服务独立的
-        /// "地球图标"浏览器视图——两个池各自独立增删,tab id 空间即使
-        /// 撞了也不会互相覆盖(不同 HashMap)。
-        browser_webviews: std::collections::HashMap<usize, (wry::WebView, String)>,
+        /// 浏览器网页的原生层(bytehost `WebPool`,不可信内容)。浏览器页面是任意网页,不和可信预览共用
+        /// `webviews` 池与构建器:池自己持有句柄,没有 `dozer://` 协议、没有注入脚本、没有 IPC。
+        browser_native: crate::browser_native::BrowserNative,
         /// T6:最近一次观察到的 `display_generation`(仅供参考)。实际「是否已对本 slot 推送本代次」
         /// 由 `AppViews::locale_pushed` 跟踪,`apply_pending_app_locales` 据此做幂等重推与失败重试。
         app_locale_generation: u64,
@@ -1092,7 +1091,7 @@ impl Runner {
             window,
             app,
             webviews,
-            browser_webviews,
+            browser_native,
             webview_project,
             webview_rects,
             pool_dropped_ids,
@@ -1110,9 +1109,8 @@ impl Runner {
         // (跨项目 tab id 撞 key 会复用捕获了别的项目白名单的 webview)。
         if *webview_project != app.active_project_id() {
             pool_dropped_ids.extend(webviews.keys().copied());
-            pool_dropped_ids.extend(browser_webviews.keys().copied());
             webviews.clear();
-            browser_webviews.clear();
+            // 浏览器池按上下文(项目 / 首页)分代,上下文一变整池重建,不用在这里清。
             crate::preview::global_manager()
                 .lock()
                 .expect("preview resource manager lock")
@@ -1164,8 +1162,6 @@ impl Runner {
             app.allowed_files(),
             app.review_snapshot(),
             proxy.clone(),
-            // 预览 webview 不需要回报页面标题,只有浏览器面板要。
-            false,
         );
         // T3:把被淘汰 / reserve 被拒的 tab 真正迁到 Suspended/Failed,避免
         // 下一帧又重新 desired(销毁/重建抖动)。
@@ -1177,42 +1173,54 @@ impl Runner {
         // (`PanelKind::Web`)。`browser_desired` 非首页时已按 `Web` 所在侧
         // 算好矩形;首页分支带的是占位 `(0,0,0,0)`,这里用 `home_browser_bounds`
         // 整体覆盖。
-        let browser_specs: Vec<(crate::preview::WebviewSpec, wry::Rect)> = if app.is_home() {
-            let (r, bounds) = Self::home_browser_bounds(logical_w, logical_h);
+        let (browser_specs, browser_rect): (
+            Vec<crate::preview::WebviewSpec>,
+            (f32, f32, f32, f32),
+        ) = if app.is_home() {
+            let (r, _) = Self::home_browser_bounds(logical_w, logical_h);
             webview_rects.push(r);
-            app.browser_desired(logical_w, logical_h)
-                .into_iter()
-                .map(|(s, _)| (s, bounds))
-                .collect()
+            (
+                app.browser_desired(logical_w, logical_h)
+                    .into_iter()
+                    .map(|(s, _)| s)
+                    .collect(),
+                r,
+            )
         } else {
-            app.browser_desired(logical_w, logical_h)
-                .into_iter()
-                .map(|(s, (x, y, w, h))| {
-                    webview_rects.push((x, y, w, h));
-                    (
-                        s,
-                        wry::Rect {
-                            position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
-                            size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
-                        },
-                    )
-                })
-                .collect()
+            let desired = app.browser_desired(logical_w, logical_h);
+            let rect = desired
+                .first()
+                .map(|(_, r)| *r)
+                .unwrap_or((0.0, 0.0, 0.0, 0.0));
+            for (_, r) in &desired {
+                webview_rects.push(*r);
+            }
+            (desired.into_iter().map(|(s, _)| s).collect(), rect)
         };
-        let browser_pool_outcome = crate::runtime::sync_webview_pool(
+        // 页面属于哪个上下文:首页全局浏览器 / 某个项目的浏览器;都没有就销毁。
+        let browser_context = if app.is_home() {
+            Some(crate::browser_native::Context {
+                project_id: None,
+                home: true,
+            })
+        } else {
+            app.active_project_id()
+                .map(|id| crate::browser_native::Context {
+                    project_id: Some(id),
+                    home: false,
+                })
+        };
+        if let Err(error) = browser_native.sync(
             window.as_ref(),
-            browser_webviews,
-            browser_specs,
-            app.allowed_files(),
-            app.review_snapshot(),
-            proxy.clone(),
-            // 浏览器面板 webview 注入页面标题回报,tab 加载完成后标题
-            // 从 URL 切到 HTML `<title>`。
-            true,
-        );
-        // 浏览器池的丢弃/替换也要记入(浏览器槽与单固定槽面板 id 空间不重叠,
-        // 但保持两个池口径一致,避免将来复用槽号时漏判)。
-        pool_dropped_ids.extend(browser_pool_outcome.dropped.iter().copied());
+            browser_context,
+            &browser_specs,
+            browser_rect,
+            byteui::theme::icon_size::scale() as f64,
+        ) {
+            dozer_core::log_error!(LOG, "同步浏览器网页失败: {error}");
+        }
+        // 把等得太久的导航报出来(不碰 webview)。
+        browser_native.poll_stalled();
         // 卸载"连数据一起删"的应用:它的 webview 已经不在池里了才能清它的 WKWebsiteDataStore
         // (wry 要求先 drop 所有用这个存储的 WebView;`remove_data_store` 需在主线程且有事件循环)。
         for (app_id, store) in app.take_ready_store_removals(|slot| {
@@ -2282,7 +2290,7 @@ impl Runner {
             cursor_phys: _,
             focus,
             clipboard,
-            browser_webviews,
+            browser_native,
             webviews,
             ..
         } = self
@@ -2493,25 +2501,11 @@ impl Runner {
                 ));
                 window.request_redraw();
             }
-            // 浏览器后退/前进/刷新:webview 句柄只在 main.rs 的浏览器池里,
-            // 浏览器 `State` 摸不到——在这里对激活 webview 直接执行历史
-            // 导航/刷新。wry 0.55 没暴露 `go_back`/`go_forward`,后退/前进
-            // 用 `window.history` JS 兜底;刷新走原生 `reload()`。
+            // 浏览器后退/前进/刷新:webview 句柄在 bytehost 的池里,浏览器 `State` 摸不到——
+            // 这里对激活页签执行(后退/前进是宿主侧 `window.history`,刷新是原生 `reload()`,都不向页面注入脚本)。
             Message::Browser(crate::extensions::browser::Message::Nav(action)) => {
-                if let Some(id) = app.active_browser_webview_id()
-                    && let Some((view, _)) = browser_webviews.get_mut(&id)
-                {
-                    match action {
-                        crate::extensions::browser::NavAction::Back => {
-                            let _ = view.evaluate_script("window.history.back()");
-                        }
-                        crate::extensions::browser::NavAction::Forward => {
-                            let _ = view.evaluate_script("window.history.forward()");
-                        }
-                        crate::extensions::browser::NavAction::Refresh => {
-                            let _ = view.reload();
-                        }
-                    }
+                if let Some(id) = app.active_browser_webview_id() {
+                    browser_native.nav(id, action);
                 }
             }
             // ⌘F 页内查找:注入 JS 已在页面(含 shadow DOM)里找到并聚焦了
@@ -2520,7 +2514,7 @@ impl Runner {
             // responder 时键盘输入仍落不进页面输入框。句柄只活在事件环,
             // 按 id 去预览/浏览器两个池里找回。
             Message::WebViewFindFocus(id) => {
-                if let Some((view, _)) = webviews.get(&id).or_else(|| browser_webviews.get(&id)) {
+                if let Some((view, _)) = webviews.get(&id) {
                     let _ = view.focus();
                 }
             }
@@ -2529,11 +2523,7 @@ impl Runner {
             // wry 不暴露这个 API,得经 `WebViewExtMacOS::webview()` 拿回
             // 内层 `WryWebView`(WKWebView 子类)直接调 objc2。
             Message::WebViewFindNative(id) => {
-                let view = webviews
-                    .get(&id)
-                    .map(|(v, _)| v)
-                    .or_else(|| browser_webviews.get(&id).map(|(v, _)| v));
-                if let Some(view) = view {
+                if let Some((view, _)) = webviews.get(&id) {
                     show_native_find(view);
                 }
             }
@@ -2543,13 +2533,7 @@ impl Runner {
             // 事件环(同 WebViewFindFocus)。
             Message::WebViewPasteRequest(id) => {
                 let text = clipboard.read(iced_winit::core::clipboard::Kind::Standard);
-                if let (Some(text), Some(view)) = (
-                    text,
-                    webviews
-                        .get(&id)
-                        .map(|(v, _)| v)
-                        .or_else(|| browser_webviews.get(&id).map(|(v, _)| v)),
-                ) {
+                if let (Some(text), Some(view)) = (text, webviews.get(&id).map(|(v, _)| v)) {
                     let json = serde_json::to_string(&text).unwrap_or_default();
                     let _ = view.evaluate_script(&format!(
                         "window.__dozerPaste&&window.__dozerPaste({json})"
@@ -2593,7 +2577,7 @@ impl Runner {
             app,
             window,
             webviews,
-            browser_webviews,
+            browser_native,
             focus,
             ..
         } = self
@@ -2620,11 +2604,8 @@ impl Runner {
                 if let Some((view, _)) = webviews.get(&id) {
                     let _ = view.focus(); // 返回 Result,忽略
                     true
-                } else if let Some((view, _)) = browser_webviews.get(&id) {
-                    let _ = view.focus();
-                    true
                 } else {
-                    false
+                    browser_native.focus(id)
                 }
             },
             || window.focus_window(),
@@ -2640,7 +2621,7 @@ impl Runner {
             app,
             window,
             webviews,
-            browser_webviews,
+            browser_native,
             ..
         } = self
         else {
@@ -2657,9 +2638,7 @@ impl Runner {
             for (view, _) in webviews.values() {
                 let _ = view.zoom(scale);
             }
-            for (view, _) in browser_webviews.values() {
-                let _ = view.zoom(scale);
-            }
+            browser_native.zoom_all(scale);
         }
     }
 
@@ -3206,6 +3185,12 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // 网格（也会顺带把 resize 同步给 daemon）。网格换算细节
             // （含"上次退出时右侧停在对话视图"的情形）归 app 侧
             // 一家管，main.rs 不再自己算一份。
+            // 浏览器网页里的 ⌘A/⌘C/⌘V/⌘X/⌘F 要靠应用主菜单里的 Edit 菜单:wry 的子 webview 不处理 performKeyEquivalent,
+            // 没有菜单这些键在页面里全都不能用(Digger 探针实测)。winit 已经装了带「退出 ⌘Q」的应用菜单,这里只**追加**
+            // Edit,不替换;幂等、仅主线程。first responder 是 iced 的视图时没人响应 `copy:` 等,菜单项被禁用,
+            // 按键照常落到 `keyDown`,Dozer 自己的预览查找 / 复制粘贴不受影响。
+            #[cfg(target_os = "macos")]
+            bytehost_desktop::web_child::install_standard_edit_menu();
             let logical: LogicalSize<f32> = physical_size.to_logical(window.scale_factor());
             app.set_window_size(logical.width, logical.height);
 
@@ -3249,7 +3234,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 viewport,
                 resized: false,
                 webviews: std::collections::HashMap::new(),
-                browser_webviews: std::collections::HashMap::new(),
+                browser_native: crate::browser_native::BrowserNative::new(proxy.clone()),
                 app_locale_generation,
                 // 池是空的,记 `None` 让第一次 sync_previews 自然对齐到
                 // 当前项目(清空空池是 no-op)。

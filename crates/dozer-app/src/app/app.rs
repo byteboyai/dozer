@@ -4177,7 +4177,9 @@ impl App {
         // 子视图不听 iced 绘制顺序摆布,必须显式 visible=false 才能真正藏
         // 起来。首页(`home_browser`)和工作区内(`ws.browser`)两条分支共用
         // 这一个判断。
-        let app_modal_open = self.text_input_menu.is_some();
+        // 页签拖拽进行中也停放网页(规则与理由见 `browser_pages_hidden`)。
+        let app_modal_open =
+            browser_pages_hidden(self.text_input_menu.is_some(), self.tab_drag.is_some());
         // 首页右栏恒为全局浏览器(`home_browser`),与 `left_view` 无关——
         // 进首页就让它成为浏览器 webview 池的唯一来源,否则默认 URL 的 tab
         // 建了却永远等不到 webview(见 `sync_webview_pool`)。
@@ -4293,6 +4295,12 @@ pub(crate) fn shift_index_keys_after_close<V>(
             }
         }
     }
+}
+
+/// 浏览器网页此刻要不要藏起来:iced 浮层(输入框右键菜单)会被原生子视图盖住;页签拖拽进行中也要藏——
+/// 原生子视图收不到、也不转发鼠标松开,拖进网页区松手会让拖拽永远结束不了,而不可信网页里没有脚本替它上报 `mouseup`。
+pub(crate) fn browser_pages_hidden(text_input_menu_open: bool, tab_drag_active: bool) -> bool {
+    text_input_menu_open || tab_drag_active
 }
 
 #[cfg(test)]
@@ -6672,5 +6680,34 @@ mod tests {
             let result = apply_column_drag(state, Divider::GroupChatSplit, window_width, logical_x);
             assert!(!result.group_chat_list_collapsed);
         }
+    }
+}
+
+#[cfg(test)]
+mod browser_hidden_tests {
+    use super::browser_pages_hidden;
+
+    /// 页签拖拽进行中必须藏起网页,否则拖到网页区松手收不到 `Released`,拖拽结束不了(Review Focus 3)。
+    #[test]
+    fn drag_ending_over_the_webview_still_ends() {
+        assert!(browser_pages_hidden(false, true), "拖拽中藏起网页");
+        assert!(
+            browser_pages_hidden(true, false),
+            "输入框右键菜单打开时藏起网页(原有行为)"
+        );
+        assert!(
+            !browser_pages_hidden(false, false),
+            "没有拖拽也没有浮层时网页照常显示"
+        );
+    }
+
+    /// `browser_desired` 必须经过这个判断(首页与工作区两条分支共用),不能各写一份。
+    #[test]
+    fn browser_desired_uses_the_shared_hide_rule() {
+        let src = include_str!("app.rs");
+        let body = &src[src.find("pub fn browser_desired(").unwrap()..];
+        let end = body.find("\n    }\n").unwrap();
+        assert!(body[..end].contains("browser_pages_hidden("));
+        assert!(!body[..end].contains("self.text_input_menu.is_some() ||"));
     }
 }
