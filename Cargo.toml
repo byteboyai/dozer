@@ -4,7 +4,7 @@ members = ["crates/*", "spike/*"]
 # v2-excalidraw 自带 [workspace],不进主锁文件。
 # bytehost-* 已拆到独立仓库 byteboyai/bytehost,消费方按 tag 引用(见
 # docs/superpowers/specs/2026-10-08-bytehost-a7-acceptance-report.md)。
-exclude = ["spike/v2-excalidraw", "spike/browser-probe"]
+exclude = ["spike/v2-excalidraw", "spike/browser-probe", "spike/dozer-browser-exposure"]
 
 
 [workspace.package]
