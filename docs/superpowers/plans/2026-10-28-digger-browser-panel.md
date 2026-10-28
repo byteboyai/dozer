@@ -115,7 +115,7 @@
   - `urls_are_percent_encoded_before_reaching_wry`:纯函数 `encode_for_wry(url) -> String`,含空格 / 中文 / 已编码 / 非法字符的 `http`、`file` URL 都得到合法 URL,**幂等**(编码两次结果不变),不改动已编码部分(S1:macOS 26 上 wry 自己会编码、不 panic,但旧系统可能返回 nil 然后 `unwrap` panic,所以宿主自己编码,并在 ADR 写明最低 macOS)。
   - `a_navigation_that_never_starts_is_reported_as_failed`:wry 没有"导航失败"回调(S1:不可达地址不会有 `Started`/`Finished`);池在发出导航后 N 秒内没收到该页签的 `Started` 就产出 `WebEvent::NavigationStalled{id,url}`,宿主据此提示"无法打开"。
   - `media_capture_requests_are_denied_by_the_proxy_delegate`:把 S3 的 `DenyMediaProxy` 搬进来(依赖 `objc2`、`objc2-web-kit` 的 `WKUIDelegate`/`WKFrameInfo`/`WKSecurityOrigin`);断言:装上后 `UIDelegate` 的类是代理、对新窗口 / 文件选择 / 媒体捕获三个可选方法 `respondsToSelector` 仍为真、直接调用媒体捕获给 `Deny`;代理被 `thread_local` 保活(WKWebView 对委托是 weak 引用);源码钉死测试里加上"必须调用代理安装函数"。
-  - **S2 已决(实测)**:Edit 菜单让 ⌘C/⌘V/⌘X 直达页面 → **`web_child` 不注入任何初始化脚本、不装 IPC 处理器**,页面看不到 `window.ipc`。钉死测试里 `with_initialization_script` 与 `with_ipc_handler` 都进"不得出现"。因此 Task 1 的 `BrowseIpc`(nonce 白名单)**不再需要,删除**。
+  - **S2 已决(实测)**:Edit 菜单让 ⌘C/⌘V/⌘X 直达页面 → **`web_child` 不注入任何初始化脚本、不装 IPC 处理器**,页面发不出消息给宿主(更正:wry 仍会注入一个空的 `window.ipc` 壳,`postMessage` 会抛错,Dozer 真机实测)。钉死测试里 `with_initialization_script` 与 `with_ipc_handler` 都进"不得出现"。因此 Task 1 的 `BrowseIpc`(nonce 白名单)**不再需要,删除**。
   - `standard_edit_menu_items() -> Vec<EditItem>`(纯函数:Cut `cut:` ⌘X、Copy `copy:` ⌘C、Paste `paste:` ⌘V、Select All `selectAll:` ⌘A,目标为空)与 `install_standard_edit_menu()`(objc2,仅 macOS,必须在主线程,幂等);测试断言四项的标题、选择器、快捷键。
 - [ ] **Step 4: 变异验证:** 依次把 devtools 改 `true`、下载处理改放行、导航处理改恒 `true`、删掉新窗口白名单检查、跳过代理委托安装,**每一种都必须让钉死测试变红**,再恢复(用 python 改,不要用多行 `sed`)。
 - [ ] **Step 5:** `cargo test --workspace --lib --tests`、clippy、fmt、`scripts/check-deps.sh`;提交。

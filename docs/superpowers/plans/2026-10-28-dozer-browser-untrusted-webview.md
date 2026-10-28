@@ -119,4 +119,12 @@
 
 - **Task 0 完成(2026-10-28):** 结果见 `docs/superpowers/reviews/2026-10-28-dozer-browser-exposure.md`。结论:页面能看到 `window.ipc` 和注入全局,能到达 `dozer://`,能顶层导航到 `dozer://`;**没有证据显示能读出数据**。严重度比最初担心的低,但共用构建器本身是错的方向。
 - **止血补丁已做(分支 `fix/browser-nav-allowlist`):** 导航白名单 + 下载拒绝 + 新窗口白名单,真机复验通过,钉死测试 + 3 个变异。
-- **Task 1–4 未做。**
+- **Task 1–3 完成(2026-10-28,Dozer `20fdf256` / `b1c08678`,bytehost `v0.4.17`,libs `libs-2026-10-28g`,已推送):**
+  - **接法与计划不同:** Dozer 自带 winit 事件循环、不执行 iced `Task`,`WebPool` 原先靠 `window::run` 调度,直接用不了。bytehost 给 `WebPool` 加了同步接口(`apply` / `navigate_now` / `destroy_all_now` / `with_view` / `zoom_all`),Task 版本委托给它们(源码钉死)。Dozer 新增 `browser_native.rs`:按上下文(项目 / 首页)分代,事件经桥线程翻译成既有的 `Browser*` 消息并丢弃过期代号,提示走 Toast。
+  - **删除:** `runtime.rs` 里浏览器专用分支(标题回报脚本、页面事件钩子、止血补丁的那段);浏览器的 `browser_webviews` 池。
+  - **真机验证(复现页,Orca 截图):** `__dozer_webview` undefined、`fetch('dozer://')` 被拒、顶层导航被拒且仍在原页、页签标题变成页面自己的标题。**`window.ipc` 仍是 `object`:** wry 注入的空壳,宿主这头没有处理器,`postMessage` 会抛错——此前"页面看不到 `window.ipc`"的说法不准确,已在 ADR-016 等处更正。
+  - **Task 1(Edit 菜单):** 启动时 `install_standard_edit_menu()`。查 winit 源码发现它默认装了带「退出 ⌘Q」的应用菜单,原先实现用 `setMainMenu` 整个替换会让 ⌘Q 失效(Digger 也中招),已改为**追加**并发版修复。
+  - **Task 2(去留):** ⌘V 自定义回灌 → 放弃,由 Edit 菜单的 Paste 直达页面。页签拖进网页区 → 拖拽期间把网页藏起来(`browser_pages_hidden`)。标题 / 页内跳转回报 → `WebEvent`。**⌘F:** 无法保留——原来的实现是注入脚本去聚焦页面自己的搜索框,不可信页面不能再有脚本;兜底的 `findString("")` 不显示查找条;`WKWebView` 实测**不响应** `performTextFinderAction:`(Swift 小程序 `responds(to:) == false`),所以 Edit 菜单里的 Find… 无效,已撤掉。要做就得新写页内查找条(iced)+ `findString:withConfiguration:`,是新功能,**待用户决定**。
+  - **已知限制:** ⌘+/- 在页面有焦点时不再缩放页面(原来靠页面脚本上报);点进网页区后 iced 输入框(地址栏等)不会自动失去焦点(原来靠页面 mousedown 脚本上报);导航无响应的提示由 `sync_previews` 顺带轮询,窗口完全空闲时可能要等下一次重绘才出现。
+  - **门禁:** fmt、`check-i18n`、`check-log-scope`、`check-shared-deps` 通过,全 workspace 3583 项通过(4 项 `product_isolation` 在工作树里因外部构建目录失败,主工作区单独跑通过),改动文件里 clippy 无诊断;4 个变异(不校验代号、不装 Edit 菜单、拖拽不藏网页、换上下文不分代)均变红。
+- **Task 4(验收)待用户:** 清单见 `docs/superpowers/reviews/2026-10-28-dozer-browser-acceptance.md`。
