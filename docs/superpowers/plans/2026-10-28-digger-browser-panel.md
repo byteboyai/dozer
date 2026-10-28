@@ -84,7 +84,9 @@
 
 提交:报告 + `spike/` 小程序(**不进 workspace 默认成员**,避免拖慢 CI)。
 
-### Task 1: `bytehost-webview::browse`(纯策略,先写测试)
+### Task 1: `bytehost-webview::browse`(纯策略,先写测试)—— 已完成(2026-10-28,bytehost `feat/browse-policy` `b245b92`)
+
+**结果:** `allows_browse_navigation` 与 `allows_new_tab`(同表)已实现,6 条测试;bytehost 全部 440 通过/0 失败,clippy/fmt/`check-deps.sh` 通过。变异验证:去掉控制字符/反斜杠预检、`file` 放行任意主机、去掉首尾空白检查、`about` 放行任意、兜底分支放行,各让对应测试变红(一个"放行 javascript"的变异本身无效——`javascript:` 无主机,后面的主机检查仍会拒绝——已换成有意义的兜底变异)。**实现发现:** 标准 `url` 解析器会**悄悄剥掉**制表符/换行、把反斜杠当斜杠、trim 首尾空白、把 `http:///x` 规范成 `http://x/`,所以必须先拒绝前三类再解析,最后一类按解析器的结果放行(WebKit 同样处理)。下面的勾选项保留作记录。
 
 **Files:** Create `bytehost/crates/bytehost-webview/src/browse.rs`;Modify `lib.rs`。
 
