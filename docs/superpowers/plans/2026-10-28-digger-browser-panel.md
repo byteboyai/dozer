@@ -151,6 +151,8 @@
 
 ### Task 6: 面板适配(`adapters/browser.rs` + `browser_display.rs`)
 
+**已完成(2026-10-28,Digger 本地 `61a56b5`):** `adapters/{browser,browser_display,browser_addr_menu}.rs` + `product.rs` 接线(`Msg::{Browser,BrowserAddrEdit,BrowserFocusFrame,BrowserAddrFocused}`、面板可见时的 16ms 探针订阅、`body()`、`on_visible` 激活、三处项目关闭钩子、收藏夹流式回传);依赖 `dozer-panel-browser`(`libs-2026-10-28e`)。Digger 854 通过/0 失败(+12),fmt/clippy 干净。变异 4 个:去掉聚焦强制后的探针作废、去掉"项目没状态不入队"、去掉项目在开检查均让测试变红;`apply_addr_focus` 里"没变化提前返回"是等价变异(省一次空写),保留作意图说明。**设计取舍(实现时定的):** ① 后退/前进/刷新只入队(`take_nav`),Task 7 的原生层取走执行;② v1 **不做**页签拖拽换位和收藏夹分隔条拖拽(Digger 壳没有通路,`DragHover`/`ColumnDragStart` 直接忽略,侧栏占 28% 固定);③ 菜单动作作用于地址栏**屏幕上显示的那份**文本(聚焦时是草稿,否则是当前网址),未聚焦时粘贴=替换整条、已聚焦时追加;④ 页签悬停动画由同一个 16ms 探针推进(Digger 之前 D2 约定无悬停动画,这里按库接口透传,验收时看观感)。**需要真实窗口验收(自动测不了):** 点击/Tab 进出地址栏后焦点状态是否一帧内正确、单击地址栏是否全选整条、右键菜单四项、收起/切走面板后地址栏不再吞终端键盘。此提交后面板有页签栏/地址栏/收藏夹但**没有网页**(Task 7)。下面的勾选项保留作记录。
+
 **Interfaces:**
 - Consumes:库 `State`/`Message`/`update`/`view`/`BrowserDisplay`/`addr_field_id`;byteui `panel_tabs`;`dozer_client::Client`(`BookmarkService`);G1 的"整框语义"菜单模式(`conversations_search_menu.rs`)。
 - Produces:`BrowserPanel { states: HashMap<i64, State>, … }`,`update(pid, Message, project) -> Task<Msg>`,`view(project, area)`,`close_project(pid)`。
