@@ -141,6 +141,8 @@
 
 ### Task 5: Digger 注册面板(`shell.rs`)
 
+**已完成(2026-10-28,Digger 本地):** `browser_id()`/`all_panels`/`meta`(浏览器,`IconKind::Globe`)/`defaults()`(右栏 agent、群聊、会话、**浏览器**、应用、用量)/`browser_after_conversations` 迁移,无 `rules` 条目;6 条新测试 + 10 处既有"右栏完整顺序"期望更新;变异(迁移锚点改成 agent)让多项测试变红。**计划外:** `product.rs` 目录登记必须同步加(`registers_product_panels` 会红),面板数 10→11,`surfaces` 先空;此提交后浏览器面板能在图标栏看到但内容为空白,Task 8 接线前不要发版。Digger 842 通过/0 失败,fmt/clippy 干净。
+
 **Files:** Modify `digger/crates/desktop/src/shell.rs`。
 
 - [ ] **Step 1: 失败测试:** `browser_panel_id_is_the_persisted_wire_name`(`digger.browser`)、`the_default_layout_places_the_browser_after_conversations`、`an_old_file_without_the_browser_gets_it_after_conversations_and_keeps_selection`、`browser_migration_is_idempotent`、`an_old_file_with_an_empty_right_rail_gets_the_browser_first`、`browser_has_no_pair_rules_like_markdown`(`rules(&browser_id())` 为 `None`,与 `digger.markdown`/`digger.info`/`digger.apps` 同类:单栏、不配对,所在侧由 `defaults()` 与迁移决定)——**逐条仿群聊(`group_chat_after_agent`)的同名测试**。
