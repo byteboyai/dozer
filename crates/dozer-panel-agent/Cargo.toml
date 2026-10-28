@@ -15,7 +15,7 @@ dozer-panel-term = { path = "../dozer-panel-term" }
 dozer-i18n = { path = "../dozer-i18n" }
 bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1" }
 serde_json.workspace = true
-byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.6" }
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.5.0" }
 tokio.workspace = true
 tracing.workspace = true
 iced_widget = { version = "0.14", features = ["canvas", "svg"] }
