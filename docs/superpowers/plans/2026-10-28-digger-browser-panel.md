@@ -98,7 +98,9 @@
 - [ ] **Step 3: 实现。** 一行方法说明:用 `url` crate 解析太重,按 `strip_prefix` + 小写 scheme 比对,和 `AppOrigin::allows_navigation` 同风格(拒绝控制字符与反斜杠)。
 - [ ] **Step 4: 通过 + clippy/fmt。Step 5: 提交。**
 
-### Task 2: `bytehost-desktop::web_child`(多页签池 + 受限 builder)
+### Task 2: `bytehost-desktop::web_child`(多页签池 + 受限 builder)—— 已完成(2026-10-28,bytehost `feat/browse-policy` `54acfec`,未推送)
+
+**结果:** `web_child/{plan,edit_menu,apple,pool}.rs`;bytehost 全 workspace(`--all-features`)874 通过/0 失败,clippy `-D warnings`/fmt/`check-deps.sh` 通过(裸 `cargo clippy --all-targets` 会因 `bytehost-client` 的 `embed` 示例缺 feature 失败,与本改动无关,要带 `--all-features`)。真实窗口冒烟(`pool-probe`):Edit 菜单只装一次;`javascript:` 页签被拦成 `about:blank`;file 页面标题/加载事件正常;切换/刷新正常;换 generation 销毁旧页签;`destroy_all` 句柄归零;不可达地址产出 `NavigationStalled`。**与上面形状的偏差:** ① `plan_pool` 没有 `active` 参数(可见性由每个 `WebTabSpec.visible` 表达);② `encode_for_wry` 放在 `bytehost-webview::browse`(`5daf8d4`),`web_child::wry_target` 把它和白名单合成一步;③ 新增 `NavTracker`、`LoadVerdict`、`WebEvent::NavigationBlocked`。**冒烟抓到的真 bug:** 不可达地址只会触发初始空白文档的 `about:blank` Started/Finished,会清掉停滞计时、还会把页签网址悄悄改成 `about:blank`;修为 `NavTracker::on_page_load`(有待定导航时忽略 `about:blank`)。下面的勾选项保留作记录。
 
 **Files:** Create `bytehost/crates/bytehost-desktop/src/web_child.rs`;Modify `lib.rs`。
 
