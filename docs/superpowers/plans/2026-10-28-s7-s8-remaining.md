@@ -33,6 +33,8 @@
 
 ## R2 人工 GUI 验收清单(用户做)
 
+**已整合(2026-10-28):** 完整清单(含 X1 阶段 A/B、R1、R4、R5)在 Digger `docs/superpowers/reviews/2026-10-28-s7-s8-closeout-acceptance.md`,共 43 项、分 A–G 七区、附优先级。下面这张表是整合前的原始 6 项,保留作记录。
+
 用 `/Applications` 之外的开发构建,不动正在运行的应用。逐条点,结果记到 `digger/docs/superpowers/reviews/2026-10-28-s7-s8-closeout-acceptance.md`:
 
 | 项 | 操作 | 期望 |
