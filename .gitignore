@@ -3,6 +3,7 @@
 .DS_Store
 .superpowers/
 .claude/
+.qoder/settings.local.json
 .dozer/
 .worktrees
 examples/

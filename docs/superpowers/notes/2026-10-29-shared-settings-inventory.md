@@ -96,6 +96,6 @@ en / zh 两份词表现在各 299 个 key,键集完全一致。
 ## 待办(不属于本次)
 
 - **`bytehost/scripts/check-deps.sh` 没有覆盖这两个新 crate。** 它的分组是硬编码的(`bytehost-apps` / `-client` / `-webview` / `-panel`、`bytehost-core`、`bytehost-desktop`),两个 settings crate 不在任何一组里。也就是说那句 `bytehost deps check: ok` **并没有**验证 `bytehost-settings` 自己文档里写的「不依赖 iced / byteui / wry」;只有 pins 组(byteui / bytegit 钉版一致性)通过 `crates/*/Cargo.toml` 通配扫到了它们。要把承诺变成门禁:`bytehost-settings` 加进「产品 + 框架都禁」那组、`bytehost-settings-ui` 加进「只禁产品、允许 iced/byteui」那组。**没动,等决定。**
-- GUI 人工验收还没做:S1–S16 见 `docs/superpowers/reviews/2026-10-30-shared-settings-acceptance.md`。
-- `crates/dozer-app/web/review-trace/` 只有 `node_modules`、没有任何源文件、全仓无人引用 —— 垃圾目录,可删(要问)。
-- 浏览器迁移计划的 Task 4 人工验收、以及 ⌘F 页内查找要不要做,都还在等用户决定。
+- GUI 人工验收还没做:S1–S16 副本收在 `docs/superpowers/manual_tests/2026-10-30-pending-manual-acceptance.md` §1(结果填在那里);出处与机械项 M1–M13 见 `docs/superpowers/reviews/2026-10-30-shared-settings-acceptance.md`。
+- ~~`crates/dozer-app/web/review-trace/` 只有 `node_modules`、没有任何源文件、全仓无人引用 —— 垃圾目录,可删(要问)。~~ **已删(2026-10-30,经用户同意)。** 更正一句:旧文档史里大量出现这个路径(review-trace 源码 2026-10-26 S7a 起从 `dozer-app/web/` `git mv` 到 `dozer-panel-conversations/web/`,被搬走的只有跟踪文件,这份 `node_modules` 是搬家后的遗留),但活代码与构建脚本只指新路径。顺手把 `.qoder/settings.local.json` 加进了 `.gitignore`。
+- 浏览器迁移计划的 Task 4 人工验收(D1–D18,副本在汇总 §2)、以及 ⌘F 页内查找要不要做,都还在等用户决定。

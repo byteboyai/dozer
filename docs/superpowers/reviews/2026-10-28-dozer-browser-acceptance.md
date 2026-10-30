@@ -2,6 +2,8 @@
 
 日期:2026-10-28。计划:`docs/superpowers/plans/2026-10-28-dozer-browser-untrusted-webview.md`。被验收:Dozer `main`(`b1c08678` 起)+ bytehost `v0.4.17`。
 
+> **下面 D1–D18 的副本已收进 `docs/superpowers/manual_tests/2026-10-30-pending-manual-acceptance.md` §2,结果填在那里。** 本文保留 R1–R5 的自动检测记录与计划出处。
+
 **Orca 的限制(同 Digger I 区):** 能截图,但合成点击 / 键盘进不了 iced 控件,所以下面凡是要点按钮、进地址栏、输网址的项都要你来做。复现页的自动检测项(R1–R5)我已经在真机上验过。
 
 **不要动你正在用的 Dozer 数据。** 用开发构建;想隔离数据可以 `HOME=/tmp/某目录` 启动(Dozer 的数据目录跟 `HOME` 走)。

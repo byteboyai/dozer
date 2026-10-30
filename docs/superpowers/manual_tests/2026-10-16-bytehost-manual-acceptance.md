@@ -4,6 +4,7 @@
 > 命令行能验证的项(伪造 `Host` 被拒、令牌门、同源校验、crash/hang 自动恢复、停重启 dozerd 后应用恢复)已在隔离环境里自动跑过,**不在本清单里**。
 > 分级与自动化可行性见 `docs/dozer-v2/bytehost-manual-acceptance-checklist.md`。
 > **2026-10-18 对账结论:A6f、A6g、A6h 完成;A6e 基本完成(剩一处);A5 仍部分完成**(Excalidraw 本体未做)。依据与逐项说明见 bytehost 仓库 `docs/superpowers/specs/` 下五份验收报告的状态行。
+> **2026-10-30:本文尚未有结论的项(A6e 权限标注、A6h 公网 https 与重定向、i18n 6.1/6.2 存疑处、A5 Excalidraw 全部)已抽进 `2026-10-30-pending-manual-acceptance.md` §3,结果填在那里。** 本文保留 2026-10-17/18 的逐项结果、已修缺陷与已裁决事项,是那一轮验收的完整记录,不要再往里填新结果。
 
 ## 0. 准备(一次)
 

@@ -2,6 +2,8 @@
 
 日期:2026-10-30。
 
+> **下面 S1–S16 的副本已收进 `docs/superpowers/manual_tests/2026-10-30-pending-manual-acceptance.md` §1,结果填在那里**(那份汇总把设置、浏览器、应用宿主三条线的待验项排成一次能走完的顺序)。本文保留被验收版本、机械项 M1–M13 与「如果发现问题」的定位指引,是这次改动的完整记录。
+
 被验收:Dozer 的设置窗口委托改动(提交 `653034ef`;版本号仍是 `0.5.307` / build `337`,理由见笔记)+ bytehost 两个**尚未发布**的 crate(`bytehost-settings` / `bytehost-settings-ui`,分支 `feat/shared-settings` = `bba4ae8`,靠 `.cargo/config.toml` 的本地 patch 生效)。抽取的边界与现状见 `docs/superpowers/notes/2026-10-29-shared-settings-inventory.md`。
 
 **我做不了这次验收。** 两条都堵住了:
