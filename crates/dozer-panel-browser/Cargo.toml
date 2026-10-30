@@ -13,7 +13,7 @@ dozer-services = { path = "../dozer-services" }
 dozer-i18n = { path = "../dozer-i18n" }
 dozer-panel-host = { path = "../dozer-panel-host" }
 byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.5.0" }
-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
+bytehost-core.workspace = true
 tokio.workspace = true
 iced_widget = { version = "0.14", features = ["canvas", "svg"] }
 iced_renderer = "0.14"

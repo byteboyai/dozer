@@ -9,6 +9,8 @@ publish = false
 [workspace]
 
 [dependencies]
+# 独立 workspace:刻意锁在 V2 验证当时的 tag(v0.2.0),记录的是当时 gateway/CSP 行为,
+# 不随主仓升级。要复验当前行为请另建 spike 或临时改这里。
 bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0", features = ["server"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 wry = "0.55.1"
