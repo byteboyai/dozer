@@ -9,17 +9,15 @@ use std::sync::Arc;
 
 use iced_wgpu::wgpu;
 use iced_winit::core::mouse;
-use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::ModifiersState;
-use winit::window::{Window, WindowId};
+use winit::window::Window;
 
 use crate::app::Message;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{
-    backdrop_card_shrink, open_overlay, popup_card_size, reposition_overlay,
-};
+use crate::platform::overlay_host::{FocusClosable, OverlayHost, OverlayParts};
+use crate::platform::overlay_window::{backdrop_card_shrink, open_overlay, popup_card_size};
 use bytehost_desktop::FocusTracker;
 use byteui::feedback::dialog;
 
@@ -59,15 +57,28 @@ pub(crate) struct ConfirmOverlay {
     modifiers: ModifiersState,
 }
 
+impl OverlayHost for ConfirmOverlay {
+    fn overlay_window(&self) -> &Window {
+        &self.window
+    }
+
+    fn overlay_parts(&mut self) -> OverlayParts<'_> {
+        OverlayParts {
+            window: &self.window,
+            gpu: &mut self.gpu,
+            cursor: &mut self.cursor,
+            modifiers: &mut self.modifiers,
+        }
+    }
+}
+
+impl FocusClosable for ConfirmOverlay {
+    fn focus_tracker(&mut self) -> &mut FocusTracker {
+        &mut self.focus
+    }
+}
+
 impl ConfirmOverlay {
-    pub(crate) fn window_id(&self) -> WindowId {
-        self.window.id()
-    }
-
-    pub(crate) fn request_redraw(&self) {
-        self.window.request_redraw();
-    }
-
     pub(crate) fn trigger(&self) -> ConfirmTrigger {
         self.trigger
     }
@@ -101,23 +112,6 @@ impl ConfirmOverlay {
         }
     }
 
-    pub(crate) fn reposition(
-        &mut self,
-        device: &wgpu::Device,
-        main_outer_pos: PhysicalPosition<i32>,
-        main_inner_size: PhysicalSize<u32>,
-        scale: f64,
-    ) {
-        reposition_overlay(
-            &self.window,
-            &mut self.gpu,
-            device,
-            main_outer_pos,
-            main_inner_size,
-            scale,
-        );
-    }
-
     pub(crate) fn redraw(&mut self) {
         let card = backdrop_card_shrink(
             dialog::confirm(self.spec.clone()),
@@ -132,36 +126,14 @@ impl ConfirmOverlay {
     /// 点得动——同其余 7 个定制宿主共用的 `OverlayGpu::track_and_convert`/
     /// `dispatch` 转换+派发手法。
     pub(crate) fn handle_input(&mut self, event: &WindowEvent) -> Vec<Message> {
-        if let WindowEvent::KeyboardInput {
-            event: key_event,
-            is_synthetic: false,
-            ..
-        } = event
-            && key_event.state == winit::event::ElementState::Pressed
-            && key_event.logical_key
-                == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
-        {
-            return vec![self.spec.cancel_msg.clone()];
-        }
-        let Some(iced_event) =
-            self.gpu
-                .track_and_convert(&mut self.cursor, &mut self.modifiers, event)
-        else {
-            return Vec::new();
-        };
-        let card = backdrop_card_shrink(
-            dialog::confirm(self.spec.clone()),
-            card_logical_width(&self.window),
-        );
-        self.gpu
-            .dispatch(&self.window, self.cursor, card, iced_event)
-    }
-
-    /// 返回 `true` 表示应该关闭——与 `search_overlay`/`file_history_overlay`
-    /// 同款失焦即关闭,这五个弹窗都不涉及会弹出原生模态选择器的按钮,不需要
-    /// `ProjectCreateOverlay` 那种"不接失焦关闭"的例外。
-    pub(crate) fn handle_focus(&mut self, focused: bool) -> bool {
-        self.focus.handle_focus(focused)
+        // 卡片内容取自本宿主,而 `overlay_input` 要可变借 `self`:先把构造卡片
+        // 需要的东西摘出来(取消消息与 spec 本来在派发时也要克隆)。
+        let escape = self.spec.cancel_msg.clone();
+        let spec = self.spec.clone();
+        let width = card_logical_width(&self.window);
+        self.overlay_input(event, Some(escape), move || {
+            Some(backdrop_card_shrink(dialog::confirm(spec), width))
+        })
     }
 }
 

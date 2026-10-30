@@ -13,6 +13,7 @@ pub mod files_move_overlay;
 pub mod group_create_overlay;
 pub mod locale;
 pub mod overlay_gpu;
+pub(crate) mod overlay_host;
 pub mod overlay_window;
 pub mod picker;
 pub mod project_create_overlay;
