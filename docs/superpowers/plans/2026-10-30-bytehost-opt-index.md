@@ -133,3 +133,5 @@ dozer 线（4.1-4.3）与 digger 线（4.4-4.6）完全独立。若在 Phase 3 �
 - 5.2 **部分完成**：已实现 Dozer 联合构建与消费侧 CI；Digger 尚无远端，双消费方远程联合验证仍延期。pin 守卫仍为两套实现，尚未完成计划要求的合并；CI 接入现有守卫不等同于完成合并。
 - 5.3 **延期**：只完成候选识别，尚未下沉首个适配器，也没有两产品行为等价测试与行数对比。另立实施任务后才能验收。
 - 跨仓原工作树受本次沙箱写入范围限制：bytehost / Digger 修复先保存在 Dozer 下的修复副本，补丁与验证记录见 `.worktrees/bytehost-opt-fixes/README.md`。
+
+- 干净 Digger 编译发现新库快照还需包含 main 已有的浏览器查找 API；已带入 `crates/dozer-panel-browser` 的现有实现（不恢复旧 bytehost pin），替代原先指向 `dozer-browser-find` 的本地 patch。

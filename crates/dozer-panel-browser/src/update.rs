@@ -67,6 +67,16 @@ pub enum Message {
     /// 按钮, 最后 bool = 进入/离开)。浏览器面板有独立 `State`,无法复用顶栏
     /// 全局 `App::hover_progress`,自己维护一套进度机(见 `State::hover`)。
     Hover(usize, bool, bool),
+    /// 打开页内查找条(宿主的 ⌘F)并请输入框拿焦点;已经打开就只是再次请求聚焦。
+    FindOpen,
+    FindClose,
+    /// 查找词变了(每次按键给全量):非空就从头往后查,空就清掉命中。
+    FindInput(String),
+    /// 下一个 / 上一个命中(Enter / 按钮)。
+    FindNext,
+    FindPrev,
+    /// 宿主送回的查找结果:`(查找词, 有没有命中)`;和当前查找词不一致的(慢的旧结果)被忽略。
+    FindResult(String, bool),
     /// 收藏夹侧栏分割线开始拖:扩展发不了 app 级拖拽消息,由内核代发,见
     /// `App::update` 里 `Message::Browser(Message::ColumnDragStart)` 分支
     /// (同 `extensions::git_log::Message::ColumnDragStart` 的处理方式)。
@@ -107,13 +117,23 @@ pub fn update(
         }
         Message::TitleLoaded(id, title) => state.tabs.apply_title(id, title),
         Message::Loaded(id, url) => state.tabs.apply_url(id, url),
-        Message::SelectTab(idx) => state.tabs.select(idx),
+        Message::SelectTab(idx) => {
+            state.tabs.select(idx);
+            state.find_forget_result();
+        }
+        Message::FindOpen => state.find_open_bar(),
+        Message::FindClose => state.find_close_bar(),
+        Message::FindInput(query) => state.find_set_query(query),
+        Message::FindNext => state.find_step(false),
+        Message::FindPrev => state.find_step(true),
+        Message::FindResult(query, matched) => state.find_apply_result(&query, matched),
         Message::DragHover(_) => {} // 拖拽换位在 `App::update` 翻译后处理,不落到这里
         // 导航按钮:真正的 webview 历史导航/刷新由 main.rs `dispatch` 拦截
         // `Message::Browser(Nav(..))` 执行,这里不碰状态(no-op)。
         Message::Nav(_) => {}
         Message::CloseTab(idx) => {
             state.close_tab(idx);
+            state.find_forget_result();
         }
         Message::Hover(idx, is_close, hovered) => {
             state.hover.entry((idx, is_close)).or_default().set(hovered);
