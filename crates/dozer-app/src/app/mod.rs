@@ -14,7 +14,6 @@
 mod app;
 mod app_slots;
 mod layout;
-mod layout_compat;
 mod locale;
 mod message;
 mod state;
