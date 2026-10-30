@@ -34,9 +34,10 @@ impl From<dozer_panel_browser::adapter::BrowserWebviewSpec> for WebviewSpec {
     }
 }
 
-/// 地址栏焦点机制(进程级 `ADDR_FOCUSED` 唯一一份,在共享库里)。
+/// 地址栏 / 查找条的焦点机制(进程级 `ADDR_FOCUSED`、`FIND_FOCUSED` 各唯一一份,都在共享库里)。
 pub use dozer_panel_browser::{
-    CaptureAddrFocus, FindRequest, addr_field_id, find_field_id, take_addr_focused,
+    CaptureAddrFocus, CaptureFindFocus, FindRequest, addr_field_id, find_field_id,
+    take_addr_focused, take_find_focused,
 };
 
 /// 状态机 / 消息 / `update` / 收藏夹逻辑已搬进共享库,这里重新导出,`app/` 里的调用点不动。

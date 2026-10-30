@@ -2358,6 +2358,33 @@ impl App {
         }
     }
 
+    /// 浏览器查找条输入框是否持有 iced 真实焦点(键盘路由据此放行,理由同
+    /// `browser_addr_focused`:少了这一项,用户在查找条里打的字会被顺带转发进终端 PTY)。
+    pub fn browser_find_focused(&self) -> bool {
+        self.active_browser_state()
+            .is_some_and(|b| b.find_focused())
+    }
+
+    /// 每帧渲染循环调用:把 `extensions::browser::CaptureFindFocus` 问到的真实焦点态写进正确的
+    /// 浏览器实例(首页 `home_browser` / 当前工作区 `ws.browser`,分流理由见 `browser_addr_focused`)。
+    pub fn set_browser_find_focused(&mut self, focused: bool) {
+        if let Some(state) = self.active_browser_state_mut() {
+            state.set_find_focused(focused);
+        }
+    }
+
+    /// 浏览器查找条是否打开(Esc 关条的分支据此判断)。
+    pub fn browser_find_open(&self) -> bool {
+        self.active_browser_state().is_some_and(|b| b.find_open())
+    }
+
+    /// 关掉浏览器查找条(Esc):库的 `close_find_bar` 顺带产出清页面命中选区的请求。
+    pub fn close_browser_find_bar(&mut self) {
+        if let Some(state) = self.active_browser_state_mut() {
+            state.close_find_bar();
+        }
+    }
+
     /// 浏览器查找条打开时网页要多让出的高度(没打开为 0):库的 `find_bar_extra_px(区域 gap)`。
     pub(crate) fn find_extra_px(state: &browser::State) -> f32 {
         if state.find_open() {
@@ -2370,6 +2397,14 @@ impl App {
     /// 首页全局浏览器的查找条额外高度(`home_browser_bounds` 用)。
     pub fn home_browser_find_extra_px(&self) -> f32 {
         Self::find_extra_px(&self.home_browser)
+    }
+
+    /// 当前显示的浏览器状态(首页全局浏览器 / 当前工作区浏览器)——只读版,键盘路由查焦点/开合用。
+    pub(crate) fn active_browser_state(&self) -> Option<&browser::State> {
+        if self.is_home() {
+            return Some(&self.home_browser);
+        }
+        self.active_workspace().map(|ws| &ws.browser)
     }
 
     /// 当前显示的浏览器状态(首页全局浏览器 / 当前工作区浏览器)。
