@@ -34,7 +34,7 @@ dozer-codehealth = { path = "../dozer-codehealth" }
 # 同源 Usage 面板库(Task 19):Dozer 只做 ctor/重导出包装,数据层/视图层/资源
 # 都在此 crate;其依赖闭包不含 dozer-app(见 crate 文档)。
 dozer-panel-usage = { path = "../dozer-panel-usage" }
-dozer-panel-host = { path = "../dozer-panel-host" }
+dozer-panel-host = { path = "../dozer-panel-host", features = ["surface"] }
 dozer-panel-todo = { path = "../dozer-panel-todo" }
 # 同源浏览器面板库:页签 / 地址栏状态机与文案在库,dozer-app 重导出并做适配。
 dozer-panel-browser = { path = "../dozer-panel-browser" }

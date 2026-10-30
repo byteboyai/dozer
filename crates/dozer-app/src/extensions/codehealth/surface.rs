@@ -1,8 +1,9 @@
 //! 代码健康度内容侧 webview 接入共享宿主 Surface 执行器(Task 09 / 规格 §5.4)。
 //!
-//! 与 `extensions::usage::UsageSurface` 同构:把"webview 生命周期 + ready 归属
-//! + 旧代 IPC 丢弃 + 逐帧 desired 推送去重"这层通用机制收进 `bytehost-desktop`
-//! 的 `SurfaceExecutor`,CodeHealth 只提供载荷与产品语义。
+//! 与 `UsageSurface` 同构:把"webview 生命周期 + ready 归属 + 旧代 IPC 丢弃 +
+//! 逐帧 desired 推送去重"这层通用机制收进 `bytehost-desktop` 的 `SurfaceExecutor`。
+//! Tier2 Task2 起,固定单槽的同构部分进一步收进
+//! `dozer_panel_host::SingleSlotSurface`,本模块只剩 CodeHealth 自己的差异:
 //!
 //! - **身份**:固定单槽 `(instance, SurfaceSlot(CODEHEALTH_CONTENT_ID_OFFSET),
 //!   generation)`。每次原生实例销毁重建递增 generation,旧代 ready/IPC 一律被
@@ -17,8 +18,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use bytehost_core::{PanelInstanceId, SurfaceEvent, SurfaceId, SurfaceKind, SurfaceSlot};
-use bytehost_desktop::surface::SurfaceExecutor;
+use bytehost_core::{PanelInstanceId, SurfaceId, SurfaceSlot};
+use dozer_panel_host::SingleSlotSurface;
 
 use super::protocol::{CodeHealthViewPayload, encode_codehealth_push};
 
@@ -33,10 +34,7 @@ pub(crate) const CODEHEALTH_SURFACE_SLOT: u32 = crate::app::CODEHEALTH_CONTENT_I
 
 /// 代码健康度内容侧 webview 的 Surface 管理器。
 pub(crate) struct CodeHealthSurface {
-    executor: SurfaceExecutor<CodeHealthStamped>,
-    instance: PanelInstanceId,
-    slot: SurfaceSlot,
-    generation: u64,
+    inner: SingleSlotSurface<CodeHealthStamped>,
     /// envelope 的单调 `revision`(从 1 起)。由脚本构造闭包读取并自增。
     revision: Arc<AtomicU64>,
 }
@@ -52,101 +50,56 @@ impl CodeHealthSurface {
         let instance = PanelInstanceId::new(0, 0);
         let slot = SurfaceSlot(CODEHEALTH_SURFACE_SLOT);
         let revision = Arc::new(AtomicU64::new(0));
-        let mut executor = SurfaceExecutor::new();
-        executor.register(
-            surface_id(instance, slot, 0),
-            SurfaceKind::Builtin,
-            slot,
-            build_script(Arc::clone(&revision)),
-        );
-        Self {
-            executor,
-            instance,
-            slot,
-            generation: 0,
-            revision,
-        }
+        let factory_revision = Arc::clone(&revision);
+        let inner = SingleSlotSurface::new(instance, slot, move || {
+            let revision = Arc::clone(&factory_revision);
+            Box::new(move |stamped: &CodeHealthStamped| {
+                let rev = revision.fetch_add(1, Ordering::Relaxed) + 1;
+                let (locale, payload) = stamped.clone().into_parts();
+                crate::preview::dispatch_script(&encode_codehealth_push(rev, Some(locale), payload))
+            })
+        });
+        Self { inner, revision }
     }
 
     /// 当前代数的稳定身份(IPC / ready 归属校验用)。
     pub(crate) fn id(&self) -> SurfaceId {
-        surface_id(self.instance, self.slot, self.generation)
+        self.inner.id()
     }
 
-    /// 每帧根据"原生实例是否在池中"推进生命周期。语义同 `UsageSurface`。
+    /// 每帧根据"原生实例是否在池中"推进生命周期。语义同 `UsageSurface`
+    /// (见 [`SingleSlotSurface::observe_instance`])。
     pub(crate) fn observe_instance(&mut self, in_pool: bool, native_replaced: bool) {
-        if native_replaced {
-            let id = self.id();
-            let has_instance = self
-                .executor
-                .state(id)
-                .is_some_and(bytehost_core::SurfaceState::has_instance);
-            if has_instance {
-                self.executor.apply(id, SurfaceEvent::Destroyed);
-                self.rebuild();
-            }
-        }
-        let id = self.id();
-        if in_pool {
-            let state = self.executor.state(id).cloned();
-            let needs_create = matches!(
-                state,
-                Some(
-                    bytehost_core::SurfaceState::Absent
-                        | bytehost_core::SurfaceState::Destroyed
-                        | bytehost_core::SurfaceState::Failed { .. }
-                ) | None
-            );
-            if needs_create {
-                self.executor.begin_create(id);
-                self.executor.apply(id, SurfaceEvent::Created);
-            }
-        } else {
-            let has_instance = self
-                .executor
-                .state(id)
-                .is_some_and(bytehost_core::SurfaceState::has_instance);
-            if has_instance {
-                self.executor.apply(id, SurfaceEvent::Destroyed);
-                self.rebuild();
-            }
-        }
+        self.inner.observe_instance(in_pool, native_replaced);
     }
 
     /// 收到 webview 的 ready 握手(仅内置面板走这条)。
     pub(crate) fn apply_ready(&mut self) {
-        let id = self.id();
-        self.executor.apply(id, SurfaceEvent::Ready);
+        self.inner.apply_ready();
     }
 
     /// 更新期望载荷(产品每帧算出新状态都调用)。载荷构造留在面板。
     pub(crate) fn set_desired(&mut self, payload: CodeHealthStamped) {
-        let id = self.id();
-        self.executor.set_desired(id, payload);
+        self.inner.set_desired(payload);
     }
 
     /// 待推送脚本:Ready 且与上次送达不同才返回,附带物理槽 id,并写回
     /// 送达标记(与 `UsageSurface::take_pending_script` 同一契约)。envelope 的
     /// `revision` 在脚本构造闭包里自增,故本层无需二次记账。
     pub(crate) fn take_pending_script(&mut self) -> Option<(usize, String)> {
-        let id = self.id();
-        let payload = self.executor.pending(id)?.clone();
-        let script = self.executor.script_for(id, &payload)?;
-        self.executor.mark_sent(id, payload);
-        Some((CODEHEALTH_SURFACE_SLOT as usize, script))
+        self.inner
+            .take_pending_script()
+            .map(|(slot, script)| (slot as usize, script))
     }
 
     /// 给定一个身份,它是否被当前路由层接受(IPC 归属校验用)。
     pub(crate) fn accepts(&self, id: Option<SurfaceId>) -> bool {
-        id.is_some_and(|id| self.executor.route(id).is_accepted())
+        self.inner.accepts(id)
     }
 
     /// 当前是否已握手就绪(加载超时判定的起点参考)。
     pub(crate) fn is_ready(&self) -> bool {
-        matches!(
-            self.executor.state(self.id()),
-            Some(bytehost_core::SurfaceState::Ready)
-        )
+        self.inner.is_ready()
     }
 
     /// 当前已发出的最大 revision(测试 / 诊断用)。
@@ -158,33 +111,8 @@ impl CodeHealthSurface {
     /// 校验指定身份的归属(测试断言旧代数被拒用)。
     #[cfg(test)]
     pub(crate) fn route_of(&self, id: SurfaceId) -> bytehost_desktop::surface::Routed {
-        self.executor.route(id)
+        self.inner.route_of(id)
     }
-
-    fn rebuild(&mut self) {
-        self.generation = self.generation.wrapping_add(1);
-        let id = self.id();
-        self.executor.register(
-            id,
-            SurfaceKind::Builtin,
-            self.slot,
-            build_script(Arc::clone(&self.revision)),
-        );
-    }
-}
-
-fn build_script(
-    revision: Arc<AtomicU64>,
-) -> bytehost_desktop::surface::ScriptBuilder<CodeHealthStamped> {
-    Box::new(move |stamped: &CodeHealthStamped| {
-        let rev = revision.fetch_add(1, Ordering::Relaxed) + 1;
-        let (locale, payload) = stamped.clone().into_parts();
-        crate::preview::dispatch_script(&encode_codehealth_push(rev, Some(locale), payload))
-    })
-}
-
-fn surface_id(instance: PanelInstanceId, slot: SurfaceSlot, generation: u64) -> SurfaceId {
-    SurfaceId::new(instance, slot, bytehost_core::Generation::new(generation))
 }
 
 #[cfg(test)]

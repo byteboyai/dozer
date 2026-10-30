@@ -2242,6 +2242,7 @@ name = "dozer-panel-host"
 version = "0.1.0"
 dependencies = [
  "bytehost-core",
+ "bytehost-desktop",
  "dozer-model",
  "dozer-services",
  "tokio",
@@ -2328,6 +2329,7 @@ dependencies = [
  "byteui",
  "dozer-i18n",
  "dozer-model",
+ "dozer-panel-host",
  "dozer-services",
  "iced_renderer",
  "iced_widget",
