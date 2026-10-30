@@ -293,50 +293,21 @@ impl EditHistoryOverlay {
                 }
             }
             None => {
-                let root = crate::assets::assets_root();
                 let ipc_proxy = proxy;
-                let expected_binding = binding.clone();
-                let built = wry::WebViewBuilder::new()
-                    .with_url(&url)
-                    .with_bounds(bounds)
-                    .with_visible(true)
-                    .with_custom_protocol("dozer".into(), move |_id, request| {
-                        let allowed = allowed_files.lock().expect("allowed_files 锁");
-                        let reply = crate::assets::handle_protocol(
-                            &root,
-                            &allowed,
-                            None,
-                            &request.uri().to_string(),
-                        );
-                        wry::http::Response::builder()
-                            .status(reply.status)
-                            .header("Content-Type", reply.mime)
-                            .body(std::borrow::Cow::Owned(reply.body))
-                            .unwrap()
-                    })
-                    .with_ipc_handler(move |req| {
-                        let expected = crate::preview::HostBinding::new(
-                            expected_binding.project_id,
-                            expected_binding.panel,
-                            expected_binding.tab_id,
-                            expected_binding.document_id(),
-                        );
-                        match crate::preview::parse_event(req.body().as_str()) {
-                            Ok(event) => {
-                                if let Err(error) = event.validate(&expected) {
-                                    dozer_core::log_warn!(LOG, %error, "拒绝无效 edit-history diff IPC");
-                                } else {
-                                    let _ = ipc_proxy.send_event(
-                                        Message::EditHistoryDiffWebviewEvent(expected, event),
-                                    );
-                                }
-                            }
-                            Err(error) => {
-                                dozer_core::log_warn!(LOG, %error, "无法解析 edit-history diff IPC");
-                            }
-                        }
-                    })
-                    .build_as_child(&self.window);
+                let built = crate::platform::diff_webview::build_diff_webview(
+                    &self.window,
+                    crate::platform::diff_webview::DiffWebviewConfig {
+                        url: url.clone(),
+                        bounds,
+                        allowed_files,
+                        expected_binding: binding.clone(),
+                        log_label: "edit-history",
+                    },
+                    move |expected, event| {
+                        let _ = ipc_proxy
+                            .send_event(Message::EditHistoryDiffWebviewEvent(expected, event));
+                    },
+                );
                 match built {
                     Ok(view) => {
                         self.diff_webview = Some((view, url));
