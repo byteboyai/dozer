@@ -795,6 +795,7 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 [[package]]
 name = "bytegit"
 version = "0.8.1"
+source = "git+https://github.com/byteboyai/bytegit?tag=v0.8.1#ae60c831e43bd5732e41124c29333560a36d5b7d"
 dependencies = [
  "git2",
  "notify",
@@ -805,6 +806,7 @@ dependencies = [
 [[package]]
 name = "bytehost-apps"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.19#fad7715459c89702a1d408cb8dc17d29da8b208c"
 dependencies = [
  "bytes",
  "flate2",
@@ -826,6 +828,7 @@ dependencies = [
 [[package]]
 name = "bytehost-client"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.19#fad7715459c89702a1d408cb8dc17d29da8b208c"
 dependencies = [
  "bytehost-apps",
  "tokio",
@@ -835,6 +838,7 @@ dependencies = [
 [[package]]
 name = "bytehost-core"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.19#fad7715459c89702a1d408cb8dc17d29da8b208c"
 dependencies = [
  "serde",
  "serde_json",
@@ -843,6 +847,7 @@ dependencies = [
 [[package]]
 name = "bytehost-desktop"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.19#fad7715459c89702a1d408cb8dc17d29da8b208c"
 dependencies = [
  "block2 0.6.2",
  "bytehost-core",
@@ -867,6 +872,7 @@ dependencies = [
 [[package]]
 name = "bytehost-panel"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.19#fad7715459c89702a1d408cb8dc17d29da8b208c"
 dependencies = [
  "bytehost-apps",
  "bytehost-client",
@@ -875,6 +881,7 @@ dependencies = [
 [[package]]
 name = "bytehost-webview"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.19#fad7715459c89702a1d408cb8dc17d29da8b208c"
 dependencies = [
  "bytehost-apps",
  "serde",
@@ -924,6 +931,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "byteui"
 version = "0.5.0"
+source = "git+https://github.com/byteboyai/byteui?tag=v0.5.0#1285b9ac362e6eeaf1d4fa8a9caef7fd3ee62bbc"
 dependencies = [
  "iced_futures",
  "iced_renderer",
@@ -11385,15 +11393,3 @@ dependencies = [
  "syn 3.0.9",
  "winnow 1.0.4",
 ]
-
-[[patch.unused]]
-name = "bytehost-chrome"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "bytehost-settings"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "bytehost-settings-ui"
-version = "0.1.0"
