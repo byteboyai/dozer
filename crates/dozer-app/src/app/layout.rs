@@ -1142,6 +1142,7 @@ mod drag_characterization_tests {
             },
             right_collapsed: false,
             browser_bookmarks_open: false,
+            browser_find_extra_px: 0.0,
             maximized: None,
         }
     }

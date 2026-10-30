@@ -882,6 +882,15 @@ impl App {
                     });
                 }
             }
+            Message::BrowserFindShortcut => {
+                // 浏览器没在显示就忽略(菜单项只在浏览器的 webview 有焦点时启用,这里再兜一层)。
+                let visible = self.is_home()
+                    || self.left_view == PanelKind::Web
+                    || self.right_view == PanelKind::Web;
+                if visible && let Some(state) = self.active_browser_state_mut() {
+                    state.open_find_bar();
+                }
+            }
             Message::BrowserNewWindow(url) => {
                 let msg = browser::Message::OpenUrl(url);
                 if self.is_home() {

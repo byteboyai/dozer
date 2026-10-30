@@ -3,8 +3,12 @@
 //! 文字全部用系统默认字体(不给地址栏等 UI 上等宽代码字体)。
 
 use crate::adapter::{BrowserDisplay, TabView, TextInputTarget};
+use crate::find::{find_bar_bottom_pad, find_bar_height_px, find_field_id};
 use crate::i18n::t;
-use crate::state::{NAV_BACK_KEY, NAV_FORWARD_KEY, NAV_REFRESH_KEY, NEW_TAB_KEY, STAR_HOVER_KEY};
+use crate::state::{
+    FIND_CLOSE_KEY, FIND_NEXT_KEY, FIND_PREV_KEY, NAV_BACK_KEY, NAV_FORWARD_KEY, NAV_REFRESH_KEY,
+    NEW_TAB_KEY, STAR_HOVER_KEY,
+};
 use crate::{Message, NavAction, State, addr_field_id, bookmark_status};
 use byteui::interaction::icons;
 use dozer_model::{BookmarkInfo, BookmarkScope};
@@ -66,6 +70,107 @@ fn nav_button<'a>(state: &'a State, action: NavAction, locale: &str) -> El<'a> {
         move |hovered| Message::Hover(key, false, hovered),
         tooltip,
     )
+}
+
+/// 查找条一颗图标按钮(上一个 / 下一个 / 关闭),样式与导航按钮同一个统一图标按钮。
+fn find_button<'a>(
+    state: &'a State,
+    kind: icons::IconKind,
+    key: usize,
+    on_press: Message,
+    tooltip: String,
+) -> El<'a> {
+    icons::icon_button_entry(
+        kind,
+        byteui::theme::icon_size::row(),
+        false,
+        false,
+        state.find_button_hover(key),
+        false,
+        byteui::theme::geometry::tab_button_size(),
+        true,
+        on_press,
+        move |hovered| Message::Hover(key, false, hovered),
+        tooltip,
+    )
+}
+
+/// 页内查找条:输入框(Enter = 下一个)+ 没有匹配的提示 + 上一个 / 下一个 / 关闭。高度是
+/// `find_bar_height_px()`,下留白 `find_bar_bottom_pad()`——宿主的网页几何用 `find_bar_extra_px` 让出同样的高度。
+fn find_bar<'a>(state: &'a State, locale: &str, lh_factor: f32) -> El<'a> {
+    let query = state.find_query();
+    let input = byteui::form::input_text::view(
+        &t("find.placeholder", "Find in page", locale),
+        query,
+        false,
+        Some(find_field_id()),
+        false,
+        Some(Message::FindNext),
+        true,
+        Message::FindInput,
+    );
+    let no_match = state.find_matched() == Some(false) && !query.is_empty();
+    let status: El<'a> = if no_match {
+        lh(
+            lh_factor,
+            text(t("find.no_match", "No matches", locale))
+                .size(byteui::theme::font::body())
+                .color(byteui::theme::color::current().red),
+        )
+        .into()
+    } else {
+        iced_widget::Space::new().into()
+    };
+    let input_box = container(input)
+        .width(Length::Fill)
+        .height(Length::Fixed(find_bar_height_px()))
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .padding([2, 8])
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(byteui::theme::color::current().term_bg.into()),
+            border: Border {
+                color: if no_match {
+                    byteui::theme::color::current().red
+                } else {
+                    byteui::theme::color::current().border
+                },
+                width: 1.0,
+                radius: 2.0.into(),
+            },
+            ..container::Style::default()
+        });
+    container(
+        row![
+            input_box,
+            status,
+            find_button(
+                state,
+                icons::IconKind::ChevronUp,
+                FIND_PREV_KEY,
+                Message::FindPrev,
+                t("find.prev", "Previous match", locale),
+            ),
+            find_button(
+                state,
+                icons::IconKind::ChevronDown,
+                FIND_NEXT_KEY,
+                Message::FindNext,
+                t("find.next", "Next match", locale),
+            ),
+            find_button(
+                state,
+                icons::IconKind::CircleX,
+                FIND_CLOSE_KEY,
+                Message::FindClose,
+                t("find.close", "Close find bar", locale),
+            ),
+        ]
+        .spacing(4)
+        .align_y(iced_widget::core::alignment::Vertical::Center),
+    )
+    .width(Length::Fill)
+    .padding(iced_widget::core::padding::bottom(find_bar_bottom_pad()))
+    .into()
 }
 
 /// 地址栏星标:当前 URL 在全局/本项目任一边已收藏则 GOLD 实心,否则
@@ -384,6 +489,10 @@ pub fn view<'a>(
     .padding(iced_widget::core::padding::bottom(8.0));
 
     let mut content = column![tab_bar, display.tab_divider(), addr_row].spacing(region.gap);
+
+    if state.find_open() {
+        content = content.push(find_bar(state, locale, lh_factor));
+    }
 
     if let Some(err) = &state.error {
         content = content.push(lh(

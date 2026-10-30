@@ -137,6 +137,19 @@ impl BrowserNative {
             .is_some()
     }
 
+    /// 在页签的页面里查找(命中即选中并滚动过去,恒回绕)。结果稍后作为 `WebEvent::FindResult` 经桥线程变成
+    /// `Message::Browser(FindResult)` 送回。主线程。
+    pub fn find(&self, tab: usize, query: &str, backwards: bool) -> bool {
+        // 大小写不敏感:浏览器地址栏旁的轻量查找条没有「区分大小写」开关。
+        self.pool
+            .find(self.generation, tab, query, backwards, false)
+    }
+
+    /// 关掉查找条 / 清空查找词:清掉页面里的命中选区。主线程。
+    pub fn clear_find(&self, tab: usize) {
+        self.pool.clear_find(self.generation, tab);
+    }
+
     /// 全局界面缩放变了:同步给池里已有的全部页面。主线程。
     pub fn zoom_all(&self, scale: f64) {
         self.pool.zoom_all(self.generation, scale);
@@ -219,6 +232,15 @@ fn translate(event: &WebEvent, current: u64) -> Option<Message> {
             "The page is not responding: {url}",
             ("url", shorten(url)),
         )),
+        WebEvent::FindResult {
+            generation,
+            query,
+            matched,
+            ..
+        } if *generation == current => Some(Message::Browser(browser::Message::FindResult(
+            query.clone(),
+            *matched,
+        ))),
         WebEvent::NavigationBlocked {
             generation, url, ..
         } if *generation == current => Some(notice(
@@ -300,6 +322,12 @@ mod tests {
                 id: 3,
                 url: "https://a.com/".into(),
             },
+            WebEvent::FindResult {
+                generation: 1,
+                id: 3,
+                query: "x".into(),
+                matched: true,
+            },
         ] {
             assert!(translate(&event, 2).is_none(), "{event:?}");
         }
@@ -323,6 +351,27 @@ mod tests {
         assert_eq!(
             debug(got),
             debug(Some(Message::BrowserTitle(3, "T".into())))
+        );
+    }
+
+    /// 查找结果带着当时的查找词回到库(库据此丢弃慢的旧结果)。
+    #[test]
+    fn a_find_result_becomes_the_librarys_find_result_message() {
+        let got = translate(
+            &WebEvent::FindResult {
+                generation: 5,
+                id: 3,
+                query: "needle".into(),
+                matched: false,
+            },
+            5,
+        );
+        assert_eq!(
+            debug(got),
+            debug(Some(Message::Browser(browser::Message::FindResult(
+                "needle".into(),
+                false
+            ))))
         );
     }
 
@@ -409,5 +458,33 @@ mod tests {
                 "runtime.rs 里浏览器专用分支应已删除,仍有 {gone}"
             );
         }
+    }
+
+    /// 页内查找的接线:⌘F 菜单项启动时装一次;库的查找请求在 `sync_previews` 里被执行,且 Search 带上结果回调、
+    /// Clear 清选区;焦点请求与几何(首页和工作区两条)都读库的 `find_bar_extra_px`。
+    #[test]
+    fn find_is_wired_to_the_shortcut_the_pool_and_the_geometry() {
+        let events = include_str!("platform/window_events.rs");
+        let prod = &events[..events.find("#[cfg(test)]").unwrap_or(events.len())];
+        assert_eq!(prod.matches("install_find_shortcut(").count(), 1);
+        for required in [
+            "take_browser_find_requests()",
+            "FindRequest::Search { query, backwards }",
+            "FindRequest::Clear",
+            "take_browser_find_focus_pending()",
+            "find_field_id()",
+            "home_browser_find_extra_px()",
+        ] {
+            assert!(prod.contains(required), "window_events.rs 缺少 {required}");
+        }
+        // 查找结果经池的事件通道回来,在这里翻译成库的 `FindResult`。
+        let this = include_str!("browser_native.rs");
+        let prod_this = &this[..this.find("#[cfg(test)]\nmod tests").unwrap()];
+        assert!(prod_this.contains("WebEvent::FindResult {"));
+        let app = include_str!("app/app.rs");
+        assert!(
+            app.contains("find_bar_extra_px("),
+            "几何的额外高度必须来自库"
+        );
     }
 }

@@ -256,6 +256,8 @@ pub enum Message {
     /// `new_window_req` 分支不知道目标归属哪套浏览器,同 `BrowserTitle` 按
     /// `is_home()` 路由,在其内 `open_url`(总开新 tab,不复用激活 tab)。
     BrowserNewWindow(String),
+    /// 应用主菜单里的「Find…」(⌘F)被触发(菜单项只在浏览器的 webview 有焦点时启用):打开浏览器查找条。
+    BrowserFindShortcut,
     /// 项目:切换到最近项目。
     ProjectSelect(i64),
     /// 项目:"打开项目…"→ rfd 文件夹选择(main.rs 执行),选中后回送

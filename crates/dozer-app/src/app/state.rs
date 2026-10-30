@@ -366,6 +366,9 @@ pub struct ShellState {
     /// 浏览器收藏夹侧栏是否展开——`content_pane_bounds` 的
     /// `PanelKind::Web` 分支据此决定网页 webview 要不要让出侧栏宽度。
     pub browser_bookmarks_open: bool,
+    /// 浏览器页内查找条打开时,网页要比不开多让出的高度(逻辑像素,含缩放;没打开为 0)——
+    /// `PanelKind::Web` 分支在 `browser_chrome_top_px()` 之外再加它。来源是库的 `find_bar_extra_px`。
+    pub browser_find_extra_px: f32,
     /// 当前放大态。`content_pane_bounds`/`is_in_content_column`/
     /// `terminal_pane_pixel_size` 靠这个字段才能感知"这块内容其实被放大
     /// 遮罩盖住了/放大到了整个 maximize 区域"——没有它,离屏 webview 摆位、

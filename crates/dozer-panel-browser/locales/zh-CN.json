@@ -12,5 +12,10 @@
   "empty.no_page": "暂无网页——在地址栏输入网址",
   "error.local_path": "浏览器不支持打开本地文件",
   "error.bookmarks_load_failed": "收藏夹加载失败: {e}",
-  "error.bookmarks_op_failed": "收藏操作失败: {e}"
+  "error.bookmarks_op_failed": "收藏操作失败: {e}",
+  "find.placeholder": "在页面中查找",
+  "find.no_match": "没有匹配",
+  "find.prev": "上一个",
+  "find.next": "下一个",
+  "find.close": "关闭查找条"
 }

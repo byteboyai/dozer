@@ -148,3 +148,33 @@ fn view_builds_with_no_tabs() {
     assert_eq!(display.tab_divider_calls.get(), 1);
     assert_eq!(display.bookmarks_divider_calls.get(), 0);
 }
+
+/// 查找条打开时视图照常构建:空查找词、有查找词、没有匹配三种状态,不影响页签 / 分隔条向宿主的调用次数。
+#[test]
+fn view_builds_with_the_find_bar_in_every_state() {
+    for (query, matched) in [
+        ("", None),
+        ("abc", None),
+        ("abc", Some(false)),
+        ("abc", Some(true)),
+    ] {
+        let display = FakeDisplay::default();
+        let mut state = state_with(false);
+        state.find_open_bar();
+        state.find_set_query(query.into());
+        if let Some(m) = matched {
+            state.find_apply_result(query, m);
+        }
+        let _el: Element<'_, crate::Message, Theme, Renderer> = view(
+            &display,
+            &state,
+            Some(7),
+            0.7,
+            Length::Fill,
+            Border::default(),
+            false,
+        );
+        assert_eq!(display.tab_calls.get(), 2, "{query:?} {matched:?}");
+        assert_eq!(display.tab_divider_calls.get(), 1);
+    }
+}

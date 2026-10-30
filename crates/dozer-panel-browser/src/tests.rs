@@ -172,6 +172,8 @@ async fn update_title_loaded_applies_html_title() {
         hover: Default::default(),
         tooltip_starts: Default::default(),
         addr_select_all_pending: false,
+        find: None,
+        find_requests: Vec::new(),
     };
     let id = state.tabs.open_url("https://example.com".into());
     let handle = tokio::runtime::Handle::current();
@@ -357,6 +359,8 @@ async fn update_bookmark_add_without_active_tab_is_noop() {
         hover: HashMap::new(),
         tooltip_starts: HashMap::new(),
         addr_select_all_pending: false,
+        find: None,
+        find_requests: Vec::new(),
     };
     let handle = tokio::runtime::Handle::current();
     let service = service_for_test();
@@ -1036,4 +1040,49 @@ async fn addr_submit_opens_local_paths_and_ignores_blank_input() {
     assert_eq!(st.tabs.tabs().len(), 1);
     assert_eq!(st.tabs.tabs()[0].url, long);
     assert!(st.error.is_none());
+}
+
+/// 查找消息经 `update` 走完整条路:打开 → 输入 → 下一个 / 上一个 → 结果 → 关闭;宿主只看 `take_find_requests`。
+#[tokio::test]
+async fn find_messages_drive_the_find_bar_and_its_host_requests() {
+    use crate::FindRequest;
+    let mut state = State::default();
+    let handle = tokio::runtime::Handle::current();
+    let service = service_for_test();
+    let send = |state: &mut State, m: Message| {
+        update(state, m, Some(1), &service, &handle, |_| {});
+    };
+    send(&mut state, Message::FindOpen);
+    assert!(state.find_open());
+    assert!(state.take_find_focus_pending());
+    send(&mut state, Message::FindInput("rust".into()));
+    send(&mut state, Message::FindNext);
+    send(&mut state, Message::FindPrev);
+    assert_eq!(
+        state.take_find_requests(),
+        vec![
+            FindRequest::Search {
+                query: "rust".into(),
+                backwards: false
+            },
+            FindRequest::Search {
+                query: "rust".into(),
+                backwards: false
+            },
+            FindRequest::Search {
+                query: "rust".into(),
+                backwards: true
+            },
+        ]
+    );
+    send(&mut state, Message::FindResult("rust".into(), false));
+    assert_eq!(state.find_matched(), Some(false));
+    // 换页签:上一个页面的结果作废,查找词保留。
+    send(&mut state, Message::OpenUrl("https://a.com/".into()));
+    send(&mut state, Message::SelectTab(0));
+    assert_eq!(state.find_matched(), None);
+    assert_eq!(state.find_query(), "rust");
+    send(&mut state, Message::FindClose);
+    assert!(!state.find_open());
+    assert_eq!(state.take_find_requests(), vec![FindRequest::Clear]);
 }
