@@ -58,21 +58,23 @@ mod tests {
         }
     }
 
-    /// 面板里的日志(`app/view.rs`)和设置页里的日志(`settings_apps_view.rs`)都必须经这个函数取色,
-    /// 防止以后又有一处漏设色。
+    /// 面板里的日志(`app/view.rs`)必须经这个函数取色;设置页的日志已迁入
+    /// `bytehost-settings-ui`,那边用同一套 `cream` token(共享视图有独立测试)。
     #[test]
-    fn the_two_log_views_use_the_shared_colour() {
-        for (name, src) in [
-            ("app/view.rs", include_str!("../app/view.rs")),
+    fn log_views_use_the_shared_colour_or_delegate_to_the_shared_view() {
+        for (name, src, needle) in [
+            (
+                "app/view.rs",
+                include_str!("../app/view.rs"),
+                "log_text_color(",
+            ),
             (
                 "extensions/settings_apps_view.rs",
                 include_str!("settings_apps_view.rs"),
+                "bytehost_settings_ui::apps::view",
             ),
         ] {
-            assert!(
-                src.contains("log_text_color("),
-                "{name} 没有使用 log_text_color"
-            );
+            assert!(src.contains(needle), "{name} 没有使用 {needle}");
         }
     }
 }

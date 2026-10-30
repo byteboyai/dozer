@@ -6,12 +6,14 @@ use crate::extensions::settings_apps;
 use crate::git_accounts::{self, GitAccountsState, GitProvider};
 use crate::ui_text::text;
 use bytehost_client::AppHostApi;
-use byteui::interaction::icons;
+use bytehost_settings::{PageDescriptor, PageId, PageRegistry, SettingsState};
+use bytehost_settings_ui::{LanguageOption, Shell, Text};
 use byteui::theme::color::ColorScheme;
 use dozer_model::{Locale, LocalePreference, LocaleSnapshot};
 use dozer_services::DaemonService;
-use iced_widget::core::{Alignment, Border, Element, Length, Padding};
-use iced_widget::{MouseArea, Space, button, column, container, row};
+use iced_widget::core::{Alignment, Element, Length};
+use iced_widget::{Space, button, column, row};
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 dozer_core::scope!(LOG, module, "settings");
@@ -58,6 +60,7 @@ pub enum AdvancedState {
 /// 设置弹窗左栏切换 tab:主题 / Git 账户 / 高级 / 应用 / 语言。点击切换右侧
 /// 内容区,样式与「新建项目」弹窗左侧 tab 一致(`dialog_tab_style` + caption 字号)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // 产品的强类型入口保留全部历史 tab。
 pub enum SettingsTab {
     Theme,
     Git,
@@ -68,48 +71,104 @@ pub enum SettingsTab {
     Language,
 }
 
-/// 「语言」页的保存状态(i18n Task 05)。只承载"这次提交"的瞬时反馈;真正
-/// 生效的偏好/语言以 daemon 权威快照为准(见 `LocalizedText` 与 `App.locale`)。
-#[derive(Debug, Clone, PartialEq, Default)]
-pub enum LanguageStatus {
-    /// 空闲:显示当前已确认的选择。
-    #[default]
-    Idle,
-    /// 已提交,等待 daemon 回包(此间禁用选项,防重复提交)。
-    Saving,
-    /// 保存失败(可重试)。
-    Failed(String),
-    /// revision 冲突:语言在别处被改,已采纳服务端快照,提示重选。
-    Conflict,
-    /// 当前服务不支持语言设置(旧 daemon)。
-    Unsupported,
+/// 「语言」页的保存状态由共享 `SelectionState` 承载;保留别名让调用点不必改名。
+#[allow(unused_imports)] // 调用点 / 测试继续用 `LanguageStatus` 这个名字。
+pub use bytehost_settings::SaveStatus as LanguageStatus;
+
+/// 「语言」页状态:已确认值 + 乐观待选值 + 保存结果。
+pub type LanguageState = bytehost_settings::SelectionState<LocalePreference>;
+
+/// 产品注册的页面顺序:Theme / Git / Advanced / Apps / Language(默认 Theme)。
+pub fn product_registry() -> PageRegistry {
+    PageRegistry::new(vec![
+        PageDescriptor::built_in(
+            PageId::new(bytehost_settings::THEME_ID).expect("static id"),
+            "Theme",
+        )
+        .with_text_key("settings.tab.theme"),
+        PageDescriptor::custom(
+            PageId::new("dozer.git").expect("static id"),
+            "settings.tab.git",
+            "Git Accounts",
+        ),
+        PageDescriptor::custom(
+            PageId::new("dozer.advanced").expect("static id"),
+            "settings.tab.advanced",
+            "Advanced",
+        ),
+        PageDescriptor::built_in(
+            PageId::new(bytehost_settings::APPS_ID).expect("static id"),
+            "Apps",
+        )
+        .with_text_key("settings.tab.apps"),
+        PageDescriptor::built_in(
+            PageId::new(bytehost_settings::LANGUAGE_ID).expect("static id"),
+            "Language",
+        )
+        .with_text_key("settings.tab.language"),
+    ])
+    .expect("Dozer 设置页注册必须有效")
 }
 
-/// 「语言」页状态:待确认的乐观选择 + 保存状态。
-#[derive(Debug, Clone, PartialEq)]
-pub struct LanguageState {
-    /// 已确认的当前偏好(打开设置时由 `App` 从权威快照注入;成功/冲突后更新)。
-    pub confirmed: LocalePreference,
-    /// 用户刚点选、尚未被 daemon 确认的偏好(乐观显示;确认/失败/冲突后清空)。
-    pub pending: Option<LocalePreference>,
-    pub status: LanguageStatus,
+/// 产品枚举 → 共享页面 ID。
+pub fn page_id(tab: SettingsTab) -> PageId {
+    let raw = match tab {
+        SettingsTab::Theme => bytehost_settings::THEME_ID,
+        SettingsTab::Git => "dozer.git",
+        SettingsTab::Advanced => "dozer.advanced",
+        SettingsTab::Apps => bytehost_settings::APPS_ID,
+        SettingsTab::Language => bytehost_settings::LANGUAGE_ID,
+    };
+    PageId::new(raw).expect("static page id")
 }
 
-impl LanguageState {
-    /// 当前应显示为"已选"的偏好:有乐观值用乐观值,否则用已确认值。
-    pub fn shown(&self) -> &LocalePreference {
-        self.pending.as_ref().unwrap_or(&self.confirmed)
+/// 共享页面 ID → 产品枚举(未知页返回 `None`)。
+#[allow(dead_code)]
+pub fn tab_of(page: &PageId) -> Option<SettingsTab> {
+    match page.as_str() {
+        bytehost_settings::THEME_ID => Some(SettingsTab::Theme),
+        "dozer.git" => Some(SettingsTab::Git),
+        "dozer.advanced" => Some(SettingsTab::Advanced),
+        bytehost_settings::APPS_ID => Some(SettingsTab::Apps),
+        bytehost_settings::LANGUAGE_ID => Some(SettingsTab::Language),
+        _ => None,
     }
 }
 
-impl Default for LanguageState {
-    fn default() -> Self {
-        LanguageState {
-            confirmed: LocalePreference::System,
-            pending: None,
-            status: LanguageStatus::Idle,
-        }
+thread_local! {
+    /// 当前渲染帧的 locale:共享视图只拿到 `(key, fallback)` 解析函数,
+    /// 由产品在进入渲染前写入,渲染结束恢复。
+    static SETTINGS_LOCALE: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+pub(crate) fn with_locale<R>(locale: &str, f: impl FnOnce() -> R) -> R {
+    let previous = SETTINGS_LOCALE.replace(locale.to_owned());
+    let result = f();
+    SETTINGS_LOCALE.replace(previous);
+    result
+}
+
+/// 按 byteui 的 `{"scheme":"dark"|"light"}` 格式落盘,并把错误交给调用方展示。
+pub(crate) fn persist_theme(scheme: ColorScheme) -> Result<(), String> {
+    #[derive(serde::Serialize)]
+    struct Persisted {
+        scheme: ColorScheme,
     }
+    let path = crate::theme::color_theme_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    let json = serde_json::to_string_pretty(&Persisted { scheme })
+        .map_err(|e| format!("theme serialization failed: {e}"))?;
+    std::fs::write(&path, json).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// 共享视图的文案解析:沿用 Dozer 现有 `settings.*` 词表;共享新增 key 落英文 fallback。
+pub(crate) fn shared_text(key: &str, fallback: &str) -> String {
+    SETTINGS_LOCALE.with(|locale| {
+        let locale = locale.borrow();
+        crate::i18n::host_text(key, fallback, locale.as_str())
+    })
 }
 
 /// 语言写入结果(由 `App::update` 发起 `set_locale` 后回灌,统一走设置消息通道)。
@@ -135,12 +194,10 @@ pub struct State {
     /// connect task)。
     connect_tasks: HashMap<GitProvider, tokio::task::AbortHandle>,
     pub advanced: AdvancedState,
-    /// 左栏当前选中的 tab(主题 / Git 账户 / 高级),决定右侧内容区显示哪一组。
-    pub selected: SettingsTab,
-    /// 左栏 tab 的 hover 态(已不驱动任何视觉——「新建项目」左侧
-    /// `sidebar_entry` 本身无 hover 高亮,设置弹窗左栏与之保持一致,所以
-    /// 这里仅保留事件埋点,样式上不浮 TAB_HOVER 胶囊、标题也不 DIM→GOLD)。
-    tab_hover: Option<SettingsTab>,
+    /// 共享导航状态(打开 / 当前页 / 窗口代数)。页序与默认页由注册表决定。
+    pub core: SettingsState,
+    /// 产品注册的页面(Theme / Git / Advanced / Apps / Language)。
+    pub registry: PageRegistry,
     /// 右上角关闭图标按钮的悬停态——本弹窗渲染在独立原生窗口
     /// (`SettingsOverlay`),不接入 `App` 的全局 `hover_anims` 定时动画表
     /// (那套动画的自驱 redraw 只唤醒主窗口),所以这里退化成瞬时二值而非
@@ -152,6 +209,8 @@ pub struct State {
     pub apps: settings_apps::State,
     /// 「语言」页的状态(乐观选择 + 保存状态)。
     pub language: LanguageState,
+    /// 主题偏好写入失败原因;显示在主题页,成功保存后清除。
+    pub theme_error: Option<String>,
     /// 应用页改了已安装集合或运行状态,主窗口的应用宿主需要立刻刷新(`App::update` 的包装函数取走)。
     host_changed: bool,
 }
@@ -174,19 +233,28 @@ impl State {
 
     /// 同 [`State::load`],但预选某个左栏 tab(如从应用面板「去设置安装」直接落在「应用」页)。
     pub fn load_with_tab(daemon_unavailable: bool, tab: SettingsTab) -> State {
+        Self::load_with_page(daemon_unavailable, Some(page_id(tab)))
+    }
+
+    /// 按共享 `PageId` 打开(未知页由注册表回退到主题页)。
+    pub fn load_with_page(daemon_unavailable: bool, page: Option<PageId>) -> State {
         let accounts = git_accounts::load();
+        let registry = product_registry();
+        let mut core = SettingsState::new();
+        core.open(&registry, page.as_ref());
         State {
             github: ConnectState::from_accounts(&accounts, GitProvider::GitHub),
             gitlab: ConnectState::from_accounts(&accounts, GitProvider::GitLab),
             gitee: ConnectState::from_accounts(&accounts, GitProvider::Gitee),
             connect_tasks: HashMap::new(),
             advanced: advanced_state_for_daemon(daemon_unavailable),
-            selected: tab,
-            tab_hover: None,
+            core,
+            registry,
             close_hover: false,
             outbox: Default::default(),
             apps: Default::default(),
             language: LanguageState::default(),
+            theme_error: None,
             host_changed: false,
         }
     }
@@ -283,10 +351,10 @@ pub enum Message {
     AdvancedStopResult(Result<(), String>),
     AdvancedRestartClicked,
     AdvancedRestartResult(Result<(), String>),
-    /// 左栏 tab 切换:点击某组 tab 切到对应内容区。
+    /// 左栏 tab 切换:点击某组 tab 切到对应内容区(产品入口保留的强类型 API)。
     TabSelected(SettingsTab),
-    /// 左栏 tab 的 hover 进入/离开,`Some(tab)` 进入、`None` 离开。
-    TabHover(Option<SettingsTab>),
+    /// 共享导航点击:页面 ID 形式,允许未来新增产品页。
+    PageSelected(PageId),
     /// 「应用」页的全部消息(见 `settings_apps`)。
     Apps(settings_apps::Message),
     /// 用户点选一个语言偏好(跟随系统 / English / 简体中文)。真正的 `set_locale`
@@ -306,8 +374,9 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
             true
         }
         Message::ThemeSelected(scheme) => {
+            // 即时生效;落盘失败必须可见,不能假装"已保存"(主题可保留到本次进程结束)。
             byteui::theme::color::set_scheme(*scheme);
-            byteui::theme::color::persist_scheme(&crate::theme::color_theme_path());
+            state.theme_error = persist_theme(*scheme).err();
             true
         }
         Message::ConnectClicked(provider) => {
@@ -412,42 +481,32 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
             true
         }
         Message::TabSelected(tab) => {
-            state.selected = *tab;
+            let id = page_id(*tab);
+            state.core.select(&state.registry, &id);
             true
         }
-        Message::TabHover(h) => {
-            state.tab_hover = *h;
+        Message::PageSelected(id) => {
+            state.core.select(&state.registry, id);
             true
         }
         Message::LanguageSelected(pref) => {
-            // 乐观显示用户的选择,进入 Saving;防重复提交:已保存中忽略新点击。
-            if state.language.status == LanguageStatus::Saving {
-                return true;
-            }
-            state.language.pending = Some(pref.clone());
-            state.language.status = LanguageStatus::Saving;
+            // 乐观显示用户的选择,进入 Saving;保存中忽略新点击由共享状态层保证。
+            state.language.select(pref.clone());
             true
         }
         Message::LanguageSaveOutcome(outcome) => {
             match outcome {
                 LanguageSaveOutcome::Applied(snapshot) => {
-                    state.language.confirmed = snapshot.preference.clone();
-                    state.language.pending = None;
-                    state.language.status = LanguageStatus::Idle;
+                    state.language.applied(snapshot.preference.clone());
                 }
                 LanguageSaveOutcome::Conflict(snapshot) => {
-                    // 语言在别处被改:采纳服务端快照,提示重选。
-                    state.language.confirmed = snapshot.preference.clone();
-                    state.language.pending = None;
-                    state.language.status = LanguageStatus::Conflict;
+                    state.language.conflict(snapshot.preference.clone());
                 }
                 LanguageSaveOutcome::Failed(e) => {
-                    // 保存失败:保留乐观选择但显示错误,允许重试。
-                    state.language.status = LanguageStatus::Failed(e.clone());
+                    state.language.failed(e.clone());
                 }
                 LanguageSaveOutcome::Unsupported => {
-                    state.language.pending = None;
-                    state.language.status = LanguageStatus::Unsupported;
+                    state.language.unsupported();
                 }
             }
             true
@@ -485,7 +544,8 @@ pub fn update<A>(
         return;
     }
     // 切到「应用」页要现拉探测与列表(其余页纯本地,没有加载)。
-    let opened_apps = matches!(msg, Message::TabSelected(SettingsTab::Apps));
+    let opened_apps = matches!(&msg, Message::TabSelected(SettingsTab::Apps))
+        || matches!(&msg, Message::PageSelected(id) if id.as_str() == bytehost_settings::APPS_ID);
     if apply_sync_message(s, &msg) {
         if opened_apps {
             run_apps_message(
@@ -725,154 +785,10 @@ fn run_apps_message<A>(
     }
 }
 
-fn scheme_row<'a>(
-    label: impl Into<String>,
-    scheme: ColorScheme,
-    current: ColorScheme,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let selected = scheme == current;
-    let mark: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        text(if selected { "✓" } else { " " })
-            .size(byteui::theme::font::body())
-            .into();
-    crate::chrome::menu::item_row_fill(
-        Some(mark),
-        label,
-        if selected {
-            byteui::theme::color::current().gold
-        } else {
-            byteui::theme::color::current().body
-        },
-        Some(Message::ThemeSelected(scheme)),
-    )
-}
-
-/// 一个语言选项行(单选):左侧 ✓ 标记,右侧标签。点击提交该偏好。
-fn language_option_row<'a>(
-    label: String,
-    selected: bool,
-    disabled: bool,
-    pref: LocalePreference,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let colors = byteui::theme::color::current();
-    let mark: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        text(if selected { "✓" } else { " " })
-            .size(byteui::theme::font::body())
-            .color(if disabled { colors.dim } else { colors.gold })
-            .into();
-    let color = if disabled {
-        colors.dim
-    } else if selected {
-        colors.gold
-    } else {
-        colors.body
-    };
-    let msg = if disabled {
-        None
-    } else {
-        Some(Message::LanguageSelected(pref))
-    };
-    crate::chrome::menu::item_row_fill(Some(mark), label, color, msg)
-}
-
-/// 「语言」页:跟随系统 / English / 简体中文 三选一,附保存状态行。
-///
-/// - 选项的"已选"态来自 `LanguageState::shown`(乐观值优先)。
-/// - `Saving` 期间禁用全部选项防重复提交(spec Task 05)。
-/// - 保存失败/冲突/不支持时在选项下方给一行说明;失败保留乐观选择可重试。
-fn language_page<'a>(
-    state: &LanguageState,
-    locale: &str,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let colors = byteui::theme::color::current();
-    let t = |key: &str, fallback: &str| crate::i18n::host_text(key, fallback, locale);
-    let saving = state.status == LanguageStatus::Saving;
-    let shown = state.shown().clone();
-    let title = text(t("settings.language.title", "Language"))
-        .size(byteui::theme::font::subtitle())
-        .color(colors.cream);
-
-    let rows = column![
-        language_option_row(
-            t("settings.language.follow_system", "Follow System"),
-            shown == LocalePreference::System,
-            saving,
-            LocalePreference::System,
-        ),
-        language_option_row(
-            t("settings.language.english", "English"),
-            shown
-                == LocalePreference::Explicit {
-                    locale: Locale(Locale::EN.into())
-                },
-            saving,
-            LocalePreference::Explicit {
-                locale: Locale(Locale::EN.into())
-            },
-        ),
-        language_option_row(
-            t("settings.language.simplified_chinese", "Simplified Chinese"),
-            shown
-                == LocalePreference::Explicit {
-                    locale: Locale(Locale::ZH_CN.into())
-                },
-            saving,
-            LocalePreference::Explicit {
-                locale: Locale(Locale::ZH_CN.into())
-            },
-        ),
-    ]
-    .spacing(6);
-
-    let status_line: Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-        match &state.status {
-            LanguageStatus::Idle => None,
-            LanguageStatus::Saving => Some(
-                text(t("settings.language.saving", "Saving…"))
-                    .size(byteui::theme::font::caption())
-                    .color(colors.dim)
-                    .into(),
-            ),
-            LanguageStatus::Failed(_e) => Some(
-                text(t(
-                    "settings.language.save_failed",
-                    "Couldn't save. Try again.",
-                ))
-                .size(byteui::theme::font::caption())
-                .color(colors.gold)
-                .into(),
-            ),
-            LanguageStatus::Conflict => Some(
-                text(t(
-                    "settings.language.conflict",
-                    "Language changed elsewhere — review your choice.",
-                ))
-                .size(byteui::theme::font::caption())
-                .color(colors.gold)
-                .into(),
-            ),
-            LanguageStatus::Unsupported => Some(
-                text(t(
-                    "settings.language.unsupported",
-                    "This service doesn't support language settings.",
-                ))
-                .size(byteui::theme::font::caption())
-                .color(colors.dim)
-                .into(),
-            ),
-        };
-
-    let mut col = column![title, rows].spacing(14);
-    if let Some(line) = status_line {
-        col = col.push(line);
-    }
-    col.into()
-}
-
 fn provider_row<'a>(
     provider: GitProvider,
     state: &'a ConnectState,
-    locale: &'a str,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
     let t = |key: &str, fallback: &str| crate::i18n::host_text(key, fallback, locale);
@@ -988,7 +904,7 @@ fn count_live_sessions(sessions: &[dozer_model::SessionInfo]) -> u32 {
 
 fn advanced_row<'a>(
     state: &'a AdvancedState,
-    locale: &'a str,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
     let t = |key: &str, fallback: &str| crate::i18n::host_text(key, fallback, locale);
@@ -1117,210 +1033,152 @@ fn advanced_row<'a>(
 /// 弹窗左侧 `sidebar_entry` 完全一致:caption 字号,选中 CARD 实底、未选中
 /// BG 实底,8 圆角胶囊(无边框),选中 CREAM、未选中 DIM,无 hover 配色漂移
 /// (与「新建项目」左侧 tab 同一套观感)。
-fn settings_tab_button<'a>(
-    label: impl Into<String>,
-    active: bool,
-    _hover_t: f32,
-    on_press: Message,
-    on_enter: impl Fn(bool) -> Message + 'a,
-    on_exit: impl Fn(bool) -> Message + 'a,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let colors = byteui::theme::color::current();
-    let label_el = text(label.into())
-        .size(byteui::theme::font::caption())
-        .color(if active { colors.cream } else { colors.dim });
-    let cell = container(label_el)
-        .padding([8, 12])
-        .width(Length::Fill)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(if active { colors.card } else { colors.bg }.into()),
-            border: Border {
-                radius: 8.0.into(),
-                ..Border::default()
-            },
-            ..container::Style::default()
-        });
-    MouseArea::new(cell)
-        .on_press(on_press)
-        .on_enter(on_enter(true))
-        .on_exit(on_exit(false))
-        .interaction(iced_widget::core::mouse::Interaction::Pointer)
-        .into()
+fn theme_selected(scheme: ColorScheme) -> Message {
+    Message::ThemeSelected(scheme)
 }
 
+fn language_selected(preference: LocalePreference) -> Message {
+    Message::LanguageSelected(preference)
+}
+
+fn page_selected(id: &PageId) -> Message {
+    Message::PageSelected(id.clone())
+}
+
+fn close_hover(hovered: bool) -> Message {
+    Message::CloseHover(hovered)
+}
+
+/// 设置卡片:共享容器负责标题 / 导航 / 关闭 / 滚动;产品按 `PageId` 渲染内容。
 pub fn settings_card<'a>(
     state: &'a State,
     locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    with_locale(locale, || build_card(state))
+}
+
+fn build_card<'a>(
+    state: &'a State,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
-    let current = byteui::theme::color::current_scheme();
-    let t = |key: &str, fallback: &str| crate::i18n::host_text(key, fallback, locale);
-    let theme_title = text(t("settings.tab.theme", "Theme"))
-        .size(byteui::theme::font::subtitle())
-        .color(colors.cream);
-    let git_title = text(t("settings.git.title", "Git Accounts"))
-        .size(byteui::theme::font::subtitle())
-        .color(colors.cream);
-    let close = button(
-        text(t("settings.close", "Close"))
-            .size(byteui::theme::font::label())
-            .color(colors.dim),
-    )
-    .on_press(Message::Close)
-    .padding([8, 20])
-    .style(crate::extensions::project_create::action_button_hover_style(colors.dim));
-    let close_icon = icons::icon_button_entry(
-        icons::IconKind::X,
-        byteui::theme::icon_size::row(),
-        false,
-        false,
-        if state.close_hover { 1.0 } else { 0.0 },
-        false,
-        byteui::theme::geometry::tab_button_size(),
-        true,
-        Message::Close,
-        Message::CloseHover,
-        t("settings.close", "Close"),
-    );
+    let current = state.core.current();
+    let page = current.map(PageId::as_str).unwrap_or_default();
 
-    let advanced_title = text(t("settings.tab.advanced", "Advanced"))
-        .size(byteui::theme::font::subtitle())
-        .color(colors.cream);
-    // 标题行:settings 图标 + 奶油色标题文本,右上角 X 关闭按钮——与"新建
-    // 项目"弹窗同一套 header 结构(图标 + 标题 + 右对齐关闭按钮),
-    // 关闭按钮 hover 动画与 project_create 一致。
-    let title = row![
-        icons::view(
-            icons::IconKind::Settings,
-            byteui::theme::font::title() as f32,
-            colors.cream,
-        ),
-        text(t("settings.title", "Settings"))
-            .size(byteui::theme::font::title())
-            .color(colors.cream),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-    let header =
-        row![title, Space::new().width(Length::Fill), close_icon].align_y(Alignment::Center);
-
-    // 左栏三组切换 tab(主题 / Git 账户 / 高级),样式与「新建项目」弹窗左侧
-    // `sidebar_entry` 完全一致(选中 CARD 实底、未选中 BG 实底、8 圆角、无
-    // 边框、无 hover 配色漂移)。
-    let tab_hover_t = |tab: SettingsTab| -> f32 {
-        if state.tab_hover == Some(tab) {
-            1.0
-        } else {
-            0.0
+    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match page {
+        bytehost_settings::THEME_ID => {
+            let extra: Vec<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> = state
+                .theme_error
+                .as_ref()
+                .map(|reason| {
+                    vec![
+                        text(crate::i18n::host_text_args(
+                            "settings.theme.save_failed",
+                            "Could not save the theme ({reason}). It is active until restart; pick again to retry.",
+                            &current_locale(),
+                            &[("reason", reason.as_str())],
+                        ))
+                        .size(byteui::theme::font::label())
+                        .color(colors.red)
+                        .into(),
+                    ]
+                })
+                .unwrap_or_default();
+            bytehost_settings_ui::theme_page(
+                byteui::theme::color::current_scheme(),
+                &bytehost_settings_ui::theme::ALL,
+                Text::new(&shared_text),
+                &theme_selected,
+                extra,
+            )
         }
+        "dozer.git" => column![
+            text(shared_text("settings.git.title", "Git Accounts"))
+                .size(byteui::theme::font::subtitle())
+                .color(colors.cream),
+            provider_row(GitProvider::GitHub, &state.github, &current_locale()),
+            provider_row(GitProvider::GitLab, &state.gitlab, &current_locale()),
+            provider_row(GitProvider::Gitee, &state.gitee, &current_locale()),
+        ]
+        .spacing(14)
+        .into(),
+        "dozer.advanced" => column![
+            text(shared_text("settings.tab.advanced", "Advanced"))
+                .size(byteui::theme::font::subtitle())
+                .color(colors.cream),
+            advanced_row(&state.advanced, &current_locale()),
+        ]
+        .spacing(14)
+        .into(),
+        bytehost_settings::APPS_ID => {
+            column![settings_apps::view(&state.apps, &current_locale()).map(Message::Apps)]
+                .spacing(14)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        }
+        bytehost_settings::LANGUAGE_ID => {
+            let options = language_options();
+            bytehost_settings_ui::language_page(
+                &state.language,
+                &options,
+                Text::new(&shared_text),
+                &language_selected,
+                Vec::new(),
+            )
+        }
+        _ => Space::new().into(),
     };
-    let tab_col = column![
-        settings_tab_button(
-            t("settings.tab.theme", "Theme"),
-            state.selected == SettingsTab::Theme,
-            tab_hover_t(SettingsTab::Theme),
-            Message::TabSelected(SettingsTab::Theme),
-            |h| Message::TabHover(if h { Some(SettingsTab::Theme) } else { None }),
-            |_| Message::TabHover(None),
+
+    let dynamic: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if page == bytehost_settings::APPS_ID {
+            body
+        } else {
+            column![body].spacing(14).into()
+        };
+
+    bytehost_settings_ui::settings_shell(Shell {
+        pages: state.registry.pages(),
+        current,
+        content: dynamic,
+        on_select: &page_selected,
+        on_close: Message::Close,
+        on_close_hover: Some(&close_hover),
+        close_hovered: state.close_hover,
+        text: Text::new(&shared_text),
+        // 应用页自带滚动;其余页由共享容器包一层。
+        scroll_content: page != bytehost_settings::APPS_ID,
+        width: Length::Fill,
+    })
+}
+
+/// 当前渲染帧的 locale(产品页里的 `host_text` 调用仍然直接用它)。
+fn current_locale() -> String {
+    SETTINGS_LOCALE.with(|locale| locale.borrow().clone())
+}
+
+/// 语言选项:跟随系统 / English / 简体中文。
+fn language_options() -> [LanguageOption<LocalePreference>; 3] {
+    [
+        LanguageOption::new(
+            LocalePreference::System,
+            "settings.language.follow_system",
+            "Follow System",
         ),
-        settings_tab_button(
-            t("settings.tab.git", "Git Accounts"),
-            state.selected == SettingsTab::Git,
-            tab_hover_t(SettingsTab::Git),
-            Message::TabSelected(SettingsTab::Git),
-            |h| Message::TabHover(if h { Some(SettingsTab::Git) } else { None }),
-            |_| Message::TabHover(None),
+        LanguageOption::new(
+            LocalePreference::Explicit {
+                locale: Locale(Locale::EN.into()),
+            },
+            "settings.language.english",
+            "English",
         ),
-        settings_tab_button(
-            t("settings.tab.advanced", "Advanced"),
-            state.selected == SettingsTab::Advanced,
-            tab_hover_t(SettingsTab::Advanced),
-            Message::TabSelected(SettingsTab::Advanced),
-            |h| Message::TabHover(if h { Some(SettingsTab::Advanced) } else { None }),
-            |_| Message::TabHover(None),
-        ),
-        settings_tab_button(
-            t("settings.tab.apps", "Apps"),
-            state.selected == SettingsTab::Apps,
-            tab_hover_t(SettingsTab::Apps),
-            Message::TabSelected(SettingsTab::Apps),
-            |h| Message::TabHover(if h { Some(SettingsTab::Apps) } else { None }),
-            |_| Message::TabHover(None),
-        ),
-        settings_tab_button(
-            t("settings.tab.language", "Language"),
-            state.selected == SettingsTab::Language,
-            tab_hover_t(SettingsTab::Language),
-            Message::TabSelected(SettingsTab::Language),
-            |h| { Message::TabHover(if h { Some(SettingsTab::Language) } else { None }) },
-            |_| Message::TabHover(None),
+        LanguageOption::new(
+            LocalePreference::Explicit {
+                locale: Locale(Locale::ZH_CN.into()),
+            },
+            "settings.language.simplified_chinese",
+            "Simplified Chinese",
         ),
     ]
-    .spacing(8)
-    .width(Length::Fill);
-
-    // 右侧内容区:只渲染左栏选中那一组,其余两组收起(互斥视图切换,与
-    // 「新建项目」弹窗的 Tab::Local/Clone 同一思路)。
-    let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = match state
-        .selected
-    {
-        SettingsTab::Theme => column![
-            theme_title,
-            scheme_row(
-                t("settings.theme.dark", "Dark · ByteBoy2077"),
-                ColorScheme::Dark,
-                current
-            ),
-            scheme_row(
-                t("settings.theme.light", "Light · ByteBoy2077-Light"),
-                ColorScheme::Light,
-                current
-            ),
-        ],
-        SettingsTab::Git => column![
-            git_title,
-            provider_row(GitProvider::GitHub, &state.github, locale),
-            provider_row(GitProvider::GitLab, &state.gitlab, locale),
-            provider_row(GitProvider::Gitee, &state.gitee, locale),
-        ],
-        SettingsTab::Advanced => column![advanced_title, advanced_row(&state.advanced, locale)],
-        SettingsTab::Apps => {
-            column![crate::extensions::settings_apps::view(&state.apps, locale).map(Message::Apps)]
-        }
-        SettingsTab::Language => column![language_page(&state.language, locale)],
-    }
-    .spacing(14)
-    .into();
-
-    // 左栏 tab + 1px 分割线 + 右侧内容区;分割线左右各 16,与内容左缘对齐。
-    let main = row![
-        container(tab_col).width(Length::Fixed(140.0)),
-        container(iced_widget::Space::new())
-            .width(Length::Fixed(1.0))
-            .height(Length::Fill)
-            .style(|_t: &iced_widget::Theme| container::Style {
-                background: Some(byteui::theme::color::current().border.into()),
-                ..container::Style::default()
-            }),
-        container(body).width(Length::Fill).padding(Padding {
-            top: 0.0,
-            right: 0.0,
-            bottom: 0.0,
-            left: 16.0,
-        }),
-    ]
-    .spacing(16)
-    .align_y(iced_widget::core::Alignment::Start)
-    .height(Length::Fill);
-
-    let content = column![header, main, byteui::feedback::dialog::actions(row![close])].spacing(14);
-
-    container(content)
-        .padding(16)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(byteui::feedback::dialog::card_style)
-        .into()
 }
 
 #[cfg(test)]
@@ -1330,18 +1188,22 @@ mod tests {
     /// 测试专用构造:`connect_tasks` 是任务生命周期相关的簿记字段,跟这些
     /// 纯状态转换测试无关,统一给默认值,避免每个测试都重复写。
     fn test_state(github: ConnectState, gitlab: ConnectState, gitee: ConnectState) -> State {
+        let registry = product_registry();
+        let mut core = SettingsState::new();
+        core.open(&registry, None);
         State {
             github,
             gitlab,
             gitee,
             connect_tasks: HashMap::new(),
             advanced: AdvancedState::Idle { error: None },
-            selected: SettingsTab::Theme,
-            tab_hover: None,
+            core,
+            registry,
             close_hover: false,
             outbox: Default::default(),
             apps: Default::default(),
             language: LanguageState::default(),
+            theme_error: None,
             host_changed: false,
         }
     }
@@ -1356,6 +1218,47 @@ mod tests {
     }
 
     #[test]
+    fn registry_keeps_the_five_pages_in_dozer_order_and_defaults_to_theme() {
+        let registry = product_registry();
+        let ids: Vec<_> = registry.pages().iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "bytehost.theme",
+                "dozer.git",
+                "dozer.advanced",
+                "bytehost.apps",
+                "bytehost.language"
+            ]
+        );
+        assert_eq!(
+            registry.default_page().map(PageId::as_str),
+            Some("bytehost.theme")
+        );
+        let mut state = State::load(false);
+        state
+            .core
+            .open(&registry, Some(&PageId::new("missing.page").unwrap()));
+        assert_eq!(
+            state.core.current().map(PageId::as_str),
+            Some("bytehost.theme")
+        );
+    }
+
+    #[test]
+    fn page_ids_map_to_the_product_tabs_and_back() {
+        for tab in [
+            SettingsTab::Theme,
+            SettingsTab::Git,
+            SettingsTab::Advanced,
+            SettingsTab::Apps,
+            SettingsTab::Language,
+        ] {
+            assert_eq!(tab_of(&page_id(tab)), Some(tab));
+        }
+    }
+
+    #[test]
     fn language_selected_sets_pending_and_saving() {
         let mut state = test_state(
             ConnectState::NotConnected,
@@ -1366,8 +1269,8 @@ mod tests {
             locale: Locale(Locale::ZH_CN.into()),
         };
         apply_sync_message(&mut state, &Message::LanguageSelected(pref.clone()));
-        assert_eq!(state.language.pending, Some(pref.clone()));
-        assert_eq!(state.language.status, LanguageStatus::Saving);
+        assert_eq!(state.language.pending(), Some(&pref));
+        assert_eq!(state.language.status(), &LanguageStatus::Saving);
         // 乐观显示优先于已确认值。
         assert_eq!(state.language.shown(), &pref);
     }
@@ -1387,8 +1290,8 @@ mod tests {
         };
         apply_sync_message(&mut state, &Message::LanguageSelected(zh.clone()));
         apply_sync_message(&mut state, &Message::LanguageSelected(en));
-        assert_eq!(state.language.pending, Some(zh));
-        assert_eq!(state.language.status, LanguageStatus::Saving);
+        assert_eq!(state.language.pending(), Some(&zh));
+        assert_eq!(state.language.status(), &LanguageStatus::Saving);
     }
 
     #[test]
@@ -1410,9 +1313,9 @@ mod tests {
                 3,
             ))),
         );
-        assert_eq!(state.language.pending, None);
-        assert_eq!(state.language.status, LanguageStatus::Idle);
-        assert_eq!(state.language.confirmed, zh);
+        assert_eq!(state.language.pending(), None);
+        assert_eq!(state.language.status(), &LanguageStatus::Idle);
+        assert_eq!(state.language.confirmed(), &zh);
         assert_eq!(state.language.shown(), &zh);
     }
 
@@ -1432,8 +1335,8 @@ mod tests {
             &Message::LanguageSaveOutcome(LanguageSaveOutcome::Failed("io".into())),
         );
         // 乐观选择保留(可重试),但状态是失败。
-        assert_eq!(state.language.pending, Some(zh));
-        assert!(matches!(state.language.status, LanguageStatus::Failed(_)));
+        assert_eq!(state.language.pending(), Some(&zh));
+        assert!(matches!(state.language.status(), LanguageStatus::Failed(_)));
     }
 
     #[test]
@@ -1449,16 +1352,16 @@ mod tests {
         let en = LocalePreference::Explicit {
             locale: Locale(Locale::EN.into()),
         };
-        state.language.confirmed = en.clone();
+        state.language.update_confirmed(en.clone());
         apply_sync_message(&mut state, &Message::LanguageSelected(zh));
         // 服务端其实已是 en(revision 被别处推进)。
         apply_sync_message(
             &mut state,
             &Message::LanguageSaveOutcome(LanguageSaveOutcome::Conflict(snap(en.clone(), "en", 9))),
         );
-        assert_eq!(state.language.pending, None);
-        assert_eq!(state.language.status, LanguageStatus::Conflict);
-        assert_eq!(state.language.confirmed, en);
+        assert_eq!(state.language.pending(), None);
+        assert_eq!(state.language.status(), &LanguageStatus::Conflict);
+        assert_eq!(state.language.confirmed(), &en);
     }
 
     #[test]
@@ -1468,7 +1371,7 @@ mod tests {
             ConnectState::NotConnected,
             ConnectState::NotConnected,
         );
-        state.language.confirmed = LocalePreference::System;
+        state.language.update_confirmed(LocalePreference::System);
         apply_sync_message(
             &mut state,
             &Message::LanguageSelected(LocalePreference::System),
@@ -1477,8 +1380,8 @@ mod tests {
             &mut state,
             &Message::LanguageSaveOutcome(LanguageSaveOutcome::Unsupported),
         );
-        assert_eq!(state.language.pending, None);
-        assert_eq!(state.language.status, LanguageStatus::Unsupported);
+        assert_eq!(state.language.pending(), None);
+        assert_eq!(state.language.status(), &LanguageStatus::Unsupported);
     }
 
     #[test]
@@ -1491,7 +1394,7 @@ mod tests {
         let zh = LocalePreference::Explicit {
             locale: Locale(Locale::ZH_CN.into()),
         };
-        state.language.confirmed = zh.clone();
+        state.language.update_confirmed(zh.clone());
         assert_eq!(state.language.shown(), &zh);
     }
 

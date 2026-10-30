@@ -1957,16 +1957,19 @@ impl App {
     /// 打开设置窗口,并把当前权威语言偏好注入「语言」页作已确认值。
     pub(crate) fn open_settings(&mut self) {
         let mut state = settings::State::load(self.daemon_unavailable.is_some());
-        state.language.confirmed = self.locale.snapshot().preference.clone();
+        state
+            .language
+            .update_confirmed(self.locale.snapshot().preference.clone());
         self.settings = Some(state);
     }
 
     /// 语言权威快照变化后同步设置页的已确认偏好(保存中的乐观值不受影响)。
     pub(crate) fn sync_settings_locale(&mut self) {
         if let Some(s) = self.settings.as_mut()
-            && s.language.status != settings::LanguageStatus::Saving
+            && !s.language.is_saving()
         {
-            s.language.confirmed = self.locale.snapshot().preference.clone();
+            s.language
+                .update_confirmed(self.locale.snapshot().preference.clone());
         }
     }
 

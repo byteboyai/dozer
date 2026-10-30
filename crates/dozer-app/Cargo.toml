@@ -24,6 +24,8 @@ bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17"
 bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
 bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
 bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
+bytehost-settings = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
+bytehost-settings-ui = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
 # 公共桌面宿主契约:稳定身份、请求身份、布局 DTO(bytehost-core,本地 patch 联调)。
 bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
 # 共享桌面宿主执行层:Surface 生命周期/路由/几何(iced + wry 平台实现)。
