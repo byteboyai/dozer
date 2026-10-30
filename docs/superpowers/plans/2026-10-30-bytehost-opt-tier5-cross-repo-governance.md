@@ -124,20 +124,32 @@
   CI 加 `cargo check --workspace --no-default-features` job。chrome 的 wry/winit 禁令在
   Tier3 Task3 之后才成立,同一次发版里一起生效。
 - **Task2**:dozer `scripts/check-host-deps.sh` 移植自 digger(业务 crate 前缀
-  `dozer-(model|services|store-project|preview-core|i18n)`);**dozer 没有任何 CI**,门禁挂在
-  `.githooks/pre-push`(与 shared-deps 同一处),变异自测 3 条通过。
+  `dozer-(model|services|store-project|preview-core|i18n)`);门禁同时挂在
+  `.githooks/pre-push`(与 shared-deps 同一处)与新建的
+  `.github/workflows/consumer-check.yml`(dozer 的第一个 CI)。变异自测 3 条通过。
 - **Task3**:脚本归属核对结果——脚本在 digger、校验对象是 dozer 的 `workspace.json`。
-  已**移到 dozer**(`scripts/check-shell-regions.sh`),并从 digger 删除;同样挂 pre-push
-  (找不到 sibling byteui 时跳过)。dozer 无 CI,无法进 Actions。
+  已**移到 dozer**(`scripts/check-shell-regions.sh`),并从 digger 删除;挂 pre-push
+  (找不到 sibling byteui 时跳过)与 `consumer-check.yml`(CI 里把 `byteboyai/byteui`
+  checkout 成 sibling,`BYTEUI` 指过去)。
   **变异自测已做**:把 `workspace.json` 的 `top_bar.gap` 从 8 改成 9,脚本报
   `top_bar.gap: Dozer=9.0 byteui=8.0` 并以 1 退出;恢复后通过。
-- **Task4**:**本地联合构建** `bytehost/scripts/joint-build.sh`(用 `cargo --config` 临时把 9 个
+- **Task4**:**联合构建** `bytehost/scripts/joint-build.sh`(用 `cargo --config` 临时把 9 个
   crate patch 到工作树,跑完还原消费方 `Cargo.lock`);dozer/digger 两侧都实测通过。
+  CI 形态:bytehost `.github/workflows/joint-build.yml` 在打 tag/手动触发时 checkout
+  `byteboyai/dozer` 成 sibling 并跑 `joint-build.sh dozer`。**digger 没有 GitHub 远端**,
+  暂时无法纳入;它有远端后加一个 checkout + `joint-build.sh digger` 即可。
   pin 守卫核对结论:`shared-deps-guard`(消费方)与 `check-deps.sh` pins(bytehost 自身)
   规则并集已经覆盖 bytehost/byteui/bytegit 一致性 + 最新 tag + lock 重复;`digger/shared-deps.toml`
   的语义是"**刻意固定**的库才登记",当前全部跟最新,故保持为空是对的,不硬填。
-- **Task5**:**只出候选清单**,不做下沉。盘点结论:todo/browser/preview 的状态机、视图与协议
-  都已在 `dozer-panel-todo`/`-browser`/`-preview` 共享库里,两侧适配器剩下的是产品胶水
-  (状态 map、服务注入、轮询、窗口/骨架接线),没有可安全共享的重复逻辑。全面下沉需要先
-  设计"产品胶水接口",另行规划。
+- **Task5**:**只出候选清单 + 设计草案**,不做具体下沉。盘点结论:todo/browser/preview 的
+  状态机、视图与协议都已在 `dozer-panel-todo`/`-browser`/`-preview` 共享库里,两侧适配器
+  剩下的是产品胶水(状态 map、服务注入、轮询、窗口/骨架接线),没有可直接搬走的重复逻辑。
+  候选(按"胶水面积/可抽象度"排序):
+  1. **todo 的展示语义**(悬停进度、折叠按钮、面板头、头部内边距、分割线):Dozer 的实现
+     `host_adapters/todo_panel.rs` 全部转调 `PanelHost`;Digger 的 `PanelDisplay` 实现是空实现/
+     常量。可把"宿主默认展示策略"做成 `dozer-panel-host` 的一个 adapter,产品只覆写差异;
+  2. **preview 的打开/校验流程**:两边的信任判定与资源根解析已共享,剩余差异是窗口接线;
+  3. **browser 的页签生命周期**:面板库已吃掉状态机,适配器只剩窗口/骨架事件映射。
+  下沉前需要先定义"产品胶水接口"(展示策略 + 事件映射 + 句柄注入三组 trait),
+  这是一份独立计划的工作量,本次不强行改代码。
 - 提交:bytehost `7dd2205`/`ee2e092`/`fad7715`(tag `v0.4.19`);dozer `8e650e69`/`2f50c62e`。

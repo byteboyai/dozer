@@ -113,8 +113,10 @@ dozer 线（4.1-4.3）与 digger 线（4.4-4.6）完全独立。若在 Phase 3 �
   只本地提交。
 - **thiserror(2.9)**:跳过(未批准引入)。
 - **port.rs(4.5)**:删除(YAGNI;设置页 Advanced 尚无端口重置入口)。
-- **联合 CI(5.2)**:两消费方都没有 GitHub Actions,先落本地 `scripts/joint-build.sh`(bytehost);
-  跨仓 workflow 等两仓有可复用 workflow + 跨仓 token 再接。
+- **联合 CI(5.2)**:本地 `bytehost/scripts/joint-build.sh` + CI
+  `bytehost/.github/workflows/joint-build.yml`(tag/手动触发,checkout dozer 成 sibling 后跑);
+  dozer 新建首个 CI `.github/workflows/consumer-check.yml`(编译 + 依赖门禁 + 面板边界 + 外壳区域)。
+  digger 没有 GitHub 远端,其 workflow 只随本地分支提交,等有远端后生效。
 - **适配下沉(5.3)**:只出候选清单(见 Tier5 决策记录),不做具体下沉。
 - **锁拆分**:采用 per-app 写锁(64 分片)+ 全局生命周期 RwLock,而不是计划字面的
   install/start/runtime 三把职责锁——后者会让同一 app 的 install 与 start 并发写记录。
