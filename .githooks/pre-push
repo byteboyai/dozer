@@ -35,4 +35,11 @@ done
 if [ "$status" -ne 0 ]; then
   echo "pre-push: 共享库依赖检查未通过,已拦下推送。修复后重试;确认要绕过时用 git push --no-verify" >&2
 fi
+
+# 业务层宿主依赖门禁(bytehost 优化 Tier5 Task2):dozer-model/services/store-project 等
+# 业务 crate 不得直连 bytehost-*/iced/wry。dozer 目前没有远程 CI,pre-push 是唯一的自动门禁。
+if ! "$root/scripts/check-host-deps.sh"; then
+  echo "pre-push: 业务层宿主依赖门禁未通过(见上),已拦下推送。确认要绕过时用 git push --no-verify" >&2
+  status=1
+fi
 exit "$status"
