@@ -101,22 +101,23 @@ dozer 线（4.1-4.3）与 digger 线（4.4-4.6）完全独立。若在 Phase 3 �
 
 ## 决策记录
 
-2026-10-30 实施完成(Phase 0–4 + 5.1,5.2 本地形态,5.3 仅候选识别)。
+2026-10-30 实施完成(Phase 0–5;5.2 本地形态,5.3 仅候选识别)。
 
-- **bytehost 新 tag:`v0.4.18`(提交 `8cb8ed1`)**,已推送 main 与 tag。它同时带上了此前的
-  `feat/shared-settings` + `feat/web-find` 5 个提交(dozer 已依赖 settings crate,v0.4.17 里没有)。
-- **dozer**:分支 `feat/bytehost-opt`,基线 `origin/main`(`08b63c99`),已升 `v0.4.18`。
+- **bytehost 新 tag:`v0.4.18`(`8cb8ed1`)+ `v0.4.19`(`fad7715`,per-app 锁)**,均已推送。
+  v0.4.18 同时带上此前的 `feat/shared-settings` + `feat/web-find` 5 个提交
+  (dozer 已依赖 settings crate,v0.4.17 里没有)。
+- **dozer**:分支 `feat/bytehost-opt`,基线 `origin/main`(`08b63c99`),已升 `v0.4.19` 并推送。
 - **bytehost**:分支 `feat/bytehost-opt`,基线 `feat/shared-settings`(`bd68451`)——不是 `origin/main`:
   dozer 已消费的 settings crate 只在该分支上。
-- **digger**:本地分支 `feat/bytehost-opt`,基线 `main`(`91a2a80`)。该仓没配 remote,只本地提交。
+- **digger**:本地分支 `feat/bytehost-opt`,基线 `main`(`91a2a80`),已升 `v0.4.19`。该仓没配 remote,
+  只本地提交。
 - **thiserror(2.9)**:跳过(未批准引入)。
 - **port.rs(4.5)**:删除(YAGNI;设置页 Advanced 尚无端口重置入口)。
 - **联合 CI(5.2)**:两消费方都没有 GitHub Actions,先落本地 `scripts/joint-build.sh`(bytehost);
   跨仓 workflow 等两仓有可复用 workflow + 跨仓 token 再接。
 - **适配下沉(5.3)**:只出候选清单(见 Tier5 决策记录),不做具体下沉。
-- **偏差**:Tier3 Task1 只移除 `Deref` 并把 `Core` 收为 `pub(crate)`,**未拆子锁**——install/start/
-  runtime 都写同一批 app 记录与 gateway,按职责拆锁会让同一 app 的 install 与 start 并发写记录;
-  安全粒度应是"按 app 锁",需单独立项。理由已记入 Tier3。
+- **锁拆分**:采用 per-app 写锁(64 分片)+ 全局生命周期 RwLock,而不是计划字面的
+  install/start/runtime 三把职责锁——后者会让同一 app 的 install 与 start 并发写记录。
 - **验证口径**:bytehost `cargo test --all-features`/clippy/fmt/`check-deps --self-test` 全绿;
   dozer 全仓测试除 `dozerd::product_isolation` 4 项(worktree 下找不到 `product_daemon` 示例二进制,
   环境限制)外全绿;digger `cargo test --workspace` 全绿(用本地 patch)。

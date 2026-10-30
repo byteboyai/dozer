@@ -133,11 +133,15 @@
 
 ## 决策记录
 
-- **Task1(偏差)**:`impl Deref for AppManager` 已移除,`Core` 收为 `pub(crate)`;消费方无引用
-  (Core 的方法本来就是 `pub(crate)`,Deref 对外等于没暴露任何可用 API)。**单写者锁未拆分**:
-  所有状态转移都写同一批 per-app registry 记录 + gateway,按 install/start/runtime 拆锁会把
-  "同一 app 的 install 与 start"变成可并发写,安全粒度应是 per-app 锁,需要独立设计。
-  单锁的保护语义、毒化恢复与取消路径都有测试守着。
+- **Task1**:`impl Deref for AppManager` 已移除,`Core` 收为 `pub(crate)`;消费方无引用
+  (Core 的方法本来就是 `pub(crate)`,Deref 对外等于没暴露任何可用 API)。
+  **锁拆成"per-app 写锁(64 分片)+ 全局生命周期 RwLock"**:per-app 操作持全局读锁 +
+  该应用分片锁,同一应用串行、不同应用并行;`reconcile`/`suspend_all` 持全局写锁,
+  与所有 per-app 操作互斥。监管线程仍是"try 锁 + 查 cancel + 等通知",所以 `stop`
+  (持有该应用锁)与 `suspend_all`(持有全局写锁)`join` 它们不会死锁。
+  新增测试:不同应用不互相阻塞、同一应用仍串行、全局操作排除 per-app 操作、
+  释放后 <1ms 拿到锁、取消立刻放弃。4 个字段上陈旧的 `#[allow(dead_code)]` 已删除
+  (全部实际在用)。
 - **Task2**:`wry_common::{apply_restricted, HandleRegistry}`。受限策略在调用方 `configure` **之后**
   应用(产品不能把 devtools/下载/新窗口放开);`panel` 是可信内部 HTML,刻意保留 wry 默认。
   三份源码钉死测试合并为 `wry_common` 的一份参数化测试。
@@ -148,4 +152,5 @@
 - **Task4**:`Mutex + Condvar` + `WriteGuard`(Drop 时 notify_all);取消时 `wake_lock_waiters`
   主动唤醒,避免"持锁 join"死锁。新增两个测试:释放后 <1ms 拿到锁、取消立即放弃。
 - **Task5**:跳过(thiserror 未引入)。
-- 提交:bytehost `2242b1e`/`35aec3b`/`a2059b6`/`e30eeba`/`8cb8ed1`。
+- 提交:bytehost `2242b1e`/`35aec3b`/`a2059b6`/`e30eeba`/`8cb8ed1`;
+  锁拆分 `fad7715`(tag `v0.4.19`)。

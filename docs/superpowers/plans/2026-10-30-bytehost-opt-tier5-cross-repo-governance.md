@@ -129,6 +129,8 @@
 - **Task3**:脚本归属核对结果——脚本在 digger、校验对象是 dozer 的 `workspace.json`。
   已**移到 dozer**(`scripts/check-shell-regions.sh`),并从 digger 删除;同样挂 pre-push
   (找不到 sibling byteui 时跳过)。dozer 无 CI,无法进 Actions。
+  **变异自测已做**:把 `workspace.json` 的 `top_bar.gap` 从 8 改成 9,脚本报
+  `top_bar.gap: Dozer=9.0 byteui=8.0` 并以 1 退出;恢复后通过。
 - **Task4**:**本地联合构建** `bytehost/scripts/joint-build.sh`(用 `cargo --config` 临时把 9 个
   crate patch 到工作树,跑完还原消费方 `Cargo.lock`);dozer/digger 两侧都实测通过。
   pin 守卫核对结论:`shared-deps-guard`(消费方)与 `check-deps.sh` pins(bytehost 自身)
@@ -138,4 +140,4 @@
   都已在 `dozer-panel-todo`/`-browser`/`-preview` 共享库里,两侧适配器剩下的是产品胶水
   (状态 map、服务注入、轮询、窗口/骨架接线),没有可安全共享的重复逻辑。全面下沉需要先
   设计"产品胶水接口",另行规划。
-- 提交:bytehost `7dd2205`/`ee2e092`;dozer `8e650e69`/`2f50c62e`。
+- 提交:bytehost `7dd2205`/`ee2e092`/`fad7715`(tag `v0.4.19`);dozer `8e650e69`/`2f50c62e`。
