@@ -43,14 +43,14 @@ petgraph = "0.8"
 # bytehost 共享宿主层:tag 只在这里钉一次,消费 crate 用 `.workspace = true`,
 # 需要额外 feature 的在消费方写 `{ workspace = true, features = [...] }`(features 会与这里合并)。
 # 升级 bytehost 时只改这一段。
-bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
-bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
-bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
-bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
-bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
-# 共享设置层:dozer 消费设置窗时启用(需 bytehost 新 tag;当前版本尚未包含这三个 crate,
-# 未使用的 workspace 依赖不会进依赖图,不影响构建)。
-bytehost-chrome = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
-bytehost-settings = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
-bytehost-settings-ui = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
+bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
+bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
+bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
+bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
+# 共享设置层:v0.4.18 起可用;dozer 消费设置窗时用 `.workspace = true`
+# (未使用的 workspace 依赖不进依赖图,不影响构建)。
+bytehost-chrome = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
+bytehost-settings = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
+bytehost-settings-ui = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }

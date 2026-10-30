@@ -19,8 +19,8 @@ block2 = "0.6"
 
 # web_child 池的冒烟(pool-probe / selfnav-probe)用已发布的 bytehost tag,不用本地路径。
 # 独立 workspace(见上 `[workspace]`),不继承主仓 `[workspace.dependencies]`;tag 跟随主仓升级。
-bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
 
 [[bin]]
 name = "browser-probe"
