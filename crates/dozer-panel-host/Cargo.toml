@@ -8,7 +8,7 @@ publish = false
 # 依赖闭包刻意**不含** dozer-app / dozer-client / dozer-core:Dozer 与 Digger 的共享面板库
 # (`dozer-panel-todo` 起)都依赖它,而不是各自复制一份。
 [dependencies]
-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.20" }
 dozer-model = { path = "../dozer-model" }
 dozer-services = { path = "../dozer-services" }
 tokio.workspace = true
