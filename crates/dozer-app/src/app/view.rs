@@ -39,7 +39,9 @@ impl App {
     ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
         // 设置弹窗已迁到独立原生窗口(见 `platform::settings_overlay`),
         // 不再作为 iced 叠层叠加。
-        self.view_inner()
+        byteui::feedback::math_curve::with_animation_paused(self.animations_paused, || {
+            self.view_inner()
+        })
     }
 
     fn view_inner(

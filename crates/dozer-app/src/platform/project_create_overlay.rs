@@ -54,7 +54,6 @@ pub(crate) struct ProjectCreateOverlay {
     gpu: OverlayGpu,
     cursor: mouse::Cursor,
     modifiers: ModifiersState,
-    main_window: Arc<Window>,
 }
 
 impl ProjectCreateOverlay {
@@ -64,6 +63,10 @@ impl ProjectCreateOverlay {
 
     pub(crate) fn request_redraw(&self) {
         self.window.request_redraw();
+    }
+
+    pub(crate) fn window_arc(&self) -> Arc<Window> {
+        self.window.clone()
     }
 
     pub(crate) fn open(
@@ -85,8 +88,6 @@ impl ProjectCreateOverlay {
         // CJK 项目名称/描述输入需要 IME 候选窗,winit 对新窗口默认关闭 IME
         // (同 search_overlay.rs 的既有教训)。
         window.set_ime_allowed(true);
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&window);
 
         let gpu = OverlayGpu::open(&window, instance, adapter, device, queue, size, scale);
 
@@ -95,7 +96,6 @@ impl ProjectCreateOverlay {
             gpu,
             cursor: mouse::Cursor::Unavailable,
             modifiers: ModifiersState::default(),
-            main_window: main_window.clone(),
         }
     }
 
@@ -247,13 +247,6 @@ impl ProjectCreateOverlay {
         self.gpu.cache = interface.into_cache();
         self.window.request_redraw();
         messages
-    }
-}
-
-impl Drop for ProjectCreateOverlay {
-    fn drop(&mut self) {
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&self.main_window);
     }
 }
 

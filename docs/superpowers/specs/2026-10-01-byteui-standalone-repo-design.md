@@ -49,8 +49,15 @@ rail、左侧树面板、中央工作区、右侧面板；配色语义一致（�
   （toast、进度、状态点）、`data`，以及图标 SVG。
 
 **留在各应用**
-- `region`、`terminal_font`、`homespace_*`，以及依赖它们的 `tree_row_h` /
+- `terminal_font`、`homespace_*`，以及依赖它们的 `tree_row_h` /
   `tree_chrome_top_px` / `tree_chrome_bottom_px`：这是应用自己的面板划分，进库会带上 dozer 的业务约定。
+- **2026-10-31 修订（覆盖下方旧约定）:** 共享外壳（顶栏、左右图标栏、状态条、左右 zone、
+  context menu、maximize overlay、窗口背景）归 ByteUI `theme::region`；应用只保留产品面板
+  区域（Dozer 的 project/preview/browser/agent/terminal/conversations/group_chat/review）
+  和 homespace/terminal 相关配置。Dozer 的共享 accessor 已委托 ByteUI，`workspace.json`
+  里不再保留重复键。详见
+  [`2026-10-31-byteui-optimization-design.md`](2026-10-31-byteui-optimization-design.md) 与
+  [`验证基线`](../../analysis/2026-10-31-byteui-optimization-validation.md)。
 - 应用自己的 `theme::init()`：启动时读自己的 JSON 并调用 `set_theme()`。digger 初期直接用默认值，后续按需微调。
 - `icon_size` 缩放配置路径由应用传入（现状如此），digger 传自己的路径。
 

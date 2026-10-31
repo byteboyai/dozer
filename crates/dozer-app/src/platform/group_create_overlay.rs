@@ -57,8 +57,6 @@ pub(crate) struct GroupChatCreateOverlay {
     gpu: OverlayGpu,
     cursor: mouse::Cursor,
     modifiers: ModifiersState,
-    /// Drop 时把 macOS 原生右键粘贴菜单指回主窗口(见 `Drop` 实现)。
-    main_window: Arc<Window>,
     /// 取消/创建消息需要 project_id,打开时记下。
     project_id: i64,
 }
@@ -80,6 +78,10 @@ impl GroupChatCreateOverlay {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub(crate) fn window_arc(&self) -> Arc<Window> {
+        self.window.clone()
+    }
+
     pub(crate) fn open(
         main_window: &Arc<Window>,
         adapter: &wgpu::Adapter,
@@ -99,14 +101,11 @@ impl GroupChatCreateOverlay {
             el,
         );
         window.set_ime_allowed(true);
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&window);
         GroupChatCreateOverlay {
             window,
             gpu,
             cursor: mouse::Cursor::Unavailable,
             modifiers: ModifiersState::default(),
-            main_window: main_window.clone(),
             project_id,
         }
     }
@@ -180,13 +179,6 @@ impl GroupChatCreateOverlay {
             backdrop_card_shrink(card.map(Message::GroupChat), CARD_WIDTH),
             iced_event,
         )
-    }
-}
-
-impl Drop for GroupChatCreateOverlay {
-    fn drop(&mut self) {
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&self.main_window);
     }
 }
 

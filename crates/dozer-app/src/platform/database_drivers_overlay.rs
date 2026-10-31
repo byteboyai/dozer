@@ -67,6 +67,10 @@ impl DatabaseDriversOverlay {
         Message::Database(database::Message::DriversPopupToggle)
     }
 
+    pub(crate) fn window_arc(&self) -> Arc<Window> {
+        self.window.clone()
+    }
+
     pub(crate) fn open(
         main_window: &Arc<Window>,
         adapter: &wgpu::Adapter,

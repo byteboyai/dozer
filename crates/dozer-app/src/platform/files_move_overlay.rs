@@ -34,8 +34,6 @@ pub(crate) struct FilesMoveOverlay {
     gpu: OverlayGpu,
     cursor: mouse::Cursor,
     modifiers: ModifiersState,
-    /// Drop 时把 macOS 原生右键粘贴菜单指回主窗口(见 `Drop` 实现)。
-    main_window: Arc<Window>,
 }
 
 impl OverlayHost for FilesMoveOverlay {
@@ -60,6 +58,10 @@ impl FilesMoveOverlay {
         Message::Files(files::Message::MoveCancel)
     }
 
+    pub(crate) fn window_arc(&self) -> Arc<Window> {
+        self.window.clone()
+    }
+
     pub(crate) fn open(
         main_window: &Arc<Window>,
         adapter: &wgpu::Adapter,
@@ -78,14 +80,11 @@ impl FilesMoveOverlay {
             el,
         );
         window.set_ime_allowed(true);
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&window);
         FilesMoveOverlay {
             window,
             gpu,
             cursor: mouse::Cursor::Unavailable,
             modifiers: ModifiersState::default(),
-            main_window: main_window.clone(),
         }
     }
 
@@ -117,13 +116,6 @@ impl FilesMoveOverlay {
                 ))
             },
         )
-    }
-}
-
-impl Drop for FilesMoveOverlay {
-    fn drop(&mut self) {
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&self.main_window);
     }
 }
 

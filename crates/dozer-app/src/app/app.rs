@@ -338,6 +338,14 @@ pub struct App {
     /// 当前窗口逻辑尺寸(宽,高)。由 main.rs 建窗口/`WindowEvent::Resized`
     /// 时经 `set_window_size` 写入。
     pub(crate) window_size: (f32, f32),
+    /// Pause descendant loading animations while this window is inactive/minimized.
+    pub(crate) animations_paused: bool,
+    /// 原生菜单当前挂靠的窗口(弱引用)。主窗口事件与每个浮窗事件处理前由
+    /// `window_events` 更新;浮窗销毁后 `upgrade()` 失败,迟到的菜单请求直接
+    /// 返回 `None`,不会挂到别的窗口。菜单弹出期间 `upgrade` 出的 `Arc`
+    /// 保证窗口至少存活到调用结束。
+    #[cfg(target_os = "macos")]
+    pub(crate) menu_window: Option<std::sync::Weak<iced_winit::winit::window::Window>>,
     /// 最近一次 `CursorMoved` 的光标逻辑坐标(宽,高),由 main.rs 每帧更新。
     /// Todo 日历浮层用它当弹出锚点(点日历按钮时光标就在按钮上,等价于"按钮
     /// 旁边"),镜像 `files.last_right_click` 的坐标复用套路。
@@ -878,6 +886,9 @@ impl App {
             project_add_menu_anchor: (0.0, 0.0),
             pending_preview_zoom: false,
             window_size: byteui::theme::geometry::initial_window_size(),
+            animations_paused: false,
+            #[cfg(target_os = "macos")]
+            menu_window: None,
             last_cursor: (0.0, 0.0),
             dragging: None,
             dragging_row: None,
@@ -3005,6 +3016,36 @@ impl App {
         self.sync_terminal_grid();
     }
 
+    /// 更新原生菜单的挂靠窗口(主窗或当前处理事件的浮窗)。只存弱引用:
+    /// 浮窗销毁后菜单请求自然失效,不会访问已释放的 NSView。
+    #[cfg(target_os = "macos")]
+    pub(crate) fn set_menu_window(&mut self, window: Arc<iced_winit::winit::window::Window>) {
+        self.menu_window = Some(Arc::downgrade(&window));
+    }
+
+    /// 在菜单挂靠窗口上同步弹原生菜单。没有窗口 / 窗口已销毁时返回 `None`,
+    /// **不**回退到主窗或其它窗口。
+    #[cfg(target_os = "macos")]
+    pub(crate) fn menu_show<Msg: Clone>(
+        &self,
+        items: Vec<crate::chrome::native_menu::Item<Msg>>,
+        pos: (f32, f32),
+    ) -> Option<Msg> {
+        let window = self.menu_window.as_ref()?.upgrade()?;
+        crate::chrome::native_menu::show_for_window(window.as_ref(), items, pos)
+    }
+
+    /// [`Self::menu_show`] 的"无图标项左对齐"变体。
+    #[cfg(target_os = "macos")]
+    pub(crate) fn menu_show_align_no_icon_left<Msg: Clone>(
+        &self,
+        items: Vec<crate::chrome::native_menu::Item<Msg>>,
+        pos: (f32, f32),
+    ) -> Option<Msg> {
+        let window = self.menu_window.as_ref()?.upgrade()?;
+        crate::chrome::native_menu::show_align_no_icon_left_for_window(window.as_ref(), items, pos)
+    }
+
     /// main.rs 左键按下时告知点击落点(逻辑坐标):按 `zone_at_x` 换算落在
     /// 哪一侧面板区,命中就更新 `active_zone`(驱动 `left_zone`/
     /// `right_zone` 外边框高亮)。落在图标栏/两侧都收起等 `None` 场景保持
@@ -3492,7 +3533,7 @@ impl App {
                 .is_some_and(|ws| ws.database.is_expanded(&source_id));
             let items =
                 database_source_menu_items(&source_id, expanded, self.locale.active_locale());
-            if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
+            if let Some(msg) = self.menu_show(items, (x, y)) {
                 self.update(msg);
             }
         }
@@ -3525,7 +3566,7 @@ impl App {
         {
             let (x, y) = self.files.last_right_click();
             let items = project_link_menu_items(target, index, self.locale.active_locale());
-            if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
+            if let Some(msg) = self.menu_show(items, (x, y)) {
                 self.update(msg);
             }
         }
@@ -3559,7 +3600,7 @@ impl App {
             });
             let items =
                 category_context_menu_items(id, sibling_parent_id, self.locale.active_locale());
-            if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
+            if let Some(msg) = self.menu_show(items, (x, y)) {
                 self.update(msg);
             }
         }

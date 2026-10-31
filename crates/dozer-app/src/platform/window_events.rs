@@ -372,6 +372,16 @@ impl Runner {
             return false;
         };
 
+        let focused = match event {
+            WindowEvent::Focused(focused) => *focused,
+            _ => window.has_focus(),
+        };
+        app.animations_paused = !focused || window.is_minimized().unwrap_or(false);
+
+        // 主窗口事件处理期间,原生菜单挂靠主窗口(浮窗分支会再覆盖成浮窗)。
+        #[cfg(target_os = "macos")]
+        app.set_menu_window(window.clone());
+
         // 左键物理按住状态,独立于下面按具体拖拽类型分派的 match——见
         // `left_mouse_down` 字段文档:不管后面哪个分支(甚至没有任何
         // 分支)处理这次事件,这个状态都必须先如实同步。
@@ -3123,10 +3133,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // 见函数文档。
             #[cfg(target_os = "macos")]
             crate::platform::file_drag::install_file_drag_position_tracker(&window);
-            // 原生右键菜单(NSMenu)弹层挂靠的内容 view:记一份裸指针供
-            // `native_menu::show` 后续弹菜单用,见 `native_menu.rs`。
-            #[cfg(target_os = "macos")]
-            crate::chrome::native_menu::install_content_view(&window);
 
             let physical_size = window.inner_size();
             let viewport = Viewport::with_physical_size(
@@ -3346,8 +3352,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = search_overlay
             && window_id == overlay.window_id()
         {
+            #[cfg(target_os = "macos")]
+            app.set_menu_window(overlay.window_arc());
             if matches!(event, WindowEvent::RedrawRequested) {
-                overlay.redraw(app);
+                let owner = overlay.window_arc();
+                byteui::feedback::math_curve::with_animation_paused(
+                    !owner.has_focus() || owner.is_minimized().unwrap_or(false),
+                    || overlay.redraw(app),
+                );
             } else if matches!(event, WindowEvent::CloseRequested) {
                 self.dispatch(Message::Search(extensions::search::Message::SearchClose));
             } else if let WindowEvent::Focused(focused) = event {
@@ -3402,8 +3414,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = file_history_overlay
             && window_id == overlay.window_id()
         {
+            #[cfg(target_os = "macos")]
+            app.set_menu_window(overlay.window_arc());
             if matches!(event, WindowEvent::RedrawRequested) {
-                overlay.redraw(app);
+                let owner = overlay.window_arc();
+                byteui::feedback::math_curve::with_animation_paused(
+                    !owner.has_focus() || owner.is_minimized().unwrap_or(false),
+                    || overlay.redraw(app),
+                );
             } else if matches!(event, WindowEvent::CloseRequested) {
                 self.dispatch(Message::FileHistory(
                     extensions::file_history::Message::Close,
@@ -3431,6 +3449,8 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = toast_overlay
             && window_id == overlay.window_id()
         {
+            #[cfg(target_os = "macos")]
+            app.set_menu_window(overlay.window_arc());
             if matches!(event, WindowEvent::RedrawRequested) {
                 let locale = app.locale.active_locale().to_owned();
                 overlay.redraw(app.toast.items(), &locale);
@@ -3448,8 +3468,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = edit_history_overlay
             && window_id == overlay.window_id()
         {
+            #[cfg(target_os = "macos")]
+            app.set_menu_window(overlay.window_arc());
             if matches!(event, WindowEvent::RedrawRequested) {
-                overlay.redraw(app);
+                let owner = overlay.window_arc();
+                byteui::feedback::math_curve::with_animation_paused(
+                    !owner.has_focus() || owner.is_minimized().unwrap_or(false),
+                    || overlay.redraw(app),
+                );
             } else if matches!(event, WindowEvent::CloseRequested) {
                 self.dispatch(Message::EditHistory(
                     extensions::edit_history::Message::Close,
@@ -3477,8 +3503,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = project_create_overlay
             && window_id == overlay.window_id()
         {
+            #[cfg(target_os = "macos")]
+            app.set_menu_window(overlay.window_arc());
             if matches!(event, WindowEvent::RedrawRequested) {
-                overlay.redraw(app);
+                let owner = overlay.window_arc();
+                byteui::feedback::math_curve::with_animation_paused(
+                    !owner.has_focus() || owner.is_minimized().unwrap_or(false),
+                    || overlay.redraw(app),
+                );
             } else if matches!(event, WindowEvent::CloseRequested) {
                 self.dispatch(Message::ProjectCreate(
                     extensions::project_create::Message::Close,
@@ -3513,8 +3545,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = settings_overlay
             && window_id == overlay.window_id()
         {
+            #[cfg(target_os = "macos")]
+            app.set_menu_window(overlay.window_arc());
             if matches!(event, WindowEvent::RedrawRequested) {
-                overlay.redraw(app);
+                let owner = overlay.window_arc();
+                byteui::feedback::math_curve::with_animation_paused(
+                    !owner.has_focus() || owner.is_minimized().unwrap_or(false),
+                    || overlay.redraw(app),
+                );
             } else if matches!(event, WindowEvent::CloseRequested) {
                 self.dispatch(Message::Settings(extensions::settings::Message::Close));
             } else {
@@ -3573,8 +3611,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = database_drivers_overlay
             && window_id == overlay.window_id()
         {
+            #[cfg(target_os = "macos")]
+            app.set_menu_window(overlay.window_arc());
             if matches!(event, WindowEvent::RedrawRequested) {
-                overlay.redraw(app);
+                let owner = overlay.window_arc();
+                byteui::feedback::math_curve::with_animation_paused(
+                    !owner.has_focus() || owner.is_minimized().unwrap_or(false),
+                    || overlay.redraw(app),
+                );
             } else if matches!(event, WindowEvent::CloseRequested) {
                 self.dispatch(Message::Database(
                     extensions::database::Message::DriversPopupToggle,
@@ -3604,8 +3648,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = database_source_overlay
             && window_id == overlay.window_id()
         {
+            #[cfg(target_os = "macos")]
+            app.set_menu_window(overlay.window_arc());
             if matches!(event, WindowEvent::RedrawRequested) {
-                overlay.redraw(app);
+                let owner = overlay.window_arc();
+                byteui::feedback::math_curve::with_animation_paused(
+                    !owner.has_focus() || owner.is_minimized().unwrap_or(false),
+                    || overlay.redraw(app),
+                );
             } else if matches!(event, WindowEvent::CloseRequested) {
                 self.dispatch(Message::Database(
                     extensions::database::Message::DraftCancel,
@@ -3635,8 +3685,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = files_move_overlay
             && window_id == overlay.window_id()
         {
+            #[cfg(target_os = "macos")]
+            app.set_menu_window(overlay.window_arc());
             if matches!(event, WindowEvent::RedrawRequested) {
-                overlay.redraw(app);
+                let owner = overlay.window_arc();
+                byteui::feedback::math_curve::with_animation_paused(
+                    !owner.has_focus() || owner.is_minimized().unwrap_or(false),
+                    || overlay.redraw(app),
+                );
             } else if matches!(event, WindowEvent::CloseRequested) {
                 self.dispatch(Message::Files(files::Message::MoveCancel));
             } else {
@@ -3663,6 +3719,8 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = project_scaffold_overlay
             && window_id == overlay.window_id()
         {
+            #[cfg(target_os = "macos")]
+            app.set_menu_window(overlay.window_arc());
             // `scrim_blocking` 语义:故意不处理 `WindowEvent::Focused` 与
             // `CloseRequested`——进行中不允许 Esc/失焦/点原生关闭按钮关窗,
             // 两者都落进 `else` 兜底交给 `handle_input`,而它对这些事件本
@@ -3670,7 +3728,11 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // 做"。唯一能关闭的路径是内容里 `done` 后才可点的"关闭"按钮,
             // 经 `handle_input` 返回 `ScaffoldPopupClose` 消息。
             if matches!(event, WindowEvent::RedrawRequested) {
-                overlay.redraw(app);
+                let owner = overlay.window_arc();
+                byteui::feedback::math_curve::with_animation_paused(
+                    !owner.has_focus() || owner.is_minimized().unwrap_or(false),
+                    || overlay.redraw(app),
+                );
             } else {
                 for message in overlay.handle_input(app, &event) {
                     self.dispatch(message);
@@ -3689,8 +3751,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = project_delete_overlay
             && window_id == overlay.window_id()
         {
+            #[cfg(target_os = "macos")]
+            app.set_menu_window(overlay.window_arc());
             if matches!(event, WindowEvent::RedrawRequested) {
-                overlay.redraw(app);
+                let owner = overlay.window_arc();
+                byteui::feedback::math_curve::with_animation_paused(
+                    !owner.has_focus() || owner.is_minimized().unwrap_or(false),
+                    || overlay.redraw(app),
+                );
             } else if matches!(event, WindowEvent::CloseRequested) {
                 self.dispatch(Message::Project(
                     crate::extensions::project::Message::DeleteProjectCancel,
@@ -3719,8 +3787,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = ssh_host_overlay
             && window_id == overlay.window_id()
         {
+            #[cfg(target_os = "macos")]
+            app.set_menu_window(overlay.window_arc());
             if matches!(event, WindowEvent::RedrawRequested) {
-                overlay.redraw(app);
+                let owner = overlay.window_arc();
+                byteui::feedback::math_curve::with_animation_paused(
+                    !owner.has_focus() || owner.is_minimized().unwrap_or(false),
+                    || overlay.redraw(app),
+                );
             } else if matches!(event, WindowEvent::CloseRequested) {
                 self.dispatch(Message::Ssh(extensions::ssh::Message::DraftCancel));
             } else if let WindowEvent::Focused(focused) = event {
@@ -3749,8 +3823,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = group_chat_create_overlay
             && window_id == overlay.window_id()
         {
+            #[cfg(target_os = "macos")]
+            app.set_menu_window(overlay.window_arc());
             if matches!(event, WindowEvent::RedrawRequested) {
-                overlay.redraw(app);
+                let owner = overlay.window_arc();
+                byteui::feedback::math_curve::with_animation_paused(
+                    !owner.has_focus() || owner.is_minimized().unwrap_or(false),
+                    || overlay.redraw(app),
+                );
             } else if matches!(event, WindowEvent::CloseRequested) {
                 let msg = overlay.cancel_message();
                 self.dispatch(msg);
@@ -3772,8 +3852,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = todo_detail_overlay
             && window_id == overlay.window_id()
         {
+            #[cfg(target_os = "macos")]
+            app.set_menu_window(overlay.window_arc());
             if matches!(event, WindowEvent::RedrawRequested) {
-                overlay.redraw(app);
+                let owner = overlay.window_arc();
+                byteui::feedback::math_curve::with_animation_paused(
+                    !owner.has_focus() || owner.is_minimized().unwrap_or(false),
+                    || overlay.redraw(app),
+                );
             } else if matches!(event, WindowEvent::CloseRequested) {
                 self.dispatch(Message::Todo(crate::extensions::todo::Message::DetailClose));
             } else if let WindowEvent::Focused(focused) = event {

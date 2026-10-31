@@ -48,8 +48,6 @@ pub(crate) struct DatabaseSourceOverlay {
     focus: FocusTracker,
     cursor: mouse::Cursor,
     modifiers: ModifiersState,
-    /// Drop 时把 macOS 原生右键粘贴菜单指回主窗口(见 `Drop` 实现)。
-    main_window: Arc<Window>,
 }
 
 impl DatabaseSourceOverlay {
@@ -67,6 +65,10 @@ impl DatabaseSourceOverlay {
     /// 建回来,跟被摘掉的另一个弹窗打架(同 Escape 分支发的消息)。
     pub(crate) fn cancel_message(&self) -> Message {
         Message::Database(database::Message::DraftCancel)
+    }
+
+    pub(crate) fn window_arc(&self) -> Arc<Window> {
+        self.window.clone()
     }
 
     pub(crate) fn open(
@@ -87,15 +89,12 @@ impl DatabaseSourceOverlay {
             el,
         );
         window.set_ime_allowed(true);
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&window);
         DatabaseSourceOverlay {
             window,
             gpu,
             focus: FocusTracker::default(),
             cursor: mouse::Cursor::Unavailable,
             modifiers: ModifiersState::default(),
-            main_window: main_window.clone(),
         }
     }
 
@@ -187,13 +186,6 @@ impl DatabaseSourceOverlay {
             backdrop_card(card.map(Message::Database), card_logical_size(&self.window)),
             iced_event,
         )
-    }
-}
-
-impl Drop for DatabaseSourceOverlay {
-    fn drop(&mut self) {
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&self.main_window);
     }
 }
 

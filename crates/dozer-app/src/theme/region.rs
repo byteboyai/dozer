@@ -1,7 +1,8 @@
-//! 外壳区域样式配置:15 个区域(主导航/左右图标栏/放大态浮层/右键菜单/
-//! 状态条 + 7 个面板内容区 + 左右面板区整体外框)各自外层容器的背景色/
-//! 边框/内边距/子元素间距,编译期内嵌 `assets/theme/workspace.json` 的
-//! `regions` 节点,启动时解析一次。`workspace.json` 同时也是 `workspace_font.rs` 的
+//! 区域样式配置:共享外壳(顶栏/左右图标栏/状态条/左右面板区外框/放大态
+//! 浮层/右键菜单/窗口背景)**委托给 `byteui::theme::region`**,单一来源;
+//! 本文件只保留 Dozer 产品面板内容区(project/preview/browser/agent/term/
+//! conversation/group_chat/review)的配置,编译期内嵌
+//! `assets/theme/workspace.json` 的 `regions` 节点,启动时解析一次。`workspace.json` 同时也是 `workspace_font.rs` 的
 //! 数据源(`font_sizes` 节点)——两个模块各自只解析自己关心的顶层字段,
 //! 互不干扰,合并成一个文件是为了"workspace 相关配置都在一处"。
 //!
@@ -68,23 +69,8 @@ struct RawRegion {
     margin: Option<RawPadding>,
 }
 
-#[derive(Deserialize, Clone)]
-struct RawScrim {
-    background: String,
-    padding: f32,
-}
-
-#[derive(Deserialize, Clone)]
-struct RawMaximizeOverlay {
-    scrim: RawScrim,
-    border: RawBorder,
-}
-
 #[derive(Deserialize)]
 struct RawRegions {
-    top_bar: RawRegion,
-    left_icon_rail: RawRegion,
-    right_icon_rail: RawRegion,
     project_pane: RawRegion,
     preview_pane: RawRegion,
     browser_pane: RawRegion,
@@ -93,21 +79,15 @@ struct RawRegions {
     conversation_list_pane: RawRegion,
     group_chat_list_pane: RawRegion,
     review_content_pane: RawRegion,
-    status_bar: RawRegion,
-    maximize_overlay: RawMaximizeOverlay,
-    // `context_menu` 不在这里读:外框已搬进 `byteui::theme::region::context_menu`(X1)。JSON 里那一项
-    // 保留,是 Digger `scripts/check-shell-regions.sh` 比对 byteui 的唯一真相源;serde 忽略未知字段。
-    left_zone: RawRegion,
-    right_zone: RawRegion,
+    // 共享外壳(top_bar/左右 rail/status_bar/左右 zone/maximize_overlay/
+    // context_menu)与窗口背景已迁移到 `byteui::theme::region`;本 JSON 不再
+    // 保留这些重复键,避免出现第二个数据源。
 }
 
 /// `workspace.json` 顶层结构里本模块只关心的部分——`font_sizes` 节点是
 /// `workspace_font.rs` 的地盘,这里不声明,serde 默认忽略未知字段。
 #[derive(Deserialize)]
 struct RawWorkspaceFile {
-    /// 整体背景色:窗口根容器的底色(顶栏/面板之间、放大态遮罩之外的"留白"处),
-    /// 以及渲染管线的清屏色。区域各自的 `background` 若未设置则在此之上叠加。
-    background: String,
     regions: RawRegions,
 }
 
@@ -239,34 +219,11 @@ fn scaled_region(r: RegionStyle) -> RegionStyle {
     }
 }
 
-/// 放大态浮层样式按当前全局 scale 折算：scrim 内边距与金色描边盒的
-/// 线宽/圆角都乘 `byteui::theme::icon_size::scale()`（同 `scaled_region`，逐 accessor 应用）。
-fn scaled_overlay(r: MaximizeOverlayStyle) -> MaximizeOverlayStyle {
-    let s = byteui::theme::icon_size::scale();
-    MaximizeOverlayStyle {
-        scrim_background: r.scrim_background,
-        scrim_padding: r.scrim_padding * s,
-        border: Border {
-            color: r.border.color,
-            width: r.border.width * s,
-            radius: r.border.radius * s,
-        },
-    }
-}
-
 #[derive(Clone, Copy)]
 pub struct MaximizeOverlayStyle {
     pub scrim_background: Color,
     pub scrim_padding: f32,
     pub border: Border,
-}
-
-fn resolve_maximize_overlay(r: &RawMaximizeOverlay) -> MaximizeOverlayStyle {
-    MaximizeOverlayStyle {
-        scrim_background: resolve_color(&r.scrim.background),
-        scrim_padding: r.scrim.padding,
-        border: resolve_border(&r.border),
-    }
 }
 
 fn load(raw: &str) -> RawRegions {
@@ -280,32 +237,47 @@ fn load(raw: &str) -> RawRegions {
 /// 可切换(设置弹窗);若在这里就把颜色一起烤进缓存,首次访问后就冻结,
 /// 之后切主题对 `top_bar`/`terminal_pane` 等区域样式毫无作用(2026-09-15
 /// 用户实测发现的真实 bug:切浅色后顶栏/图标栏/终端底色纹丝不动)。
-/// 颜色解析改在每个 accessor(`resolve_region`/`resolve_maximize_overlay`)
+/// 颜色解析改在每个 accessor(`resolve_region`/`resolve_border`)
 /// 调用时现读,与 `scaled_region` 对 `scale()` 的"结构缓存、取值现读"
 /// 分工一致。
 static REGIONS: LazyLock<RawRegions> = LazyLock::new(|| load(RAW));
 
-/// 整体背景色的令牌名/十六进制字面量,只解析结构一次;真正的颜色解析在
-/// `background()` 里现读,理由同 `REGIONS`。
-static BACKGROUND: LazyLock<String> = LazyLock::new(|| {
-    let file: RawWorkspaceFile =
-        serde_json::from_str(RAW).expect("workspace.json 格式错误(解析失败,background 节点)");
-    file.background
-});
-
-/// 整体背景色:窗口根容器底色 / 渲染清屏色。
+/// 整体背景色:窗口根容器底色 / 渲染清屏色,由 ByteUI 统一提供。
 pub fn background() -> Color {
-    resolve_color(&BACKGROUND)
+    byteui::theme::region::window_background()
+}
+
+/// `byteui::theme::region::RegionStyle` → 本模块的同名结构。
+/// 两边字段语义一致;ByteUI 返回的 padding/gap/margin **已经乘过全局
+/// scale**,这里直接搬运,不能再套一层 `scaled_region`(否则会双重缩放)。
+fn from_byteui(r: byteui::theme::region::RegionStyle) -> RegionStyle {
+    RegionStyle {
+        background: r.background,
+        border: r.border,
+        padding: r.padding,
+        gap: r.gap,
+        margin: r.margin,
+    }
+}
+
+/// `byteui::theme::region::MaximizeOverlayStyle` → 本模块结构。
+/// 同样已按全局 scale 折算,直接搬运。
+fn overlay_from_byteui(r: byteui::theme::region::MaximizeOverlayStyle) -> MaximizeOverlayStyle {
+    MaximizeOverlayStyle {
+        scrim_background: r.scrim_background,
+        scrim_padding: r.scrim_padding,
+        border: r.border,
+    }
 }
 
 pub fn top_bar() -> RegionStyle {
-    scaled_region(resolve_region(&REGIONS.top_bar))
+    from_byteui(byteui::theme::region::top_bar())
 }
 pub fn left_icon_rail() -> RegionStyle {
-    scaled_region(resolve_region(&REGIONS.left_icon_rail))
+    from_byteui(byteui::theme::region::left_icon_rail())
 }
 pub fn right_icon_rail() -> RegionStyle {
-    scaled_region(resolve_region(&REGIONS.right_icon_rail))
+    from_byteui(byteui::theme::region::right_icon_rail())
 }
 pub fn project_pane() -> RegionStyle {
     scaled_region(resolve_region(&REGIONS.project_pane))
@@ -332,10 +304,10 @@ pub fn review_content_pane() -> RegionStyle {
     scaled_region(resolve_region(&REGIONS.review_content_pane))
 }
 pub fn status_bar() -> RegionStyle {
-    scaled_region(resolve_region(&REGIONS.status_bar))
+    from_byteui(byteui::theme::region::status_bar())
 }
 pub fn maximize_overlay() -> MaximizeOverlayStyle {
-    scaled_overlay(resolve_maximize_overlay(&REGIONS.maximize_overlay))
+    overlay_from_byteui(byteui::theme::region::maximize_overlay())
 }
 /// 右键菜单/下拉/溢出菜单的外框,实现在 `byteui::theme::region::context_menu`(与 Digger 共用)。
 /// 背景是 `panel` 主题色且**不透明**(2026-10-28 裁决统一为 alpha 1.0;原先是 0xfa/255 ≈ 0.98,
@@ -343,23 +315,16 @@ pub fn maximize_overlay() -> MaximizeOverlayStyle {
 /// 与本仓 `assets/theme/workspace.json` 的 `context_menu` 项相同,跨仓库一致性由 Digger 的
 /// `scripts/check-shell-regions.sh` 守住。
 pub fn context_menu() -> RegionStyle {
-    let r = byteui::theme::region::context_menu();
-    RegionStyle {
-        background: r.background,
-        border: r.border,
-        padding: r.padding,
-        gap: r.gap,
-        margin: r.margin,
-    }
+    from_byteui(byteui::theme::region::context_menu())
 }
 /// 左面板区(项目树+预览,或单个 Web 预览)整体外边框——把"左1左2两栏"
 /// 框成一个视觉整体,不是某一栏自己的边框。
 pub fn left_zone() -> RegionStyle {
-    scaled_region(resolve_region(&REGIONS.left_zone))
+    from_byteui(byteui::theme::region::left_zone())
 }
 /// 右面板区(Agent 列表+终端,或对话列表+审阅)整体外边框,同 `left_zone`。
 pub fn right_zone() -> RegionStyle {
-    scaled_region(resolve_region(&REGIONS.right_zone))
+    from_byteui(byteui::theme::region::right_zone())
 }
 
 #[cfg(test)]
@@ -521,6 +486,75 @@ mod tests {
         resolve_color("NOT_A_REAL_TOKEN");
     }
 
+    /// 共享外壳的最终样式在迁移后必须逐项等于 ByteUI 的解析结果:
+    /// 深浅方案下 background/border/padding/gap/margin 全量比对。产品面板区
+    /// 仍是 Dozer 自己的 JSON,不在本测试范围。
+    ///
+    /// 不在这里改全局 scale:并行测试会读到中间值。缩放后的数值由 ByteUI
+    /// 自己的 `region` 测试锁定,这里另用 `from_byteui_preserves_scaled_metrics`
+    /// 验证"已缩放值搬运不二次缩放"。
+    #[test]
+    fn shared_accessors_match_byteui_at_both_schemes() {
+        use byteui::theme::color::{ColorScheme, set_scheme};
+
+        let _guard = lock_scheme();
+        let cases: [(
+            fn() -> RegionStyle,
+            fn() -> byteui::theme::region::RegionStyle,
+        ); 7] = [
+            (top_bar, byteui::theme::region::top_bar),
+            (left_icon_rail, byteui::theme::region::left_icon_rail),
+            (right_icon_rail, byteui::theme::region::right_icon_rail),
+            (status_bar, byteui::theme::region::status_bar),
+            (left_zone, byteui::theme::region::left_zone),
+            (right_zone, byteui::theme::region::right_zone),
+            (context_menu, byteui::theme::region::context_menu),
+        ];
+
+        for scheme in [ColorScheme::Dark, ColorScheme::Light] {
+            set_scheme(scheme);
+            for (ours, theirs) in cases {
+                let ours = ours();
+                let theirs = from_byteui(theirs());
+                assert_eq!(ours.background, theirs.background, "{scheme:?}");
+                assert_eq!(ours.border, theirs.border, "{scheme:?}");
+                assert_eq!(ours.padding, theirs.padding, "{scheme:?}");
+                assert_eq!(ours.gap, theirs.gap, "{scheme:?}");
+                assert_eq!(ours.margin, theirs.margin, "{scheme:?}");
+            }
+            let ours = maximize_overlay();
+            let theirs = byteui::theme::region::maximize_overlay();
+            assert_eq!(ours.scrim_background, theirs.scrim_background);
+            assert_eq!(ours.scrim_padding, theirs.scrim_padding);
+            assert_eq!(ours.border, theirs.border);
+            assert_eq!(background(), byteui::theme::region::window_background());
+        }
+
+        set_scheme(ColorScheme::Dark);
+    }
+
+    /// ByteUI 返回的 padding/gap/margin 已经乘过全局 scale；委托层必须原样
+    /// 搬运，不能再次套 `scaled_region`。
+    #[test]
+    fn from_byteui_preserves_scaled_metrics() {
+        let scaled = byteui::theme::region::RegionStyle {
+            background: None,
+            border: None,
+            padding: Padding {
+                top: 16.0,
+                right: 32.0,
+                bottom: 48.0,
+                left: 64.0,
+            },
+            gap: 24.0,
+            margin: Padding::from(12.0),
+        };
+        let converted = from_byteui(scaled);
+        assert_eq!(converted.padding, scaled.padding);
+        assert_eq!(converted.gap, 24.0);
+        assert_eq!(converted.margin, Padding::from(12.0));
+    }
+
     #[test]
     fn hex_color_matches_equivalent_token() {
         let _guard = lock_scheme();
@@ -559,12 +593,12 @@ mod tests {
         resolve_color("#12345");
     }
 
-    /// 防回归:`REGIONS`/`BACKGROUND` 曾经是"颜色也一起烤进 `LazyLock`"的
-    /// 全量缓存,首次访问后就冻结——运行时切换配色方案(`set_scheme`)对
-    /// `top_bar`/`background` 这类 accessor 完全不生效(2026-09-15 用户
-    /// 实测截图发现:切浅色后顶栏/图标栏/终端底色纹丝不动)。颜色解析必须
-    /// 像 `scaled_region` 对 `scale()` 那样,在每次 accessor 调用时现读
-    /// `byteui::theme::color::current_scheme()`,不能烤进缓存。
+    /// 防回归:共享外壳 accessor 现在委托 ByteUI。曾经 `REGIONS` 是"颜色也
+    /// 一起烤进 `LazyLock`"的全量缓存,首次访问后就冻结——运行时切换配色
+    /// 方案(`set_scheme`)对 `top_bar`/`background` 完全不生效(2026-09-15
+    /// 用户实测截图发现:切浅色后顶栏/图标栏/终端底色纹丝不动)。ByteUI 的
+    /// accessor 每次现读 `color::current()`,产品面板仍由 `resolve_region`
+    /// 现读,两边都不能把颜色烤进缓存。
     #[test]
     fn top_bar_and_background_track_live_scheme_switch() {
         let _guard = lock_scheme();

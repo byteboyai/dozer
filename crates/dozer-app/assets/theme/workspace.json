@@ -1,24 +1,5 @@
 {
-  "background": "TAB_ACTIVE_BORDER",
   "regions": {
-    "top_bar": {
-      "background": "BG",
-      "border": { "color": "BORDER", "width": 1.0, "radius": 0.0 },
-      "padding": [0, 10, 0, 78],
-      "gap": 8
-    },
-    "left_icon_rail": {
-      "background": "PANEL",
-      "border": null,
-      "padding": [16, 6, 0, 6],
-      "gap": 12
-    },
-    "right_icon_rail": {
-      "background": "PANEL",
-      "border": null,
-      "padding": [16, 6, 0, 6],
-      "gap": 12
-    },
     "project_pane": {
       "background": "BG",
       "border": null,
@@ -66,36 +47,6 @@
       "border": null,
       "padding": 8,
       "gap": 4
-    },
-    "status_bar": {
-      "background": "PANEL",
-      "border": { "color": "BORDER", "width": 1.0, "radius": 0.0 },
-      "padding": [0, 8],
-      "gap": 0
-    },
-    "maximize_overlay": {
-      "scrim": { "background": "SCRIM", "padding": 40.0 },
-      "border": { "color": "GOLD", "width": 1.5, "radius": 10.0 }
-    },
-    "context_menu": {
-      "background": "PANEL",
-      "border": { "color": "BORDER", "width": 1.0, "radius": 9.0 },
-      "padding": 8,
-      "gap": 1
-    },
-    "left_zone": {
-      "background": "BG",
-      "border": { "color": "BORDER", "width": 0.0, "radius": 8.0 },
-      "padding": 1,
-      "gap": 0,
-      "margin": [6, 0, 0, 6]
-    },
-    "right_zone": {
-      "background": "BG",
-      "border": { "color": "BORDER", "width": 0.0, "radius": 8.0 },
-      "padding": 1,
-      "gap": 0,
-      "margin": [6, 6, 0, 0]
     }
   },
   "font_sizes": {

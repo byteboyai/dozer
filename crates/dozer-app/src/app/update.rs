@@ -481,7 +481,7 @@ impl App {
                         active_project_id,
                         self.locale.active_locale(),
                     );
-                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
+                    if let Some(msg) = self.menu_show(items, last_cursor) {
                         // 经事件循环代理回送选择结果,使其重新走 `Runner::dispatch`
                         // ——rfd 文件夹选择器、剪贴板等原生副作用只在 `dispatch`
                         // 拦截层启动。直接 `self.update(msg)` 会绕过该层,导致
@@ -575,7 +575,7 @@ impl App {
                             database::tab_overflow_items(&ws.database, self.locale.active_locale())
                         })
                         .unwrap_or_default();
-                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
+                    if let Some(msg) = self.menu_show(items, last_cursor) {
                         self.update(Message::Database(msg));
                     }
                 }
@@ -752,7 +752,7 @@ impl App {
                 {
                     let (x, y) = self.files.last_right_click();
                     let items = text_input_menu_items(&target, self.locale.active_locale());
-                    if let Some(msg) = crate::chrome::native_menu::show(items, (x, y))
+                    if let Some(msg) = self.menu_show(items, (x, y))
                         && let Some(ch) = crate::platform::window_events::menu_edit_key(&msg)
                     {
                         self.pending_native_menu_edit_key = Some((ch, target.id.clone()));
@@ -1078,7 +1078,7 @@ impl App {
                         dirty,
                         |name| Message::GitLog(git_log::Message::BranchSwitch(name)),
                     );
-                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
+                    if let Some(msg) = self.menu_show(items, last_cursor) {
                         self.update(msg);
                     }
                 }
@@ -1435,7 +1435,7 @@ impl App {
                     ws.files.git_dirty(),
                     files::Message::BranchSwitch,
                 );
-                if let Some(msg) = crate::chrome::native_menu::show(items, self.last_cursor) {
+                if let Some(msg) = self.menu_show(items, self.last_cursor) {
                     self.update(Message::Files(msg));
                 }
             }
@@ -1854,7 +1854,7 @@ impl App {
                         }
                         None => Vec::new(),
                     };
-                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
+                    if let Some(msg) = self.menu_show(items, last_cursor) {
                         self.update(msg);
                     }
                 }
@@ -1904,7 +1904,7 @@ impl App {
                         is_local,
                         self.locale.active_locale(),
                     );
-                    if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
+                    if let Some(msg) = self.menu_show(items, (x, y)) {
                         self.update(Message::Ssh(ssh::Message::Sftp(msg)));
                     }
                 }
@@ -2021,9 +2021,7 @@ impl App {
                         self.locale.active_locale(),
                     );
                     let pos = (menu.x, menu.y);
-                    if let Some(msg) =
-                        crate::chrome::native_menu::show_align_no_icon_left(items, pos)
-                    {
+                    if let Some(msg) = self.menu_show_align_no_icon_left(items, pos) {
                         self.update(msg);
                     }
                 }
@@ -3997,7 +3995,7 @@ impl App {
                 }
                 None => Vec::new(),
             };
-            if let Some(msg) = crate::chrome::native_menu::show(items, cursor) {
+            if let Some(msg) = self.menu_show(items, cursor) {
                 self.update(msg);
             }
             return;
@@ -4320,7 +4318,7 @@ impl App {
                     dozer_panel_agent::update::Message::SelectTabNoDrag(i),
                 )
             });
-            if let Some(msg) = crate::chrome::native_menu::show(items, cursor) {
+            if let Some(msg) = self.menu_show(items, cursor) {
                 self.update(msg);
             }
             return;
@@ -4394,7 +4392,7 @@ impl App {
         }) {
             let last_cursor = self.last_cursor;
             let items = crate::workspace::agent_picker_items();
-            if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
+            if let Some(msg) = self.menu_show(items, last_cursor) {
                 let _ = self.proxy.send_event(msg);
             }
         }
@@ -4503,7 +4501,7 @@ impl App {
                         }
                     })
                     .collect();
-                if let Some(msg) = crate::chrome::native_menu::show_align_no_icon_left(native, at) {
+                if let Some(msg) = self.menu_show_align_no_icon_left(native, at) {
                     let _ = self.proxy.send_event(Message::Files(msg));
                 }
             }
@@ -5029,7 +5027,7 @@ mod agent_overflow_anchor_tests {
         let rest = &source[start..];
         let end = rest.find("let avail_px").expect("找不到原生分支结尾");
         let branch = &rest[..end];
-        assert!(branch.contains("native_menu::show"), "应有原生菜单分支");
+        assert!(branch.contains("menu_show"), "应有原生菜单分支");
         assert!(branch.contains("SelectTabNoDrag"));
         assert!(!branch.contains("update::Message::SelectTab("));
     }

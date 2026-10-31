@@ -75,11 +75,6 @@ pub(crate) struct SearchOverlay {
     /// 不是 Files 专属),在这扇窗口里右键时必须先把它覆写成这扇窗口自己
     /// 的坐标,否则菜单会弹在主窗口上次右键的旧位置(见 `handle_input`)。
     last_right_click: (f32, f32),
-    /// 主窗口句柄——`open()` 时把 `chrome::native_menu` 的挂靠目标临时
-    /// 指向这扇窗口自己的 NSView,`Drop` 时得指回来,不然这扇窗口关掉后
-    /// Files/Project 等主窗口里其它输入框的右键菜单会继续错误地尝试挂在
-    /// 一个已经销毁的 NSView 上。
-    main_window: Arc<Window>,
 }
 
 impl SearchOverlay {
@@ -98,6 +93,10 @@ impl SearchOverlay {
     /// `Renderer`(spike `spike/multi-window-overlay-wry` 已验证这条路径
     /// 可行:见 `docs/superpowers/specs/2026-09-17-multi-window-overlay-
     /// spike-findings.md`)。
+    pub(crate) fn window_arc(&self) -> Arc<Window> {
+        self.window.clone()
+    }
+
     pub(crate) fn open(
         main_window: &Arc<Window>,
         adapter: &wgpu::Adapter,
@@ -122,8 +121,6 @@ impl SearchOverlay {
         // 记"该往哪个 NSView 上弹",只在主窗口初始化时装过一次——这扇窗口
         // 打开期间,查询框的剪切/复制/粘贴菜单也要经这条路径,得先把挂靠
         // 目标指过来,`Drop` 里再指回主窗口(见该字段与 `impl Drop` 的文档)。
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&window);
 
         let gpu = OverlayGpu::open(&window, instance, adapter, device, queue, size, scale);
 
@@ -134,7 +131,6 @@ impl SearchOverlay {
             cursor: mouse::Cursor::Unavailable,
             modifiers: ModifiersState::default(),
             last_right_click: (0.0, 0.0),
-            main_window: main_window.clone(),
         }
     }
 
@@ -402,10 +398,7 @@ impl Drop for SearchOverlay {
     /// 临时指到了这扇窗口自己的 NSView(见那里的调用点注释),这扇窗口
     /// 消失后,Files/Project 等主窗口里其它输入框的右键菜单还得继续正常
     /// 弹在主窗口上。
-    fn drop(&mut self) {
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&self.main_window);
-    }
+    fn drop(&mut self) {}
 }
 
 #[cfg(test)]

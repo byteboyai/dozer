@@ -1,0 +1,316 @@
+--- a/crates/desktop/src/product.rs
++++ b/crates/desktop/src/product.rs
+@@ -80,6 +80,7 @@
+     WindowReady(window::Id, Size),
+     /// Iced has no minimized event. Query the owning OS window, never infer it from focus.
+     WindowStateRefresh(window::Id),
++    WindowAnimationFocus(window::Id, bool),
+     WindowStateSample {
+         id: window::Id,
+         request: u64,
+@@ -235,6 +236,7 @@
+ pub struct ProductShell {
+     window: Option<window::Id>,
+     window_minimized: bool,
++    animation_focused: bool,
+     window_state_request: u64,
+     catalog: PanelCatalog,
+     /// 窗口骨架状态(布局、选中、收起、放大、尺寸……)。
+@@ -654,6 +656,7 @@
+         let mut shell = Self {
+             window: None,
+             window_minimized: false,
++            animation_focused: true,
+             window_state_request: 0,
+             catalog,
+             shell: model,
+@@ -2614,6 +2617,14 @@
+                 let guard = Task::none();
+                 let query = self.query_window_state();
+                 Task::batch([resized, guard, query])
++            }
++            Msg::WindowAnimationFocus(id, focused) => {
++                if self.window == Some(id) && !self.closing {
++                    self.animation_focused = focused;
++                    Task::batch([self.restyle_window(), self.query_window_state()])
++                } else {
++                    Task::none()
++                }
+             }
+             Msg::WindowStateRefresh(id) => {
+                 if self.window == Some(id) && !self.closing {
+@@ -3399,120 +3410,127 @@
+     }
+ 
+     fn view(&self) -> Element<'_, Msg> {
+-        use iced::widget::button;
+-
+-        // 展示适配器(`PanelDisplay`)拿不到 `&ProductShell`,每帧把分栏状态与窗口尺寸交给它。
+-        publish_panes(self.shell.panes());
+-        crate::CURRENT_WINDOW.with(|w| w.set(Some(self.shell.window())));
+-        crate::CURRENT_CURSOR.set(self.last_cursor);
+-        let agent_blocked = self.agent_keys_blocked();
+-        crate::AGENT_KEYS_BLOCKED.store(agent_blocked, std::sync::atomic::Ordering::Relaxed);
+-
+-        if self.closing {
+-            let mut body = column![text("正在关闭 Digger…")].spacing(16).padding(20);
+-            if let Some(error) = &self.shutdown_error {
+-                body = body
+-                    .push(text(error))
+-                    .push(button("强制退出").on_press(Msg::ForceExit));
+-            }
+-            return body.into();
+-        }
+-        // 名称编辑框的"失焦保存"钩子:库的 `text_input` 焦点态只能借 Operation 在渲染时读到,
+-        // Digger 没有逐帧原生循环,于是每帧派一个一次性消息,由 `update` 在两帧之间读回
+-        // (同 Dozer 的 `CaptureNameEditFocus`,只是搭在 "消息→重绘→消息" 的循环上)。
+-        let body: Element<'_, Msg> =
+-            bytehost_chrome::view(&self.shell, self, &metrics_from_theme());
+-        // 「修复项目」进度卡:进行中盖住整个窗口(不可关闭),全部完成后库才放行 `ScaffoldPopupClose`。
+-        // Dozer 用独立原生窗口承载,Digger 用同一窗口里的整窗覆盖层——卡片本体是库的同一份。
+-        let card: Option<Element<'_, Msg>> = self
+-            .project
+-            .focused_project()
+-            .and_then(|id| self.project.scaffold_card(id))
+-            .map(|card| {
+-                container(card)
+-                    .width(Length::Fill)
+-                    .height(Length::Fill)
+-                    .center(Length::Fill)
+-                    .padding(24)
+-                    .into()
+-            });
+-        let body = match card {
+-            Some(card) => iced::widget::stack![body, card].into(),
+-            None => body,
+-        };
+-        // 「文件」面板的对话框(删除确认 / 移动重命名):居中卡片 + 半透明遮罩,
+-        // 压在右键菜单之下、正文之上。
+-        let body = if self.panel_visible(&shell::files_id()) {
+-            let dialog = self.files.delete_confirm().map(|spec| {
+-                let spec = byteui::feedback::dialog::ConfirmDialog {
+-                    icon: spec.icon,
+-                    title: spec.title,
+-                    description: spec.description,
+-                    cancel_label: spec.cancel_label,
+-                    cancel_msg: Msg::Files(spec.cancel_msg),
+-                    confirm_label: spec.confirm_label,
+-                    confirm_msg: Msg::Files(spec.confirm_msg),
+-                    close_msg: None,
+-                    confirm_color: spec.confirm_color,
+-                    content_spacing: spec.content_spacing,
++        byteui::feedback::math_curve::with_animation_paused(
++            self.window_minimized || !self.animation_focused || self.closing,
++            || {
++                use iced::widget::button;
++
++                // 展示适配器(`PanelDisplay`)拿不到 `&ProductShell`,每帧把分栏状态与窗口尺寸交给它。
++                publish_panes(self.shell.panes());
++                crate::CURRENT_WINDOW.with(|w| w.set(Some(self.shell.window())));
++                crate::CURRENT_CURSOR.set(self.last_cursor);
++                let agent_blocked = self.agent_keys_blocked();
++                crate::AGENT_KEYS_BLOCKED
++                    .store(agent_blocked, std::sync::atomic::Ordering::Relaxed);
++
++                if self.closing {
++                    let mut body = column![text("正在关闭 Digger…")].spacing(16).padding(20);
++                    if let Some(error) = &self.shutdown_error {
++                        body = body
++                            .push(text(error))
++                            .push(button("强制退出").on_press(Msg::ForceExit));
++                    }
++                    return body.into();
++                }
++                // 名称编辑框的"失焦保存"钩子:库的 `text_input` 焦点态只能借 Operation 在渲染时读到,
++                // Digger 没有逐帧原生循环,于是每帧派一个一次性消息,由 `update` 在两帧之间读回
++                // (同 Dozer 的 `CaptureNameEditFocus`,只是搭在 "消息→重绘→消息" 的循环上)。
++                let body: Element<'_, Msg> =
++                    bytehost_chrome::view(&self.shell, self, &metrics_from_theme());
++                // 「修复项目」进度卡:进行中盖住整个窗口(不可关闭),全部完成后库才放行 `ScaffoldPopupClose`。
++                // Dozer 用独立原生窗口承载,Digger 用同一窗口里的整窗覆盖层——卡片本体是库的同一份。
++                let card: Option<Element<'_, Msg>> = self
++                    .project
++                    .focused_project()
++                    .and_then(|id| self.project.scaffold_card(id))
++                    .map(|card| {
++                        container(card)
++                            .width(Length::Fill)
++                            .height(Length::Fill)
++                            .center(Length::Fill)
++                            .padding(24)
++                            .into()
++                    });
++                let body = match card {
++                    Some(card) => iced::widget::stack![body, card].into(),
++                    None => body,
+                 };
+-                centered_modal(
+-                    byteui::feedback::dialog::confirm(spec),
+-                    Msg::FilesMenuDismiss,
+-                )
+-            });
+-            let move_card = self
+-                .files
+-                .move_card()
+-                .map(|card| centered_modal(card, Msg::FilesMenuDismiss));
+-            match dialog.or(move_card) {
+-                Some(card) => iced::widget::stack![body, card].into(),
+-                None => body,
+-            }
+-        } else {
+-            body
+-        };
+-        // 「文件」面板的右键菜单:盖在最上层,点空白或 Esc 关闭。
+-        let body: Element<'_, Msg> = match self.files.menu() {
+-            Some(menu)
+-                if files_menu_is_rendered(
+-                    self.panel_visible(&shell::files_id()),
+-                    self.panel_visible(&shell::project_id()),
+-                ) =>
+-            {
++                // 「文件」面板的对话框(删除确认 / 移动重命名):居中卡片 + 半透明遮罩,
++                // 压在右键菜单之下、正文之上。
++                let body = if self.panel_visible(&shell::files_id()) {
++                    let dialog = self.files.delete_confirm().map(|spec| {
++                        let spec = byteui::feedback::dialog::ConfirmDialog {
++                            icon: spec.icon,
++                            title: spec.title,
++                            description: spec.description,
++                            cancel_label: spec.cancel_label,
++                            cancel_msg: Msg::Files(spec.cancel_msg),
++                            confirm_label: spec.confirm_label,
++                            confirm_msg: Msg::Files(spec.confirm_msg),
++                            close_msg: None,
++                            confirm_color: spec.confirm_color,
++                            content_spacing: spec.content_spacing,
++                        };
++                        centered_modal(
++                            byteui::feedback::dialog::confirm(spec),
++                            Msg::FilesMenuDismiss,
++                        )
++                    });
++                    let move_card = self
++                        .files
++                        .move_card()
++                        .map(|card| centered_modal(card, Msg::FilesMenuDismiss));
++                    match dialog.or(move_card) {
++                        Some(card) => iced::widget::stack![body, card].into(),
++                        None => body,
++                    }
++                } else {
++                    body
++                };
++                // 「文件」面板的右键菜单:盖在最上层,点空白或 Esc 关闭。
++                let body: Element<'_, Msg> = match self.files.menu() {
++                    Some(menu)
++                        if files_menu_is_rendered(
++                            self.panel_visible(&shell::files_id()),
++                            self.panel_visible(&shell::project_id()),
++                        ) =>
++                    {
++                        let window = (self.shell.window().0, self.shell.window().1);
++                        iced::widget::stack![
++                            body,
++                            crate::adapters::menu_overlay::view(
++                                menu,
++                                window,
++                                Msg::Files,
++                                Msg::FilesMenuDismiss
++                            )
++                        ]
++                        .into()
++                    }
++                    _ => body,
++                };
++                // Agent 选择器 / 溢出下拉浮层:盖在正文之上,点空白 / Esc 关闭。
+                 let window = (self.shell.window().0, self.shell.window().1);
+-                iced::widget::stack![
+-                    body,
+-                    crate::adapters::menu_overlay::view(
+-                        menu,
+-                        window,
+-                        Msg::Files,
+-                        Msg::FilesMenuDismiss
++                let agent_overlay = if self.panel_visible(&shell::agent_id()) {
++                    crate::adapters::agent_display::picker_overlay(&self.agent, window).or_else(
++                        || crate::adapters::agent_display::overflow_overlay(&self.agent, window),
+                     )
+-                ]
+-                .into()
+-            }
+-            _ => body,
+-        };
+-        // Agent 选择器 / 溢出下拉浮层:盖在正文之上,点空白 / Esc 关闭。
+-        let window = (self.shell.window().0, self.shell.window().1);
+-        let agent_overlay = if self.panel_visible(&shell::agent_id()) {
+-            crate::adapters::agent_display::picker_overlay(&self.agent, window)
+-                .or_else(|| crate::adapters::agent_display::overflow_overlay(&self.agent, window))
+-        } else {
+-            None
+-        };
+-        let body: Element<'_, Msg> = match agent_overlay {
+-            Some(overlay) => iced::widget::stack![body, overlay].into(),
+-            None => body,
+-        };
+-        match self
+-            .group_chat
+-            .group_create_overlay(self.projects.current_project())
+-        {
+-            Some(overlay) => iced::widget::stack![body, overlay].into(),
+-            None => body,
+-        }
++                } else {
++                    None
++                };
++                let body: Element<'_, Msg> = match agent_overlay {
++                    Some(overlay) => iced::widget::stack![body, overlay].into(),
++                    None => body,
++                };
++                match self
++                    .group_chat
++                    .group_create_overlay(self.projects.current_project())
++                {
++                    Some(overlay) => iced::widget::stack![body, overlay].into(),
++                    None => body,
++                }
++            },
++        )
+     }
+ 
+     fn on_activated(&mut self, slot: bytehost_desktop::SurfaceSlot) {
+@@ -3668,6 +3686,15 @@
+ /// A native menu can unfocus the window without minimizing it. Events only ask
+ /// for an OS sample; the guarded response changes review visibility.
+ fn window_state_event(event: iced::Event, _: iced::event::Status, id: window::Id) -> Option<Msg> {
++    match &event {
++        iced::Event::Window(window::Event::Focused) => {
++            return Some(Msg::WindowAnimationFocus(id, true));
++        }
++        iced::Event::Window(window::Event::Unfocused) => {
++            return Some(Msg::WindowAnimationFocus(id, false));
++        }
++        _ => {}
++    }
+     matches!(
+         event,
+         iced::Event::Window(
+--- a/crates/desktop/src/product_review_tests.rs
++++ b/crates/desktop/src/product_review_tests.rs
+@@ -832,3 +832,17 @@
+         "restore sample applies usable dimensions after clearing minimized state"
+     );
+ }
++
++#[test]
++fn animation_focus_is_scoped_to_the_main_window() {
++    let (mut shell, _rt) = review_shell("animation-focus-owner");
++    let id = shell.window.unwrap();
++    let other = window::Id::unique();
++    let _ = host(&mut shell, Msg::WindowAnimationFocus(other, false));
++    assert!(shell.animation_focused);
++    let _ = host(&mut shell, Msg::WindowAnimationFocus(id, false));
++    assert!(!shell.animation_focused);
++    assert!(!shell.window_minimized, "focus loss is not minimization");
++    let _ = host(&mut shell, Msg::WindowAnimationFocus(id, true));
++    assert!(shell.animation_focused);
++}

@@ -47,8 +47,6 @@ pub(crate) struct SshHostOverlay {
     focus: FocusTracker,
     cursor: mouse::Cursor,
     modifiers: ModifiersState,
-    /// Drop 时把 macOS 原生右键粘贴菜单指回主窗口(见 `Drop` 实现)。
-    main_window: Arc<Window>,
 }
 
 impl SshHostOverlay {
@@ -64,6 +62,10 @@ impl SshHostOverlay {
     /// `DatabaseSourceOverlay::cancel_message`。
     pub(crate) fn cancel_message(&self) -> Message {
         Message::Ssh(ssh::Message::DraftCancel)
+    }
+
+    pub(crate) fn window_arc(&self) -> Arc<Window> {
+        self.window.clone()
     }
 
     pub(crate) fn open(
@@ -84,15 +86,12 @@ impl SshHostOverlay {
             el,
         );
         window.set_ime_allowed(true);
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&window);
         SshHostOverlay {
             window,
             gpu,
             focus: FocusTracker::default(),
             cursor: mouse::Cursor::Unavailable,
             modifiers: ModifiersState::default(),
-            main_window: main_window.clone(),
         }
     }
 
@@ -178,13 +177,6 @@ impl SshHostOverlay {
             backdrop_card(card.map(Message::Ssh), card_logical_size(&self.window)),
             iced_event,
         )
-    }
-}
-
-impl Drop for SshHostOverlay {
-    fn drop(&mut self) {
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&self.main_window);
     }
 }
 

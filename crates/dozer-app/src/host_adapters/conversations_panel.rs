@@ -196,7 +196,7 @@ impl App {
             #[cfg(target_os = "macos")]
             {
                 let items = agent_picker_items_for(current, &present, self.locale.active_locale());
-                if let Some(msg) = crate::chrome::native_menu::show(items, at) {
+                if let Some(msg) = self.menu_show(items, at) {
                     self.update(AppMessage::Conversations(msg));
                 }
             }

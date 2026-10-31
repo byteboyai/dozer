@@ -118,7 +118,7 @@ pub fn flyfish_url(path: &std::path::Path, locale: &str, font_size: f32) -> Stri
 /// 当前配色方案 → flyfish `theme` 属性/URL 参数取值(`light`/`dark`),
 /// host.html 与 `flyfish_url` 共用一份,避免两处各写一次映射。
 pub fn scheme_query_value() -> &'static str {
-    match byteui::theme::color::current_scheme() {
+    match byteui::theme::color::current_snapshot().scheme {
         byteui::theme::color::ColorScheme::Light => "light",
         byteui::theme::color::ColorScheme::Dark => "dark",
     }

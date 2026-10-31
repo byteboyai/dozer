@@ -1,0 +1,347 @@
+--- a/src/feedback/math_curve.rs
++++ b/src/feedback/math_curve.rs
+@@ -22,6 +22,25 @@
+ use iced_widget::core::{Color, Element, Length, Point};
+ use iced_widget::core::{Rectangle, mouse, window};
+ use iced_widget::{column, container, text};
++
++thread_local! {
++    static HOST_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
++}
++
++/// 在当前窗口的同步视图构建期间暂停所有后代曲线动画。
++/// 状态在返回或 panic 时恢复；不会跨窗口、线程或异步任务传播。
++/// 隐藏面板应移出视图树；保留在树内的面板可再嵌套暂停作用域。
++pub fn with_animation_paused<T>(paused: bool, build: impl FnOnce() -> T) -> T {
++    struct Restore(bool);
++    impl Drop for Restore {
++        fn drop(&mut self) {
++            HOST_PAUSED.with(|state| state.set(self.0));
++        }
++    }
++    let previous = HOST_PAUSED.with(|state| state.replace(state.get() || paused));
++    let _restore = Restore(previous);
++    build()
++}
+ 
+ /// 目标动画帧率。自驱动动画按这个节奏请求重绘；高刷新率屏幕不会把节奏
+ /// 自动抬到刷新率。
+@@ -825,7 +844,7 @@
+     Canvas::new(AnimatedLoader {
+         curve,
+         color,
+-        paused,
++        paused: paused || HOST_PAUSED.with(|state| state.get()),
+     })
+     .width(Length::Fixed(size))
+     .height(Length::Fixed(size))
+@@ -925,7 +944,7 @@
+     }
+ }
+ 
+-/// 计算下一次重绘期限。准点或提前时保持固定节拍（上一期限 + 间隔）；
++/// 计算下一次重绘期限。提前重绘保留既有期限；准点时保持固定节拍（上一期限 + 间隔）；
+ /// 迟到时不补画积压帧，直接从当前时刻重新排一个间隔。
+ fn next_deadline(
+     now: std::time::Instant,
+@@ -933,6 +952,7 @@
+     interval: Duration,
+ ) -> std::time::Instant {
+     match scheduled {
++        Some(last) if now < last => last,
+         Some(last) => {
+             let candidate = last + interval;
+             if candidate <= now {
+@@ -1250,14 +1270,41 @@
+ 
+         // 提前：仍等原定期限，不提前画。
+         let early = base + interval / 2;
+-        assert_eq!(
+-            next_deadline(early, Some(first), interval),
+-            first + interval
+-        );
++        assert_eq!(next_deadline(early, Some(first), interval), first);
+ 
+         // 迟到：从 now 重新排，不连续追赶多个期限。
+         let late = base + interval * 5;
+         assert_eq!(next_deadline(late, Some(first), interval), late + interval);
++    }
++
++    #[test]
++    fn host_pause_scope_is_nested_and_restored_after_panic() {
++        assert!(!HOST_PAUSED.with(|state| state.get()));
++        with_animation_paused(true, || {
++            assert!(HOST_PAUSED.with(|state| state.get()));
++            with_animation_paused(false, || assert!(HOST_PAUSED.with(|state| state.get())));
++        });
++        let result = std::panic::catch_unwind(|| {
++            with_animation_paused(true, || panic!("intentional unwind"));
++        });
++        assert!(result.is_err());
++        assert!(!HOST_PAUSED.with(|state| state.get()));
++    }
++
++    #[test]
++    fn repeated_early_redraws_preserve_pending_deadline() {
++        let base = std::time::Instant::now();
++        let interval = frame_interval();
++        let first = next_deadline(base, None, interval);
++        let mut deadline = first;
++        for ms in [5, 10, 15, 20, 25] {
++            deadline = next_deadline(base + Duration::from_millis(ms), Some(deadline), interval);
++            assert_eq!(deadline, first);
++        }
++        assert_eq!(
++            next_deadline(first, Some(deadline), interval),
++            first + interval
++        );
+     }
+ 
+     /// 暂停时不续订；恢复后从冻结相位继续，不追赶暂停期间积压的帧。
+--- a/src/theme/color.rs
++++ b/src/theme/color.rs
+@@ -276,11 +276,16 @@
+ }
+ 
+ #[cfg(test)]
++pub(super) fn restore_test_snapshot(snapshot: ThemeSnapshot) {
++    *SNAPSHOT.write().unwrap_or_else(|e| e.into_inner()) = snapshot;
++}
++
++#[cfg(test)]
+ mod tests {
+     use super::*;
+     use crate::theme::test_support::lock_global_state;
+ 
+-    fn lock() -> std::sync::MutexGuard<'static, ()> {
++    fn lock() -> crate::theme::test_support::GlobalStateGuard {
+         lock_global_state()
+     }
+ 
+--- a/src/theme/icon_size.rs
++++ b/src/theme/icon_size.rs
+@@ -278,12 +278,38 @@
+ pub const SCALE_MAX: f32 = 3.0;
+ 
+ #[cfg(test)]
++pub(super) struct TestSnapshot {
++    tokens: IconSizeTokens,
++    scale: u32,
++    startup: u32,
++    initialized: bool,
++}
++
++#[cfg(test)]
++pub(super) fn test_snapshot() -> TestSnapshot {
++    TestSnapshot {
++        tokens: current(),
++        scale: CURRENT_SCALE.load(Ordering::Relaxed),
++        startup: STARTUP_ENV_SCALE.load(Ordering::Relaxed),
++        initialized: INITIALIZED.load(Ordering::Relaxed),
++    }
++}
++
++#[cfg(test)]
++pub(super) fn restore_test_snapshot(snapshot: TestSnapshot) {
++    set_theme(snapshot.tokens);
++    CURRENT_SCALE.store(snapshot.scale, Ordering::Relaxed);
++    STARTUP_ENV_SCALE.store(snapshot.startup, Ordering::Relaxed);
++    INITIALIZED.store(snapshot.initialized, Ordering::Relaxed);
++}
++
++#[cfg(test)]
+ mod tests {
+     use super::*;
+     use crate::theme::test_support::lock_global_state;
+ 
+     /// 与 color/region 的测试共用同一把进程级锁。
+-    fn lock() -> std::sync::MutexGuard<'static, ()> {
++    fn lock() -> crate::theme::test_support::GlobalStateGuard {
+         lock_global_state()
+     }
+ 
+--- a/src/theme/test_support.rs
++++ b/src/theme/test_support.rs
+@@ -1,15 +1,60 @@
+-//! 进程级全局状态测试的共用串行设施。
+-//!
+-//! `theme::color` / `theme::icon_size` / `theme::region` 的 accessor 都读
+-//! 进程级 static；cargo test 默认多线程并跑。模块各自建一把锁不能互相
+-//! 排斥（曾经 color 与 region 的测试就因此偶发交叉污染），这里提供唯一
+-//! 一把锁，所有会改或依赖全局主题状态的测试都先拿它。poison 也恢复成
+-//! guard，保证某个测试 panic 后其余测试仍能继续。
+-
++//! Serialize global-theme tests and restore the exact entry state on unwind.
++use super::{color, font, geometry, icon_size};
+ use std::sync::{Mutex, MutexGuard};
+-
+ static GLOBAL_STATE_LOCK: Mutex<()> = Mutex::new(());
+ 
+-pub(crate) fn lock_global_state() -> MutexGuard<'static, ()> {
+-    GLOBAL_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
++pub(crate) struct GlobalStateGuard {
++    _lock: MutexGuard<'static, ()>,
++    colors: color::ThemeSnapshot,
++    icons: Option<icon_size::TestSnapshot>,
++    fonts: font::FontTokens,
++    geometry: geometry::GeometryTokens,
+ }
++impl Drop for GlobalStateGuard {
++    fn drop(&mut self) {
++        color::restore_test_snapshot(self.colors);
++        font::set_theme(self.fonts);
++        geometry::set_theme(self.geometry);
++        icon_size::restore_test_snapshot(self.icons.take().expect("snapshot restored once"));
++    }
++}
++pub(crate) fn lock_global_state() -> GlobalStateGuard {
++    let lock = GLOBAL_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
++    GlobalStateGuard {
++        _lock: lock,
++        colors: color::current_snapshot(),
++        icons: Some(icon_size::test_snapshot()),
++        fonts: font::current(),
++        geometry: geometry::current(),
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn guard_restores_state_after_unwind() {
++        // Hold the serialization lock throughout the probe to exclude other tests.
++        let outer = lock_global_state();
++        let colors = color::current_snapshot();
++        let scale = icon_size::scale();
++        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            let _restore = GlobalStateGuard {
++                // A separate local mutex avoids recursively locking the global lock.
++                _lock: LOCAL.lock().unwrap_or_else(|e| e.into_inner()),
++                colors,
++                icons: Some(icon_size::test_snapshot()),
++                fonts: font::current(),
++                geometry: geometry::current(),
++            };
++            color::set_scheme(color::ColorScheme::Light);
++            icon_size::set_scale(2.75);
++            panic!("intentional unwind");
++        }));
++        assert!(result.is_err());
++        assert_eq!(color::current_snapshot(), colors);
++        assert_eq!(icon_size::scale(), scale);
++        drop(outer);
++    }
++    static LOCAL: Mutex<()> = Mutex::new(());
++}
+--- a/src/theme/font.rs
++++ b/src/theme/font.rs
+@@ -91,6 +91,7 @@
+     /// 改动必须同步确认所有消费方。
+     #[test]
+     fn byteboy2077_locked_values() {
++        let _guard = crate::theme::test_support::lock_global_state();
+         let t = FontTokens::byteboy2077();
+         assert_eq!(t.dot_sm, 10);
+         assert_eq!(t.caption_sm, 11);
+@@ -103,12 +104,14 @@
+ 
+     #[test]
+     fn current_defaults_to_byteboy2077() {
++        let _guard = crate::theme::test_support::lock_global_state();
+         let c = current();
+         assert_eq!(c.body, FontTokens::byteboy2077().body);
+     }
+ 
+     #[test]
+     fn set_theme_replaces_current_and_is_visible_globally() {
++        let _guard = crate::theme::test_support::lock_global_state();
+         let mut custom = FontTokens::byteboy2077();
+         custom.body = 99;
+         set_theme(custom);
+@@ -119,6 +122,7 @@
+ 
+     #[test]
+     fn top_bar_font_is_the_default_family_at_medium_weight() {
++        let _guard = crate::theme::test_support::lock_global_state();
+         let f = top_bar_font();
+         assert_eq!(f.weight, iced_widget::core::font::Weight::Medium);
+         assert_eq!(f.family, iced_widget::core::Font::default().family);
+--- a/src/theme/geometry.rs
++++ b/src/theme/geometry.rs
+@@ -297,11 +297,9 @@
+ 
+     /// 串行化会改动/读取**全局几何主题**的测试。`set_theme` 改的是进程级全局,
+     /// 若与读取 `min_window_width()` 的测试并行交错,读数会在中途被改成 999。
+-    /// 用一个测试专用 `Mutex` 让这些测试彼此互斥(仅测试用,不影响运行时)。
+-    static THEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+-
+-    fn theme_guard() -> std::sync::MutexGuard<'static, ()> {
+-        THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
++    // 与其它主题测试共享状态恢复 guard。
++    fn theme_guard() -> crate::theme::test_support::GlobalStateGuard {
++        crate::theme::test_support::lock_global_state()
+     }
+ 
+     /// 锁值快照：`byteboy2077()` 的每个字段值不得随意改动；
+--- a/.github/workflows/candidate-check.yml
++++ b/.github/workflows/candidate-check.yml
+@@ -21,13 +21,11 @@
+         required: false
+         default: ""
+       dozer_ref:
+-        description: 候选 Dozer 精确 SHA / tag(留空则用消费方锁文件里的版本)
+-        required: false
+-        default: ""
++        description: 候选 Dozer 精确 SHA / tag
++        required: true
+       digger_ref:
+         description: 候选 Digger 精确 SHA / tag
+-        required: false
+-        default: ""
++        required: true
+ 
+ jobs:
+   candidate:
+@@ -117,7 +115,7 @@
+             fi
+           done
+ 
+-      - name: 记录输入与解析图
++      - name: 记录输入
+         run: |
+           set -euo pipefail
+           {
+@@ -126,7 +124,6 @@
+             echo "dozer=$(git -C ws/dozer rev-parse HEAD)"
+             echo "digger=$(git -C ws/digger rev-parse HEAD)"
+           } | tee candidate-shas.txt
+-          cargo tree --manifest-path ws/dozer/Cargo.toml -i byteui --locked > dozer-byteui-tree.txt || true
+ 
+       - name: Dozer 候选组合(临时锁 → locked 构建)
+         run: |
+@@ -136,6 +133,8 @@
+           # 临时锁文件:只为这次候选组合生成;成功或失败都恢复原文件。
+           trap 'mv Cargo.lock.orig Cargo.lock' EXIT
+           cargo update -p byteui --offline 2>/dev/null || cargo update -p byteui
++          cargo tree --locked -i byteui > "$GITHUB_WORKSPACE/dozer-byteui-tree.txt"
++          cargo metadata --locked --format-version 1 > "$GITHUB_WORKSPACE/dozer-metadata.json"
+           cargo check --locked --workspace --all-targets
+ 
+       - name: Digger 候选组合(临时锁 → locked 构建)
+@@ -146,6 +145,8 @@
+           trap 'mv Cargo.lock.orig Cargo.lock' EXIT
+           cargo update -p byteui --offline 2>/dev/null || cargo update -p byteui
+           cargo update -p dozer-client --offline 2>/dev/null || cargo update -p dozer-client
++          cargo tree --locked -i byteui > "$GITHUB_WORKSPACE/digger-byteui-tree.txt"
++          cargo metadata --locked --format-version 1 > "$GITHUB_WORKSPACE/digger-metadata.json"
+           cargo check --locked --workspace --all-targets
+ 
+       - name: 上传解析图与 SHA
+@@ -156,3 +157,6 @@
+           path: |
+             candidate-shas.txt
+             dozer-byteui-tree.txt
++            digger-byteui-tree.txt
++            dozer-metadata.json
++            digger-metadata.json

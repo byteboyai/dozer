@@ -6,6 +6,13 @@
 
 ## 1. 最大的一项：外壳区域样式 `theme::region` 两份并存
 
+**状态（2026-10-31）：已按“合并为一份”处理。** Dozer 的共享外壳 accessor 全部委托
+ByteUI `theme::region`；`workspace.json` 只保留 8 个产品面板区；`check-shell-regions.sh`
+与对应 CI 步骤已退役。详见
+[`2026-10-31-byteui-optimization-design.md`](../specs/2026-10-31-byteui-optimization-design.md)
+和 [`验证基线`](../../analysis/2026-10-31-byteui-optimization-validation.md)。下文保留
+当时的分析与备选方案作为历史上下文。
+
 - **现状：** `v0.4.3` 给 byteui 新增了 `theme::region`（顶栏、左右图标栏、左右面板区、放大浮层、底栏等 7 个外壳区域，257 行），供 `bytehost-chrome` 共享窗口骨架使用。dozer 自己仍保留一份 `crates/dozer-app/src/theme/region.rs`（602 行，15 个区域，数据源是 `assets/theme/workspace.json`）。两处数值靠 digger 仓库的 `scripts/check-shell-regions.sh`（byteui 的 `examples/dump_shell_regions.rs` 导出 JSON，与 dozer 的 `workspace.json` 逐项比对）人工比对，不是自动 CI。
 - **与原设计冲突：** 拆库 spec §3 明确写“`region`、`terminal_font`、`homespace_*` 留在各应用，进库会带上 dozer 的业务约定”。`v0.4.3` 实际把 region 的一部分搬进了库，spec 没有同步修订。byteui 里的版本只覆盖 7 个外壳区域，dozer 的 15 个区域里另外 8 个（7 个面板内容区 + 整体外框）仍只在 dozer。
 - **风险：** 改 dozer 的 `workspace.json` 忘了同步 byteui，digger 与 dozer 的外壳就悄悄不一致；一致性检查脚本不在任何 CI 里。

@@ -62,6 +62,10 @@ impl ProjectDeleteOverlay {
         Message::Project(project::Message::DeleteProjectCancel)
     }
 
+    pub(crate) fn window_arc(&self) -> Arc<Window> {
+        self.window.clone()
+    }
+
     pub(crate) fn open(
         main_window: &Arc<Window>,
         adapter: &wgpu::Adapter,

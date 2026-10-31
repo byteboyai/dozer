@@ -54,3 +54,6 @@ bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.
 bytehost-chrome = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.20" }
 bytehost-settings = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.20" }
 bytehost-settings-ui = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.20" }
+# ByteUI 共享组件库：与 bytehost 一样只在 workspace 钉一次 tag，
+# 消费 crate 用 `byteui.workspace = true`。升级时只改这一段。
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.5.0" }

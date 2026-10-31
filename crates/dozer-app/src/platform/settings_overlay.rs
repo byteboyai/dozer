@@ -57,7 +57,6 @@ pub(crate) struct SettingsOverlay {
     gpu: OverlayGpu,
     cursor: mouse::Cursor,
     modifiers: ModifiersState,
-    main_window: Arc<Window>,
 }
 
 impl SettingsOverlay {
@@ -67,6 +66,10 @@ impl SettingsOverlay {
 
     pub(crate) fn request_redraw(&self) {
         self.window.request_redraw();
+    }
+
+    pub(crate) fn window_arc(&self) -> Arc<Window> {
+        self.window.clone()
     }
 
     pub(crate) fn open(
@@ -86,8 +89,6 @@ impl SettingsOverlay {
         );
         let window = open_child_window(main_window, pos, size, "settings", el);
         window.set_ime_allowed(true);
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&window);
 
         let gpu = OverlayGpu::open(&window, instance, adapter, device, queue, size, scale);
 
@@ -96,7 +97,6 @@ impl SettingsOverlay {
             gpu,
             cursor: mouse::Cursor::Unavailable,
             modifiers: ModifiersState::default(),
-            main_window: main_window.clone(),
         }
     }
 
@@ -232,13 +232,6 @@ impl SettingsOverlay {
         self.gpu.cache = interface.into_cache();
         self.window.request_redraw();
         messages
-    }
-}
-
-impl Drop for SettingsOverlay {
-    fn drop(&mut self) {
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&self.main_window);
     }
 }
 

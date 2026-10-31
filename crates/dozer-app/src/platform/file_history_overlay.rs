@@ -108,6 +108,10 @@ impl FileHistoryOverlay {
         self.window.request_redraw();
     }
 
+    pub(crate) fn window_arc(&self) -> Arc<Window> {
+        self.window.clone()
+    }
+
     pub(crate) fn open(
         main_window: &Arc<Window>,
         adapter: &wgpu::Adapter,

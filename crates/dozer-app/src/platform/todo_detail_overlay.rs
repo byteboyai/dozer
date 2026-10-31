@@ -47,8 +47,6 @@ pub(crate) struct TodoDetailOverlay {
     focus: FocusTracker,
     cursor: mouse::Cursor,
     modifiers: ModifiersState,
-    /// Drop 时把 macOS 原生右键粘贴菜单指回主窗口(见 `Drop` 实现)。
-    main_window: Arc<Window>,
 }
 
 impl TodoDetailOverlay {
@@ -64,6 +62,10 @@ impl TodoDetailOverlay {
     /// `DatabaseSourceOverlay::cancel_message`。
     pub(crate) fn cancel_message(&self) -> Message {
         Message::Todo(todo::Message::DetailClose)
+    }
+
+    pub(crate) fn window_arc(&self) -> Arc<Window> {
+        self.window.clone()
     }
 
     pub(crate) fn open(
@@ -84,15 +86,12 @@ impl TodoDetailOverlay {
             el,
         );
         window.set_ime_allowed(true);
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&window);
         TodoDetailOverlay {
             window,
             gpu,
             focus: FocusTracker::default(),
             cursor: mouse::Cursor::Unavailable,
             modifiers: ModifiersState::default(),
-            main_window: main_window.clone(),
         }
     }
 
@@ -161,13 +160,6 @@ impl TodoDetailOverlay {
             ),
             iced_event,
         )
-    }
-}
-
-impl Drop for TodoDetailOverlay {
-    fn drop(&mut self) {
-        #[cfg(target_os = "macos")]
-        crate::chrome::native_menu::install_content_view(&self.main_window);
     }
 }
 

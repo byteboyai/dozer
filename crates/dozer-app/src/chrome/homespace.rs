@@ -17,7 +17,7 @@ use dozer_core::protocol::ProjectInfo;
 use dozer_model::ConversationMeta;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
-use iced_widget::core::{Border, Color, Element, Length, Padding, Rectangle};
+use iced_widget::core::{Border, Element, Length, Padding, Rectangle};
 use iced_widget::{Scrollable, button, column, container, row, scrollable};
 use std::path::PathBuf;
 
@@ -322,10 +322,6 @@ fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
 /// 而非编译期 `const`,配色方案运行时切换(设置弹窗)才能立即生效——
 /// 曾经写死成 `const Color`,是 2026-09-15 用户实测发现"切浅色后首页
 /// 标题强调色纹丝不动"的同批 bug 之一。
-fn panel_head_accent() -> Color {
-    byteui::theme::color::current().tab_active_border
-}
-
 /// 分割线。各 pane / 卡片标题统一复用,保证视觉一致(首页项目列表、Recents
 /// 两卡、工作区文件树、Git 提交图等)。`Message` 泛型——本身不发出任何
 /// 交互消息,可在任意 `Message` 类型的视图里直接内嵌。`actions` 为
@@ -339,46 +335,14 @@ pub(crate) fn home_panel_head_with_actions<'a, Message>(
 where
     Message: 'a,
 {
-    let title = title.into();
-    // 高度钉死到跟预览/终端 tab 栏一样高(`tab_button_size`,tab 页签里 ×
-    // 关闭按钮的固定命中区尺寸,是那条 tab 栏实际渲染高度的下限)——此前只
-    // 靠图标/文字自身撑开,比 tab 栏矮了一截,导致 Files/Todo/Project/Git/
-    // SSH 等面板头部跟右侧 tab 栏高度对不齐(2026-09 用户反馈)。
-    let head_row = row![
-        icons::view(icon, byteui::theme::icon_size::row(), panel_head_accent(),),
-        text(title)
-            .size(theme::homespace_font::subtitle())
-            .color(panel_head_accent()),
-    ]
-    .spacing(8)
-    .height(Length::Fixed(byteui::theme::geometry::tab_button_size()))
-    .align_y(iced_widget::core::Alignment::Center);
-    // 有右侧操作就把标题行撑满宽度,用 Fill 间隔把操作推到最右。
-    let head_row = if let Some(actions) = actions {
-        head_row
-            .push(iced_widget::space::horizontal())
-            .push(actions)
-            .width(Length::Fill)
-    } else {
-        head_row
-    };
-
-    column![
-        head_row,
-        container(iced_widget::Space::new())
-            .width(Length::Fill)
-            .height(Length::Fixed(1.0))
-            .style(|_t: &iced_widget::Theme| container::Style {
-                background: Some(theme::homespace_color::border().into()),
-                ..container::Style::default()
-            }),
-    ]
-    // 标题行到分割线的间距从 8 收到 4(验收反馈:左栏 Todo/Files/Project/
-    // Git/SSH 及 Agent 面板的头部分割线比 Agent 终端 tab 栏的分割线低了近
-    // 9px,几个并排面板的分割线高度对不齐;终端那条已确认是最合适的
-    // 基准,这里收紧靠拢它)。
-    .spacing(4)
-    .into()
+    // 共享行布局(图标/标题/尾部操作/固定高度/1px 分割线);Dozer 只覆盖
+    // 标题字号与分割线颜色,其余走 ByteUI 默认。
+    byteui::layout::panel_heading::PanelHeading::new(icon, title)
+        .actions(actions)
+        .title_size(theme::homespace_font::subtitle())
+        .divider_color(theme::homespace_color::border())
+        .divider_spacing(4.0)
+        .into_element()
 }
 
 /// 不带右侧操作的 `home_panel_head_with_actions` 简写,其余面板照旧调用它。
