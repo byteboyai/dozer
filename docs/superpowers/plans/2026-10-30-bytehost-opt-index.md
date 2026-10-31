@@ -135,3 +135,7 @@ dozer 线（4.1-4.3）与 digger 线（4.4-4.6）完全独立。若在 Phase 3 �
 - 跨仓原工作树受本次沙箱写入范围限制：bytehost / Digger 修复先保存在 Dozer 下的修复副本，补丁与验证记录见 `.worktrees/bytehost-opt-fixes/README.md`。
 
 - 干净 Digger 编译发现新库快照还需包含 main 已有的浏览器查找 API；已带入 `crates/dozer-panel-browser` 的现有实现（不恢复旧 bytehost pin），替代原先指向 `dozer-browser-find` 的本地 patch。
+
+- **2026-10-31 现状**:bytehost `v0.4.20` 与 dozer `libs-2026-10-30a` 两个 tag 已在远端;
+  bytehost main 仍停在 `324593d`(tag 目标 `8cb6eed` 尚未并入 main)。本分支已按 v0.4.20
+  构建并本地安装(0.5.308 / build 338)。
