@@ -1,6 +1,6 @@
 # bytehost 优化五梯队 总控执行计划(Index)
 
-> 日期：2026-10-30。状态：待实施。
+> 日期：2026-10-30。状态：部分完成；审核修复中，发布候选待验证及发布。
 > 本文是 2026-10-30 bytehost 全面分析产出的五份 spec/plan 的总控索引与执行顺序。各梯队的改动细节、验收标准以对应 spec/plan 为准，本文只定顺序、依赖与协调点。
 
 ## 文档索引
@@ -101,7 +101,7 @@ dozer 线（4.1-4.3）与 digger 线（4.4-4.6）完全独立。若在 Phase 3 �
 
 ## 决策记录
 
-2026-10-30 实施完成(Phase 0–5;5.2 本地形态,5.3 仅候选识别)。
+2026-10-30：Phase 0–4 已有实现；Phase 5 部分完成，不能按全计划验收。
 
 - **bytehost 新 tag:`v0.4.18`(`8cb8ed1`)+ `v0.4.19`(`fad7715`,per-app 锁)**,均已推送。
   v0.4.18 同时带上此前的 `feat/shared-settings` + `feat/web-find` 5 个提交
@@ -123,3 +123,15 @@ dozer 线（4.1-4.3）与 digger 线（4.4-4.6）完全独立。若在 Phase 3 �
 - **验证口径**:bytehost `cargo test --all-features`/clippy/fmt/`check-deps --self-test` 全绿;
   dozer 全仓测试除 `dozerd::product_isolation` 4 项(worktree 下找不到 `product_daemon` 示例二进制,
   环境限制)外全绿;digger `cargo test --workspace` 全绿(用本地 patch)。
+
+
+### 审核修复（2026-10-30）
+
+- 依赖门禁：非宿主白名单成员自动纳入；检查所有 feature、目标平台和 build 依赖；metadata/tree 失败即阻断。隔离变异测试覆盖合法依赖与故障路径，CI 执行自测及共享库钉版守卫。
+- 等锁：通知方与等待方共同使用通知 mutex，原子地检查条件并进入 Condvar 等待；移除 5ms 超时轮询，补释放/取消在检查与等待之间发生的竞态测试。
+- 待发布依赖组：bytehost `v0.4.20` → Dozer `libs-2026-10-30a` → Digger；Digger 的所有 Dozer 库必须一起更新，锁文件必须从无 path patch 的依赖图生成。以上新 tag 在本次修复中仅为本地验证候选，未发布。
+- 5.2 **部分完成**：已实现 Dozer 联合构建与消费侧 CI；Digger 尚无远端，双消费方远程联合验证仍延期。pin 守卫仍为两套实现，尚未完成计划要求的合并；CI 接入现有守卫不等同于完成合并。
+- 5.3 **延期**：只完成候选识别，尚未下沉首个适配器，也没有两产品行为等价测试与行数对比。另立实施任务后才能验收。
+- 跨仓原工作树受本次沙箱写入范围限制：bytehost / Digger 修复先保存在 Dozer 下的修复副本，补丁与验证记录见 `.worktrees/bytehost-opt-fixes/README.md`。
+
+- 干净 Digger 编译发现新库快照还需包含 main 已有的浏览器查找 API；已带入 `crates/dozer-panel-browser` 的现有实现（不恢复旧 bytehost pin），替代原先指向 `dozer-browser-find` 的本地 patch。
