@@ -6,6 +6,7 @@
 pub mod adapter;
 mod addr_focus;
 pub mod bookmarks;
+mod find;
 pub mod i18n;
 mod state;
 mod tabs;
@@ -18,6 +19,10 @@ pub const WEB_OWNER: &str = "dozer.web";
 pub use adapter::{BrowserDisplay, BrowserRegion, TAB_TOOLTIP_DELAY, TabView, chrome_top_px};
 pub use addr_focus::{CaptureAddrFocus, addr_field_id, take_addr_focused};
 pub use bookmarks::{BookmarkStatus, bookmark_status};
+pub use find::{
+    CaptureFindFocus, FindRequest, find_bar_extra_px, find_bar_height_px, find_field_id,
+    take_find_focused,
+};
 pub use state::State;
 pub use tabs::{BrowserTab, Tabs};
 pub use update::{Message, NavAction, request_bookmarks_refresh, update};

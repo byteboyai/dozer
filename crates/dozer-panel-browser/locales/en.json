@@ -12,5 +12,10 @@
   "empty.no_page": "No page yet — type a URL in the address bar",
   "error.local_path": "Opening local files is not supported in the browser",
   "error.bookmarks_load_failed": "Failed to load bookmarks: {e}",
-  "error.bookmarks_op_failed": "Bookmark operation failed: {e}"
+  "error.bookmarks_op_failed": "Bookmark operation failed: {e}",
+  "find.placeholder": "Find in page",
+  "find.no_match": "No matches",
+  "find.prev": "Previous match",
+  "find.next": "Next match",
+  "find.close": "Close find bar"
 }
