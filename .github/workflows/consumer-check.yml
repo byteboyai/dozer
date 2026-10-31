@@ -1,0 +1,57 @@
+name: Consumer check
+
+# Dozer 的第一个 CI(bytehost 优化 Tier5 Task2/3):编译 + 两条依赖门禁 +
+# 外壳区域一致性(对照 sibling byteui)。刻意**不跑 clippy/全量测试**:
+# 仓库里有一批既有的 clippy 告警与需要预构建示例二进制的集成测试,
+# 先把"依赖边界不许漂移"这条守住,其余另行清理。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  consumer-check:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout dozer
+        uses: actions/checkout@v4
+
+      - name: Checkout byteui(外壳区域比对的对照物)
+        uses: actions/checkout@v4
+        with:
+          repository: byteboyai/byteui
+          path: byteui
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo check --locked --workspace --all-targets
+        run: cargo check --locked --workspace --all-targets
+
+      - name: 业务层宿主依赖门禁
+        run: bash scripts/check-host-deps.sh --self-test
+
+      - name: 共享库钉版守卫
+        run: bash scripts/check-shared-deps.sh --offline
+
+      - name: 面板边界棘轮
+        run: python3 scripts/audit/check_panel_boundary.py
+
+      - name: 外壳区域 ≡ byteui 导出
+        env:
+          BYTEUI: ${{ github.workspace }}/byteui
+        run: bash scripts/check-shell-regions.sh

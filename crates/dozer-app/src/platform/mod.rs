@@ -5,6 +5,7 @@
 pub mod confirm_overlay;
 pub mod database_drivers_overlay;
 pub mod database_source_overlay;
+pub(crate) mod diff_webview;
 pub mod edit_history_overlay;
 pub mod file_drag;
 pub mod file_history_overlay;
@@ -12,6 +13,7 @@ pub mod files_move_overlay;
 pub mod group_create_overlay;
 pub mod locale;
 pub mod overlay_gpu;
+pub(crate) mod overlay_host;
 pub mod overlay_window;
 pub mod picker;
 pub mod project_create_overlay;

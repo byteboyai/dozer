@@ -114,4 +114,13 @@
 
 ## 决策记录
 
-（待填：新 tag 号、spike 旧 tag 处置方式、提交号。）
+- **Task1**:统一 tag 收在根 `[workspace.dependencies]`;实际消费 6 个 crate(apps/client/core/
+  desktop/panel/webview)。`chrome`/`settings`/`settings-ui` 在 v0.4.17 里还不存在,但**一并预声明**
+  (未使用的 workspace 依赖不进依赖图),v0.4.18 起可直接用。
+- **spike 处置**:`browser-probe` 升 v0.4.18;`v2-excalidraw` **保留 v0.2.0** 并注明"独立 workspace,
+  刻意锁在 V2 验证当时的 tag"。
+- **Task4**:README 保留一句"Digger 不是 Tauri 宿主(Tauri 已撤回)"——那是纠偏说明,不是陈旧事实。
+- **Task5**:`shell::SurfaceEvent` → `HostSurfaceEvent`;bytehost 内部(含 example/integration test)
+  与 digger 的测试引用同步更新;dozer 无引用。
+- 提交:dozer `b5b45e6f`/`99412dc1`/`26ccb9ae`/`861b0e6b`;bytehost `7dd2205`/`2b3d5ea`/`8cb8ed1`;
+  digger `16b1eb5`。

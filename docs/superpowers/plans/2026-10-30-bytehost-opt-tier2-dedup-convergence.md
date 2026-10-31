@@ -136,4 +136,18 @@
 
 ## 决策记录
 
-（待填：Task 1 是否改走 web_child、Task 3 试点 overlay 选择与推广决定、Task 5 删除/标注裁决、提交号。）
+- **Task1**:实际差异不止 title/channel/html——协议处理、IPC 归属校验、日志措辞是逐字的,
+  只有"发哪个 Message"不同。helper 取实际形态:`build_diff_webview(window, config, on_event)`,
+  `on_event` 注入两个弹窗各自的 Message 变体;`DiffWebviewConfig` 记 url/bounds/白名单/期望绑定/日志前缀。
+- **Task2**:`SingleSlotSurface<T>` 放在 `dozer-panel-host`,但放在**可选 feature `surface`** 后面:
+  默认不把 iced+wry 拖进每个共享面板库。Usage 与 CodeHealth 的公开 API 不变,内部改为薄包装。
+- **Task3 试点**:`confirm` / `files_move` / `project_delete` 三个最相似宿主。trait `OverlayHost`
+  (window_id/request_redraw/reposition/overlay_input)+ `FocusClosable`(失焦即关闭),
+  `SyncAction`/`sync_action` 也上收。三个文件合计 658 → 549 行(-109,约 -16.6%);
+  共享模块 150 行(含文档与测试)。**建议推广**到其余 overlay,每个约省 30–40 行。
+- **Task4**:`subscription.rs` 删除;信号分类唯一实现改为 `effects::ChangeKind` + `classify_change`,
+  `Executor::subscribe` 移到泛型 impl 以便测试;`tests/embedded.rs` 改测生产订阅循环。
+- **Task5**:`port.rs` 删除(零生产消费)。
+- **Task6**:`boot_receiver_task`/`boot_receiver_stream` 收掉 17 段同型 unfold;
+  `attach_all_handles` 收掉 8 连发。`product.rs` -40 行。
+- 提交:dozer `9ed6af47`/`0e3712f8`/`9b5e90a2`;digger `e550ee1`/`0109ef8`/`ca8db8b`。

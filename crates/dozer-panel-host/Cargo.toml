@@ -7,8 +7,15 @@ publish = false
 # 面板宿主件的共享库:请求追踪、`PanelIo` / `ActivationCtx`、宿主需求发件箱、中性提示发件箱。
 # 依赖闭包刻意**不含** dozer-app / dozer-client / dozer-core:Dozer 与 Digger 的共享面板库
 # (`dozer-panel-todo` 起)都依赖它,而不是各自复制一份。
+[features]
+# 默认不拉起桌面执行层(iced+wry)。只有需要 `SingleSlotSurface` 的面板
+# (Usage 内容侧)与产品组合根(CodeHealth)打开它;纯状态面板不付这份依赖。
+default = []
+surface = ["dep:bytehost-desktop"]
+
 [dependencies]
-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.20" }
+bytehost-core.workspace = true
+bytehost-desktop = { workspace = true, optional = true }
 dozer-model = { path = "../dozer-model" }
 dozer-services = { path = "../dozer-services" }
 tokio.workspace = true

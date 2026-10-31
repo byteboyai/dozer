@@ -9,39 +9,24 @@ use std::sync::Arc;
 
 use iced_wgpu::wgpu;
 use iced_winit::core::mouse;
-use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::ModifiersState;
-use winit::window::{Window, WindowId};
+use winit::window::Window;
 
 use crate::app::{App, Message};
 use crate::extensions::files;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{
-    backdrop_card, open_overlay, popup_card_size, reposition_overlay,
-};
+use crate::platform::overlay_host::{OverlayHost, OverlayParts};
+use crate::platform::overlay_window::{backdrop_card, open_overlay, popup_card_size};
+
+pub(crate) use crate::platform::overlay_host::{SyncAction, sync_action};
 
 fn card_logical_size(window: &Window) -> LogicalSize<f32> {
     // 280:表单(标题行/两组 label+输入框)+ 底部「取消/确定」按钮行都要放得
     // 下——此前 220 会把按钮行整个裁出卡片外(2026-09-27 用户实测)。
     popup_card_size(window, 280.0)
-}
-
-/// 开关决策拆成纯函数,便于单测(同 `settings_overlay::sync_action`)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SyncAction {
-    Open,
-    Close,
-    Noop,
-}
-
-pub(crate) fn sync_action(open: bool, overlay_present: bool) -> SyncAction {
-    match (open, overlay_present) {
-        (true, false) => SyncAction::Open,
-        (false, true) => SyncAction::Close,
-        (true, true) | (false, false) => SyncAction::Noop,
-    }
 }
 
 pub(crate) struct FilesMoveOverlay {
@@ -53,15 +38,22 @@ pub(crate) struct FilesMoveOverlay {
     main_window: Arc<Window>,
 }
 
+impl OverlayHost for FilesMoveOverlay {
+    fn overlay_window(&self) -> &Window {
+        &self.window
+    }
+
+    fn overlay_parts(&mut self) -> OverlayParts<'_> {
+        OverlayParts {
+            window: &self.window,
+            gpu: &mut self.gpu,
+            cursor: &mut self.cursor,
+            modifiers: &mut self.modifiers,
+        }
+    }
+}
+
 impl FilesMoveOverlay {
-    pub(crate) fn window_id(&self) -> WindowId {
-        self.window.id()
-    }
-
-    pub(crate) fn request_redraw(&self) {
-        self.window.request_redraw();
-    }
-
     /// `close_other_overlays` 摘掉这扇窗口前要用它发一条取消消息,道理同
     /// `DatabaseSourceOverlay::cancel_message`。
     pub(crate) fn cancel_message(&self) -> Message {
@@ -97,23 +89,6 @@ impl FilesMoveOverlay {
         }
     }
 
-    pub(crate) fn reposition(
-        &mut self,
-        device: &wgpu::Device,
-        main_outer_pos: PhysicalPosition<i32>,
-        main_inner_size: PhysicalSize<u32>,
-        scale: f64,
-    ) {
-        reposition_overlay(
-            &self.window,
-            &mut self.gpu,
-            device,
-            main_outer_pos,
-            main_inner_size,
-            scale,
-        );
-    }
-
     pub(crate) fn redraw(&mut self, app: &mut App) {
         let Some(ws) = app.active_workspace() else {
             return;
@@ -129,34 +104,18 @@ impl FilesMoveOverlay {
     }
 
     pub(crate) fn handle_input(&mut self, app: &mut App, event: &WindowEvent) -> Vec<Message> {
-        if let WindowEvent::KeyboardInput {
-            event: key_event,
-            is_synthetic: false,
-            ..
-        } = event
-            && key_event.state == winit::event::ElementState::Pressed
-            && key_event.logical_key
-                == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
-        {
-            return vec![Message::Files(files::Message::MoveCancel)];
-        }
-        let Some(iced_event) =
-            self.gpu
-                .track_and_convert(&mut self.cursor, &mut self.modifiers, event)
-        else {
-            return Vec::new();
-        };
-        let Some(ws) = app.active_workspace() else {
-            return Vec::new();
-        };
-        self.gpu.dispatch(
-            &self.window,
-            self.cursor,
-            backdrop_card(
-                files::files_move_card(&ws.files, app.locale.active_locale()).map(Message::Files),
-                card_logical_size(&self.window),
-            ),
-            iced_event,
+        let card_size = card_logical_size(&self.window);
+        self.overlay_input(
+            event,
+            Some(Message::Files(files::Message::MoveCancel)),
+            || {
+                let ws = app.active_workspace()?;
+                Some(backdrop_card(
+                    files::files_move_card(&ws.files, app.locale.active_locale())
+                        .map(Message::Files),
+                    card_size,
+                ))
+            },
         )
     }
 }

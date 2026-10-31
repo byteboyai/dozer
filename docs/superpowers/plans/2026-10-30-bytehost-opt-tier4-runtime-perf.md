@@ -100,4 +100,13 @@
 
 ## 决策记录
 
-（待填：gateway HTTP 库、Site 可变性结论、baseline 数据、spawn_blocking 调查结论、新 tag 号、提交号。）
+- gateway 栈:hyper 1 + hyper-util,`serve_static` 每请求 `Site` clone。
+- **baseline(v0.4.18 前,64 并发 / 5000 请求,3 次中位数)**:28491 req/s,p50 2.12ms,
+  p99 6.17ms,77.8 allocs/req,36485 B/req。
+- **改后(`Arc<Site>`)**:29487 req/s,p50 2.06ms,p99 5.03ms,76.7 allocs/req,36410 B/req。
+  每请求少 1 次分配(PathBuf clone),吞吐/延迟不劣化。分配口径是**整进程(客户端+服务端)**,
+  见 `gateway_bench` 注释。
+- **spawn_blocking(Task2)结论:保留**。`route → serve_static` 里的 `std::fs::read` 是真阻塞
+  文件 I/O;其余步骤是微秒级纯 CPU,拆两段调度只会多一次开销。结论写在代码注释里。
+- 基准工具:`crates/bytehost-apps/examples/gateway_bench.rs` + `scripts/bench-gateway.sh`。
+- 提交:bytehost `3f76601`/`2bb8f66`/`f660900`。

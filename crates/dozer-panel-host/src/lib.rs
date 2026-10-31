@@ -6,11 +6,15 @@
 
 mod drag;
 mod notice;
+#[cfg(feature = "surface")]
+mod single_slot_surface;
 pub use drag::{
     TREE_DRAG_CONFIRM_THRESHOLD_PX, TREE_DRAG_MIN_HOLD_DURATION, tree_drag_held_long_enough,
     tree_drag_past_threshold,
 };
 pub use notice::{NOTICE_COOLDOWN, Notice, NoticeLevel, NoticeOutbox};
+#[cfg(feature = "surface")]
+pub use single_slot_surface::SingleSlotSurface;
 
 use bytehost_core::id::ScopeId;
 use dozer_services::Services;

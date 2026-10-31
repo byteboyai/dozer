@@ -51,6 +51,7 @@ use crate::platform::edit_history_overlay;
 use crate::platform::file_history_overlay;
 use crate::platform::files_move_overlay;
 use crate::platform::group_create_overlay;
+use crate::platform::overlay_host::{FocusClosable, OverlayHost};
 use crate::platform::project_create_overlay;
 use crate::platform::project_delete_overlay;
 use crate::platform::project_scaffold_overlay;

@@ -133,4 +133,24 @@
 
 ## 决策记录
 
-（待填：子锁边界划分、纯逻辑下沉目标 crate（core vs 新 crate）、thiserror 评审结论、新 tag 号、提交号。）
+- **Task1**:`impl Deref for AppManager` 已移除,`Core` 收为 `pub(crate)`;消费方无引用
+  (Core 的方法本来就是 `pub(crate)`,Deref 对外等于没暴露任何可用 API)。
+  **锁拆成"per-app 写锁(64 分片)+ 全局生命周期 RwLock"**:per-app 操作持全局读锁 +
+  该应用分片锁,同一应用串行、不同应用并行;`reconcile`/`suspend_all` 持全局写锁,
+  与所有 per-app 操作互斥。监管线程仍是"try 锁 + 查 cancel + 等通知",所以 `stop`
+  (持有该应用锁)与 `suspend_all`(持有全局写锁)`join` 它们不会死锁。
+  新增测试:不同应用不互相阻塞、同一应用仍串行、全局操作排除 per-app 操作、
+  释放后 <1ms 拿到锁、取消立刻放弃。4 个字段上陈旧的 `#[allow(dead_code)]` 已删除
+  (全部实际在用)。
+- **Task2**:`wry_common::{apply_restricted, HandleRegistry}`。受限策略在调用方 `configure` **之后**
+  应用(产品不能把 devtools/下载/新窗口放开);`panel` 是可信内部 HTML,刻意保留 wry 默认。
+  三份源码钉死测试合并为 `wry_common` 的一份参数化测试。
+- **Task3**:`panes`/`hover`/`layout_migrate` 下沉 `bytehost-core`。core 已有 `layout`(DTO)模块,
+  故迁移逻辑改名 `layout_migrate`;`bytehost-desktop` 保留同名转发(`layout` 模块转发到
+  `layout_migrate`),既有消费方路径不变。`bytehost-chrome` 不再依赖 desktop,
+  `cargo tree -p bytehost-chrome | grep -E 'wry|winit'` 为空;objc2 仍直接使用(交通灯按钮)。
+- **Task4**:`Mutex + Condvar` + `WriteGuard`(Drop 时 notify_all);取消时 `wake_lock_waiters`
+  主动唤醒,避免"持锁 join"死锁。新增两个测试:释放后 <1ms 拿到锁、取消立即放弃。
+- **Task5**:跳过(thiserror 未引入)。
+- 提交:bytehost `2242b1e`/`35aec3b`/`a2059b6`/`e30eeba`/`8cb8ed1`;
+  锁拆分 `fad7715`(tag `v0.4.19`)。

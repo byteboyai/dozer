@@ -2003,7 +2003,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dozer-app"
-version = "0.5.308"
+version = "0.5.309"
 dependencies = [
  "alacritty_terminal",
  "arboard",
@@ -2234,8 +2234,6 @@ name = "dozer-panel-files"
 version = "0.1.0"
 dependencies = [
  "bytegit",
- "bytehost-core",
- "bytehost-desktop",
  "byteui",
  "dozer-i18n",
  "dozer-model",
@@ -2274,6 +2272,7 @@ name = "dozer-panel-host"
 version = "0.1.0"
 dependencies = [
  "bytehost-core",
+ "bytehost-desktop",
  "dozer-model",
  "dozer-services",
  "tokio",
@@ -2306,7 +2305,6 @@ version = "0.1.0"
 dependencies = [
  "bytegit",
  "bytehost-core",
- "bytehost-desktop",
  "byteui",
  "dozer-i18n",
  "dozer-model",
@@ -2361,6 +2359,7 @@ dependencies = [
  "byteui",
  "dozer-i18n",
  "dozer-model",
+ "dozer-panel-host",
  "dozer-services",
  "iced_renderer",
  "iced_widget",
