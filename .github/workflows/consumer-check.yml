@@ -39,11 +39,14 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
-      - name: cargo check --workspace --all-targets
-        run: cargo check --workspace --all-targets
+      - name: cargo check --locked --workspace --all-targets
+        run: cargo check --locked --workspace --all-targets
 
       - name: 业务层宿主依赖门禁
-        run: bash scripts/check-host-deps.sh
+        run: bash scripts/check-host-deps.sh --self-test
+
+      - name: 共享库钉版守卫
+        run: bash scripts/check-shared-deps.sh --offline
 
       - name: 面板边界棘轮
         run: python3 scripts/audit/check_panel_boundary.py
