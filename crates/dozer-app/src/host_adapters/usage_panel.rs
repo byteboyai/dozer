@@ -288,5 +288,11 @@ mod tests {
         let newer = git.summary(t.path()).unwrap();
         assert_eq!(newer.total, 3);
         assert_eq!(git.cache.len(), 2, "HEAD 变化不能复用旧结果");
+
+        // 历史边界变化(shallow 出现)也必须换键。
+        let identity = t.open().identity().unwrap();
+        std::fs::write(identity.common_dir().join("shallow"), "").unwrap();
+        let _ = git.summary(t.path()).unwrap();
+        assert_eq!(git.cache.len(), 3, "历史边界变化不能复用旧结果");
     }
 }

@@ -210,7 +210,7 @@ Dozer release 构建耗时约 3m34s（最终 HEAD），Digger 约 1m39s；使用
 | A3 一次刷新 ≤1 status/无二次分支读取 | 通过 | runtime `one_query_discovers_and_reads_status_once`；Files `snapshot_applied_..._without_spawning_a_query` |
 | A4 并发/有界/双期限 | 通过（macOS） | runtime `global_concurrency_is_capped...`；bytegit aggregator/inbox 测试；macOS 真实 FS 用例 |
 | A5 失效矩阵/HEAD/index/config | 通过（单元） | `Categories::from_change`、HEAD/Index 对照、Git Log `HEAD || REFS || FULL_RESCAN`、rescan/控制目录监听测试 |
-| A6 Usage 单次遍历/缓存 | 部分 | `DoGitStats` 单次日桶 + LRU/HEAD 失效测试；merge/reset/shallow deepen 未做真实仓库端到端 |
+| A6 Usage 单次遍历/缓存 | 自动化通过 | `DoGitStats` 单次日桶 + LRU + HEAD/历史边界(shallow)换键测试；merge/reset 由 HEAD 换键覆盖，未做真实 deepen 端到端 |
 | A7 目录 IO / DB 锁 / refs 不扫盘 | 部分 | 后台目录计划/合并、慢 Git 不持 DB 锁有测试；磁盘 10s 节流无专门时序测试，refs 不触发磁盘未端到端验证 |
 | A8 严格 patch/取消 | 部分 | 字节上限、UTF-8 边界、输入预算、取消/超时/stderr 截断测试；hook/filter/冲突旧测试通过；Windows job object 未验证 |
 | A9 错误/stale/无 patch 闭包 | 通过（依赖）/部分（GUI） | last-good/mismatch 测试；无 patch 克隆 check+测试；GUI stale 展示未人工验证 |
