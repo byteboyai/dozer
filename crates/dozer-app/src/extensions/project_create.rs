@@ -237,6 +237,8 @@ pub struct State {
     /// `on_exit` 驱动这个字段,`root_dir_row` 把它当 `highlight` 传给
     /// `view_with_suffix`。
     pub root_dir_hover: bool,
+    /// 正在进行的 clone 的取消标志;关闭对话框即置位。
+    clone_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 #[derive(Debug, Clone)]
@@ -420,6 +422,11 @@ pub fn update(
     emit: impl Fn(Message) + Send + 'static,
 ) {
     if let Message::Close | Message::GoToSettings = msg {
+        if let Some(s) = state.as_ref()
+            && let Some(cancel) = &s.clone_cancel
+        {
+            cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         *state = None;
         return;
     }
@@ -485,9 +492,11 @@ pub fn update(
             }
             s.error = None;
             s.busy = true;
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            s.clone_cancel = Some(cancel.clone());
             let locale = locale.to_owned();
             handle.spawn(async move {
-                let result = spawn_clone(url, target, description, &project, &locale).await;
+                let result = spawn_clone(url, target, description, cancel, &project, &locale).await;
                 emit(Message::Done(result));
             });
         }
@@ -511,6 +520,7 @@ pub fn update(
         }
         Message::Done(result) => {
             s.busy = false;
+            s.clone_cancel = None;
             if let Err(e) = &result {
                 s.error = Some(e.clone());
             }
@@ -1304,15 +1314,33 @@ async fn spawn_clone(
     url: String,
     target: PathBuf,
     description: String,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     project: &Arc<dyn ProjectService>,
     locale: &str,
 ) -> SubmitResult {
     let url2 = url.clone();
     let target2 = target.clone();
+    let locale_for_clone = locale.to_owned();
     let clone_result = tokio::task::spawn_blocking(move || {
-        bytegit::clone(&url2, &target2, bytegit::CloneOptions::default())
-            .map(|_| ())
-            .map_err(|e| e.message().to_string())
+        let options = bytegit::OperationOptions {
+            cancel: Some(cancel),
+            ..bytegit::OperationOptions::default()
+        };
+        match bytegit::clone_with_options(&url2, &target2, &options, None)
+            .map_err(|e| e.message().to_string())?
+        {
+            bytegit::Operation::Completed { .. } => Ok(()),
+            bytegit::Operation::Cancelled(_) => Err(crate::i18n::host_text(
+                "project_create.clone_cancelled",
+                "Clone cancelled",
+                &locale_for_clone,
+            )),
+            bytegit::Operation::TimedOut(_) => Err(crate::i18n::host_text(
+                "project_create.clone_timeout",
+                "Clone timed out",
+                &locale_for_clone,
+            )),
+        }
     })
     .await
     .unwrap_or_else(|e| {
@@ -1811,6 +1839,7 @@ mod tests {
             remote.path().to_string_lossy().into_owned(),
             target.clone(),
             "说明".into(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             &project(&fake),
             "zh-CN",
         ));
