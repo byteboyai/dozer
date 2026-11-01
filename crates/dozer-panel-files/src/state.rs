@@ -384,6 +384,8 @@ pub struct WorkspaceState {
     tree_refresh_inflight: bool,
     pending_tree_paths: BTreeSet<PathBuf>,
     pending_tree_full: bool,
+    /// 正在进行的 checkout 的取消标志;项目切换/状态被丢弃时置位。
+    pub(crate) branch_switch_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub git_statuses: HashMap<PathBuf, FileGitStatus>,
     /// 目录 → 聚合 git 状态(由 `git_status::rollup_dir_statuses` 在
     /// `StatusesRefreshed` 时一并算出),文件树渲染 O(1) 查表,取代每行
@@ -628,6 +630,13 @@ impl WorkspaceState {
     /// `Workspace::adopt_project` 里对应 5 行赋值的搬家版本,行为原样保留——
     /// 包括现状本来就没重置 `worktrees`/`tree_clipboard`/`move_error`/
     /// `tree_delete_confirm`/`tree_edit` 这一点,纯迁移不新增行为)。
+    /// 取消正在进行的 checkout(项目关闭/宿主主动放弃时调用)。
+    pub fn cancel_pending_checkout(&mut self) {
+        if let Some(cancel) = self.branch_switch_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
     pub fn reset_for_project(&mut self, file_tree: FileTree) {
         self.file_tree = Some(file_tree);
         // 切项目必须撤销旧项目后台读盘的应用资格:清 in-flight/pending,并
@@ -636,6 +645,9 @@ impl WorkspaceState {
         self.pending_tree_paths.clear();
         self.pending_tree_full = false;
         self.tree_refresh_generation = self.tree_refresh_generation.wrapping_add(1);
+        if let Some(cancel) = self.branch_switch_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         self.tree_selected = HashSet::new();
         self.tree_selection_anchor = None;
         self.git_statuses = HashMap::new();

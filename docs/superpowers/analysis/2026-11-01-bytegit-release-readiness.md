@@ -162,7 +162,7 @@ cargo test --locked -p dozer-panel-files      161 passed
 | N6 普通目录升格 | Dozer/Digger 在 `.git` 创建/删除与 FullRescan 时重新 discover，切换 plain watch/runtime | `reconcile_git_mode`；Digger `refs_changed` 保留 |
 | N7 Usage 缓存生命周期 | provider/cache 提升为进程级 `OnceLock`，跨激活复用 | `shared_git_stats_survives_activation...` |
 | CLI 取消 | bytegit `v0.9.2` 新增 `OperationOptions`/可取消 clone/checkout：独立进程组、超时、stderr 256KiB、持续排空、bounded progress | 取消/超时/截断/进度回归 |
-| 产品取消入口 | Dozer「新建项目 → Clone」关闭对话框即取消 clone；旧 API 仍兼容 | `spawn_clone` 取消路径；app 1138 passed |
+| 产品取消入口 | Dozer「新建项目 → Clone」关闭对话框即取消 clone；Files 分支切换在切项目/关闭项目时取消，旧 API 仍兼容 | `spawn_clone`/`cancel_pending_checkout` 回归；app 1138 passed |
 
 无 patch 验收（隔离克隆，无 `.cargo/config.toml`，重新生成锁文件）：
 
@@ -199,7 +199,7 @@ Dozer release 构建耗时约 3m33s（最终 HEAD），Digger 约 1m39s；使用
 - **Digger 实际运行路径是否完整包含本次重构：** 是（代码路径已接入 runtime，`cargo test -p digger-desktop` 717 passed + 集成测试通过）；缺 GUI 手工证据。
 - **两者是否能在无本地 patch 的 checkout 构建并通过现行门禁：** **是**（隔离克隆、无 `.cargo/config.toml`、重新生成 Cargo.lock）：Dozer `check` + 1138 tests，Digger `check` + 717 tests。
 - **是否仍有阻止发布的代码、依赖、测试或外部条件：** 仍有但已收窄。
-  1. Dozer clone 对话框已接取消；Files 分支切换与 Digger 写操作尚未接新入口；
+  1. Dozer clone 与 Files 分支切换已接取消；Digger 无 clone/分支切换写入口；
   2. 两产品 release 四件套构建、打包资源/plist 一致性未执行；
   3. GUI 手工录像/日志与 A1–A9 最终矩阵未完成；
   4. macOS 已实测；Linux/Windows 事件与进程回收未验证；

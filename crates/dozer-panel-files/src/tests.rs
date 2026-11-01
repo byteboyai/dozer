@@ -109,6 +109,23 @@ mod tests {
     }
 
     #[test]
+    fn reset_or_close_cancels_a_pending_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = ws_with_tree(dir.path().to_path_buf());
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        ws.branch_switch_cancel = Some(flag.clone());
+        ws.cancel_pending_checkout();
+        assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(ws.branch_switch_cancel.is_none());
+
+        let flag2 = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        ws.branch_switch_cancel = Some(flag2.clone());
+        ws.reset_for_project(FileTree::new(dir.path().to_path_buf()));
+        assert!(flag2.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(ws.branch_switch_cancel.is_none());
+    }
+
+    #[test]
     fn switching_projects_cancels_the_old_inflight_tree_refresh() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();

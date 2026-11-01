@@ -2418,6 +2418,7 @@ impl App {
             return;
         };
         if let WorkspaceSlot::Loaded(mut ws) = slot {
+            ws.files.cancel_pending_checkout();
             if let Some(token) = ws.git_token.take() {
                 io.git_runtime.unsubscribe(&token);
             }

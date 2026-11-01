@@ -401,11 +401,25 @@ pub fn update(
                 return;
             };
             let root = tree.root().to_path_buf();
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            ws_state.branch_switch_cancel = Some(cancel.clone());
             handle.spawn(async move {
                 let result = tokio::task::spawn_blocking(move || {
-                    bytegit::Repo::discover(&root)
-                        .and_then(|repo| repo.checkout_branch(&name))
-                        .map_err(|e| e.message().to_string())
+                    let repo = match bytegit::Repo::discover(&root) {
+                        Ok(repo) => repo,
+                        Err(e) => return Err(e.message().to_string()),
+                    };
+                    let options = bytegit::OperationOptions {
+                        cancel: Some(cancel),
+                        ..bytegit::OperationOptions::default()
+                    };
+                    match bytegit::checkout_branch_with_options(&repo, &name, &options, None)
+                        .map_err(|e| e.message().to_string())?
+                    {
+                        bytegit::Operation::Completed { .. } => Ok(()),
+                        bytegit::Operation::Cancelled(_) => Err("分支切换已取消".to_string()),
+                        bytegit::Operation::TimedOut(_) => Err("分支切换超时".to_string()),
+                    }
                 })
                 .await
                 .unwrap_or_else(|e| Err(e.to_string()));
@@ -413,6 +427,7 @@ pub fn update(
             });
         }
         Message::BranchSwitchDone(_, result) => {
+            ws_state.branch_switch_cancel = None;
             match result {
                 Ok(()) => {
                     // checkout 成功后 HEAD/refs 变化由 git_watch 拾起,会再次
