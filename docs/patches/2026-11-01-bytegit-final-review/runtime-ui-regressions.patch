@@ -1,0 +1,47 @@
+--- a/crates/dozer-git-runtime/tests/runtime.rs
++++ b/crates/dozer-git-runtime/tests/runtime.rs
+@@ -714,3 +714,44 @@
+         );
+     }
+ }
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
++async fn audit_late_ready_from_destroyed_workspace_must_not_revoke_reopened_subscription() {
++    let repo=TempRepo::new();
++    let backend=TestBackend::new(identity(&repo));
++    let (runtime,mut events)=GitRuntime::start_with(config(),backend,TestClock::new());
++    let old_token=runtime.subscribe(1,repo.path(),true).await.unwrap();
++    let _=next_snapshot(&mut events,1).await;
++    runtime.unsubscribe(&old_token);
++    let current_token=runtime.subscribe(1,repo.path(),true).await.unwrap();
++    let _=next_snapshot(&mut events,1).await;
++    // Workspace constructors initialize request=0 and first subscribe uses 1.
++    // Deliver an old ready only after the reopened Workspace accepted its ready.
++    let old_request=1u64;
++    let reopened_request=1u64;
++    let mut host_token=current_token;
++    if old_request==reopened_request {
++        let replaced=std::mem::replace(&mut host_token,old_token);
++        runtime.unsubscribe(&replaced); // Exact action of git_subscription_ready.
++    }
++    runtime.refresh_manual(&host_token);
++    let result=tokio::time::timeout(Duration::from_millis(200),events.next()).await;
++    runtime.shutdown();
++    assert!(result.is_ok(),"late ready matched reused UI request=1, revoked the live token, and left a dead subscription");
++}
++
++#[test]
++fn audit_nested_worktree_must_not_be_classified_as_parent_workspace() {
++    let outer=TempRepo::new();
++    outer.commit_file("a.txt","one","init");
++    let wt=outer.path().join(".worktrees/task");
++    let result=std::process::Command::new("git").args(["worktree","add","--detach"])
++        .arg(&wt).current_dir(outer.path()).output().unwrap();
++    assert!(result.status.success(),"{result:?}");
++    let outer_id=identity(&outer);
++    let inner_id=bytegit::Repo::discover_workdir(&wt).unwrap().identity().unwrap();
++    let cwd=inner_id.workdir_root().unwrap();
++    let selected_by_host=cwd.starts_with(outer_id.workdir_root().unwrap());
++    assert_eq!(selected_by_host,inner_id.workspace_key().unwrap()==outer_id.workspace_key().unwrap(),
++        "host path-prefix filter selects a different linked worktree and overwrites its card with parent HEAD/dirty");
++}

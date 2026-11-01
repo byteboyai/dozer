@@ -367,6 +367,20 @@ pub struct PendingMove {
 
 /// 挂在每个 Workspace 上的 Files 面板状态(项目信息卡数据 + 文件树 + 树操作
 /// 弹层)。对应现有 `Workspace` 上 11 个字段。
+/// WorkspaceState 实例身份:drop 后 new 会得到新 owner,旧目录回包不能应用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RefreshOwner(u64);
+
+impl Default for RefreshOwner {
+    fn default() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        Self(
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                .wrapping_add(1),
+        )
+    }
+}
+
 #[derive(Default)]
 pub struct WorkspaceState {
     /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
@@ -380,6 +394,7 @@ pub struct WorkspaceState {
     pub file_tree: Option<FileTree>,
     /// 后台目录刷新的 generation 与合并状态:同一时刻只允许一个读盘任务,
     /// 期间的变更合并到 pending,完成后补一次。
+    tree_refresh_owner: RefreshOwner,
     tree_refresh_generation: u64,
     tree_refresh_inflight: bool,
     pending_tree_paths: BTreeSet<PathBuf>,
@@ -895,6 +910,7 @@ impl WorkspaceState {
         self.tree_refresh_generation = self.tree_refresh_generation.wrapping_add(1);
         self.tree_refresh_inflight = true;
         Some(crate::fs::TreeRefreshRequest {
+            owner: self.tree_refresh_owner.0,
             generation: self.tree_refresh_generation,
             dirs,
             show_dotfiles: tree.show_dotfiles(),
@@ -905,10 +921,14 @@ impl WorkspaceState {
     /// 变更,返回下一次刷新计划给宿主继续读盘。
     pub fn apply_tree_refresh(
         &mut self,
+        owner: u64,
         generation: u64,
         snapshots: Vec<crate::fs::DirSnapshot>,
     ) -> Option<crate::fs::TreeRefreshRequest> {
-        if !self.tree_refresh_inflight || generation != self.tree_refresh_generation {
+        if owner != self.tree_refresh_owner.0
+            || !self.tree_refresh_inflight
+            || generation != self.tree_refresh_generation
+        {
             return None;
         }
         if let Some(tree) = &mut self.file_tree {

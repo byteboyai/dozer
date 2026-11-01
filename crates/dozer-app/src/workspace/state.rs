@@ -220,6 +220,15 @@ impl ShellIo {
     }
 }
 
+/// Workspace 生命周期的进程级唯一 owner:关闭/重建后旧 ready 不能匹配新对象。
+static NEXT_GIT_OWNER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn next_git_owner() -> u64 {
+    NEXT_GIT_OWNER
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        .wrapping_add(1)
+}
+
 pub struct Workspace {
     /// Agent 面板自有状态(会话/页签/交互态/发件箱)。`Workspace` 通过
     /// `Deref` 暴露其字段,让既有 `ws.tabs` / `ws.active` 等访问保持可读。
@@ -289,6 +298,8 @@ pub struct Workspace {
     /// 本项目在共享 `GitRuntime` 里的订阅;`None` = 尚未订阅或订阅失败。
     /// 关闭项目/改路径时显式退订。
     pub(crate) git_token: Option<dozer_git_runtime::SubscriptionToken>,
+    /// 这个 Workspace 对象的生命周期身份;ready 必须同时匹配 owner 与 request。
+    pub(crate) git_owner: u64,
     /// 订阅请求意图:每次 start_git_subscription 递增,ready 消息按它拒绝旧意图。
     pub(crate) git_subscription_request: u64,
     /// 非 Git 目录没有工作区身份,runtime 拒绝订阅;退化为旧 `bytegit::watch`
@@ -521,6 +532,7 @@ impl Workspace {
         let path = PathBuf::from(&p.path);
         self.git_subscription_request = self.git_subscription_request.wrapping_add(1);
         let request = self.git_subscription_request;
+        let owner = self.git_owner;
         // 非 Git 目录没有工作区身份:仍要保留文件树/预览的实时刷新。
         if bytegit::Repo::discover_workdir(&path).is_err() {
             let proxy = io.proxy.clone();
@@ -541,8 +553,9 @@ impl Workspace {
         io.handle.spawn(async move {
             match runtime.subscribe(project_id, path, true).await {
                 Ok(token) => {
-                    let _ =
-                        proxy.send_event(Message::GitSubscriptionReady(project_id, request, token));
+                    let _ = proxy.send_event(Message::GitSubscriptionReady(
+                        project_id, owner, request, token,
+                    ));
                 }
                 Err(err) => {
                     dozer_core::log_warn!(
@@ -589,6 +602,7 @@ impl Workspace {
             project_panel: project::WorkspaceState::default(),
             recent_projects: Vec::new(),
             git_token: None,
+            git_owner: next_git_owner(),
             git_subscription_request: 0,
             plain_watch: None,
             disk_refresh_at: None,
@@ -1947,6 +1961,13 @@ fn disk_refresh_allowed(
 mod disk_refresh_tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn workspace_owner_is_unique_per_workspace_lifecycle() {
+        let a = next_git_owner();
+        let b = next_git_owner();
+        assert_ne!(a, b, "重建 Workspace 不能复用 owner");
+    }
 
     #[test]
     fn disk_refresh_is_single_flight_and_throttled_to_ten_seconds() {

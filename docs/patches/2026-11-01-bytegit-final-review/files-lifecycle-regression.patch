@@ -1,0 +1,30 @@
+--- a/crates/dozer-panel-files/src/tests.rs
++++ b/crates/dozer-panel-files/src/tests.rs
+@@ -2786,3 +2786,27 @@
+         ));
+     }
+ }
++
++#[cfg(test)]
++mod final_lifecycle_review {
++    use crate::fs::{FileTree, read_dir_snapshots};
++    use crate::state::WorkspaceState;
++
++    #[test]
++    fn recreated_panel_rejects_old_lifecycle_directory_results() {
++        let temp = tempfile::tempdir().unwrap();
++        let root = temp.path().to_path_buf();
++        std::fs::write(root.join("old.txt"), "old").unwrap();
++        let mut old = WorkspaceState::new(FileTree::new(root.clone()));
++        let request = old.begin_tree_refresh(&[], true).unwrap();
++        let stale = read_dir_snapshots(&request);
++        drop(old);
++        std::fs::remove_file(root.join("old.txt")).unwrap();
++        std::fs::write(root.join("new.txt"), "new").unwrap();
++        let mut current = WorkspaceState::new(FileTree::new(root));
++        current.begin_tree_refresh(&[], true).unwrap();
++        current.apply_tree_refresh(request.generation, stale);
++        assert!(current.file_tree.as_ref().unwrap().visible_rows().iter()
++            .any(|row| row.name == "new.txt"), "旧生命周期结果覆盖了新面板");
++    }
++}

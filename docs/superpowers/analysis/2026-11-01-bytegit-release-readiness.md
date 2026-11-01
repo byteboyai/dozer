@@ -217,6 +217,16 @@ Dozer release 构建耗时约 3m34s（最终 HEAD），Digger 约 1m39s；使用
 
 说明：以上“通过”均指自动化测试；GUI 手工录像、Linux/Windows 事件与进程回收、A6 真实 merge/rebase/shallow 场景仍未验证。
 
+### 3.8 第二次复审 Q1–Q3 修复
+
+| 项 | 修复 |
+|---|---|
+| Q1 Workspace 重建复用 request | `Workspace` 增加进程级唯一 `git_owner`；ready 同时校验 owner + request，旧对象迟到 ready 被拒绝 |
+| Q2 Files 新实例复用 generation | `WorkspaceState` 增加不可复用 `RefreshOwner`；目录请求/回包携带 owner，宿主校验 owner + generation |
+| Q3 Agent 路径前缀误判 | 不再用 `cwd.starts_with(workdir)`；后台按 `Repo::discover_workdir(...).identity().workspace_key()` 解析，只投影真实同工作区 tab |
+
+新增回归：Workspace owner 唯一、drop 后 new 旧目录回包拒绝、嵌套 linked worktree 身份不同。Dozer app 1141 passed；Files 164 passed；Digger 717 passed。
+
 ## 4. 最终结论（未就绪）
 
 - **Dozer 实际运行路径是否完整包含本次重构：** 是（代码路径已接入 runtime，`cargo test -p dozer-app` 1136 passed）；缺 GUI 手工录像/日志证据。

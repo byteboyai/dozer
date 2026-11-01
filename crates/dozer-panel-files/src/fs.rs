@@ -62,6 +62,8 @@ impl From<Entry> for DirEntryData {
 /// 一次后台目录刷新的计划:只包含受影响、且当前已缓存的目录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TreeRefreshRequest {
+    /// WorkspaceState 实例的不可复用身份。
+    pub owner: u64,
     pub generation: u64,
     pub dirs: Vec<PathBuf>,
     pub show_dotfiles: bool,

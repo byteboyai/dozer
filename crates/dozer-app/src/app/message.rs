@@ -324,11 +324,19 @@ pub enum Message {
     /// 共享 GitRuntime 的事件:监听批次或已校验的工作区快照。
     GitRuntimeEvent(dozer_git_runtime::RuntimeEvent),
     /// 共享 GitRuntime 返回的订阅 token(异步解析身份后落回)。
-    GitSubscriptionReady(ProjectId, u64, dozer_git_runtime::SubscriptionToken),
+    GitSubscriptionReady(ProjectId, u64, u64, dozer_git_runtime::SubscriptionToken),
     /// 非 Git 目录的旧式监听事件:只刷新树/预览/磁盘,不产生 Git 查询。
     PlainFsChanged(ProjectId, bytegit::GitChange),
     /// 后台目录读取结果:宿主按 generation 合并,必要时继续下一轮。
-    FilesTreeRefresh(ProjectId, u64, Vec<dozer_panel_files::fs::DirSnapshot>),
+    FilesTreeRefresh(ProjectId, u64, u64, Vec<dozer_panel_files::fs::DirSnapshot>),
+    /// 后台按真实 WorkspaceKey 解析后的 Agent tab 投影。
+    AgentGitProjection(
+        ProjectId,
+        dozer_git_runtime::SubscriptionToken,
+        Vec<usize>,
+        Option<String>,
+        bool,
+    ),
     /// Git Log 面板的全部消息,内核只转发不解读——见
     /// `extensions::git_log::Message`。
     GitLog(git_log::Message),

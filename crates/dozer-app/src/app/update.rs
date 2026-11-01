@@ -1038,15 +1038,29 @@ impl App {
             Message::ProjectTabClose(id) => self.project_tab_close(id),
             Message::ProjectSlotLoaded(id, payload) => self.project_slot_loaded(id, payload),
             Message::GitRuntimeEvent(event) => self.git_runtime_event(event),
-            Message::GitSubscriptionReady(project_id, request, token) => {
-                self.git_subscription_ready(project_id, request, token)
+            Message::AgentGitProjection(project_id, token, tab_ids, branch, dirty) => {
+                if self.git_token_current(&token)
+                    && let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id)
+                {
+                    let info = dozer_panel_agent::tabs::WorkspaceGitInfo { branch, dirty };
+                    for tab_id in tab_ids {
+                        dozer_panel_agent::card::apply_workspace_override(
+                            &mut ws.agent.tabs,
+                            tab_id,
+                            Some(info.clone()),
+                        );
+                    }
+                }
+            }
+            Message::GitSubscriptionReady(project_id, owner, request, token) => {
+                self.git_subscription_ready(project_id, owner, request, token)
             }
             Message::PlainFsChanged(project_id, changes) => {
                 self.plain_fs_changed(project_id, changes)
             }
-            Message::FilesTreeRefresh(project_id, generation, snapshots) => {
+            Message::FilesTreeRefresh(project_id, owner, generation, snapshots) => {
                 let next = loaded_workspace_mut(&mut self.projects, project_id)
-                    .and_then(|ws| ws.files.apply_tree_refresh(generation, snapshots));
+                    .and_then(|ws| ws.files.apply_tree_refresh(owner, generation, snapshots));
                 if let Some(request) = next {
                     spawn_tree_refresh(project_id, request, &self.shell_io());
                 }
@@ -2754,26 +2768,47 @@ impl App {
                 remote_urls: remotes,
             },
         )));
-        // cwd 仍在同一工作区内的 tab 直接吃这份快照;跨工作区的 tab 保留它自己的
-        // 独立刷新路径(不能误用当前项目状态)。
+        // Agent tab 必须按真实 WorkspaceKey 匹配,不能只看 cwd 前缀:linked
+        // worktree/嵌套仓库可以位于父工作区目录之下。身份解析放到后台。
         let branch = head.and_then(|head| head.branch.clone());
         if let Some(workdir) = snapshot.identity.workdir_root()
-            && let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id)
+            && let Some(key) = snapshot.identity.workspace_key().ok()
         {
-            let info = dozer_panel_agent::tabs::WorkspaceGitInfo { branch, dirty };
-            let tab_ids: Vec<usize> = ws
-                .agent
-                .tabs
-                .iter()
-                .filter(|tab| tab.effective_cwd().starts_with(workdir))
-                .map(|tab| tab.tab_id)
-                .collect();
-            for tab_id in tab_ids {
-                dozer_panel_agent::card::apply_workspace_override(
-                    &mut ws.agent.tabs,
-                    tab_id,
-                    Some(info.clone()),
-                );
+            let candidates: Vec<(usize, PathBuf)> = self
+                .projects
+                .get(&project_id)
+                .and_then(|slot| match slot {
+                    WorkspaceSlot::Loaded(ws) => Some(
+                        ws.agent
+                            .tabs
+                            .iter()
+                            .filter(|tab| tab.effective_cwd().starts_with(workdir))
+                            .map(|tab| (tab.tab_id, tab.effective_cwd()))
+                            .collect(),
+                    ),
+                    WorkspaceSlot::Stub { .. } => None,
+                })
+                .unwrap_or_default();
+            if !candidates.is_empty() {
+                let token = token.clone();
+                let proxy = self.proxy.clone();
+                self.handle.spawn(async move {
+                    let mut matching = Vec::new();
+                    for (tab_id, cwd) in candidates {
+                        let key = key.clone();
+                        let matched = tokio::task::spawn_blocking(move || {
+                            resolved_workspace_key(&cwd).as_ref() == Some(&key)
+                        })
+                        .await
+                        .unwrap_or(false);
+                        if matched {
+                            matching.push(tab_id);
+                        }
+                    }
+                    let _ = proxy.send_event(Message::AgentGitProjection(
+                        project_id, token, matching, branch, dirty,
+                    ));
+                });
             }
         }
     }
@@ -2781,6 +2816,7 @@ impl App {
     pub(crate) fn git_subscription_ready(
         &mut self,
         project_id: ProjectId,
+        owner: u64,
         request: u64,
         token: dozer_git_runtime::SubscriptionToken,
     ) {
@@ -2795,8 +2831,8 @@ impl App {
             runtime.unsubscribe(&token);
             return;
         };
-        if request != ws.git_subscription_request {
-            // 迟到的旧 ready 不能覆盖当前意图。
+        if owner != ws.git_owner || request != ws.git_subscription_request {
+            // 迟到的旧 Workspace/旧请求 ready 不能覆盖当前订阅。
             runtime.unsubscribe(&token);
             return;
         }
@@ -4995,6 +5031,7 @@ fn spawn_tree_refresh(
     request: dozer_panel_files::fs::TreeRefreshRequest,
     io: &crate::workspace::ShellIo,
 ) {
+    let owner = request.owner;
     let generation = request.generation;
     let handle = io.handle.clone();
     let proxy = io.proxy.clone();
@@ -5004,7 +5041,9 @@ fn spawn_tree_refresh(
         })
         .await
         .unwrap_or_default();
-        let _ = proxy.send_event(Message::FilesTreeRefresh(project_id, generation, snapshots));
+        let _ = proxy.send_event(Message::FilesTreeRefresh(
+            project_id, owner, generation, snapshots,
+        ));
     });
 }
 
@@ -5012,6 +5051,13 @@ fn spawn_tree_refresh(
 fn kinds_require_disk_refresh(kinds: bytegit::WorkspaceChangeKind) -> bool {
     use bytegit::WorkspaceChangeKind as K;
     kinds.contains(K::WORKDIR) || kinds.contains(K::FULL_RESCAN)
+}
+
+fn resolved_workspace_key(cwd: &std::path::Path) -> Option<bytegit::WorkspaceKey> {
+    bytegit::Repo::discover_workdir(cwd)
+        .ok()
+        .and_then(|repo| repo.identity().ok())
+        .and_then(|identity| identity.workspace_key().ok())
 }
 
 /// Git Log 图需要重建的原因位:引用、HEAD 切换/detach,或已无法局部解释的
@@ -5356,5 +5402,26 @@ mod readiness_tests {
         assert!(kinds_require_disk_refresh(K::FULL_RESCAN));
         assert!(!kinds_require_disk_refresh(K::REFS));
         assert!(!kinds_require_disk_refresh(K::INDEX));
+    }
+
+    #[test]
+    fn a_nested_linked_worktree_is_not_the_parent_workspace() {
+        let outer = bytegit::testutil::TempRepo::new();
+        outer.commit_file("a.txt", "one", "init");
+        let wt = outer.path().join(".worktrees/task");
+        let out = std::process::Command::new("git")
+            .args(["worktree", "add", "--detach"])
+            .arg(&wt)
+            .current_dir(outer.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let outer_key = resolved_workspace_key(outer.path()).unwrap();
+        let inner_key = resolved_workspace_key(&wt).unwrap();
+        assert_ne!(outer_key, inner_key);
+        assert!(
+            wt.starts_with(outer.path()),
+            "旧前缀判断会误选，但真实 key 不同"
+        );
     }
 }

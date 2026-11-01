@@ -97,12 +97,12 @@ mod tests {
 
         // 旧 generation 结果直接丢弃。
         assert!(
-            ws.apply_tree_refresh(first.generation.wrapping_sub(1), vec![])
+            ws.apply_tree_refresh(first.owner, first.generation.wrapping_sub(1), vec![])
                 .is_none()
         );
 
         let next = ws
-            .apply_tree_refresh(first.generation, vec![])
+            .apply_tree_refresh(first.owner, first.generation, vec![])
             .expect("pending 变更应生成下一轮计划");
         assert!(next.dirs.contains(&root.join("b")));
         assert!(next.generation > first.generation);
@@ -123,6 +123,27 @@ mod tests {
         ws.reset_for_project(FileTree::new(dir.path().to_path_buf()));
         assert!(flag2.load(std::sync::atomic::Ordering::SeqCst));
         assert!(ws.branch_switch_cancel.is_none());
+    }
+
+    #[test]
+    fn a_new_state_instance_rejects_the_previous_instances_tree_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir(root.join("a")).unwrap();
+        let mut old = ws_with_tree(root.clone());
+        old.file_tree.as_mut().unwrap().toggle(&root);
+        let stale = old.begin_tree_refresh(&[], true).expect("旧实例刷新");
+        drop(old);
+
+        let mut new = ws_with_tree(root.clone());
+        new.file_tree.as_mut().unwrap().toggle(&root);
+        let live = new.begin_tree_refresh(&[], true).expect("新实例刷新");
+        assert_ne!(stale.owner, live.owner);
+        assert!(
+            new.apply_tree_refresh(stale.owner, stale.generation, vec![])
+                .is_none(),
+            "drop 后 new 的实例不能接受旧实例回包"
+        );
     }
 
     #[test]
@@ -147,10 +168,14 @@ mod tests {
             .expect("新项目应能启动刷新");
         assert!(new.generation > old.generation);
         assert!(
-            ws.apply_tree_refresh(old.generation, vec![]).is_none(),
+            ws.apply_tree_refresh(old.owner, old.generation, vec![])
+                .is_none(),
             "A 的迟到结果不能应用/清掉 B 的 in-flight"
         );
-        assert!(ws.apply_tree_refresh(new.generation, vec![]).is_none());
+        assert!(
+            ws.apply_tree_refresh(new.owner, new.generation, vec![])
+                .is_none()
+        );
     }
 
     #[test]
