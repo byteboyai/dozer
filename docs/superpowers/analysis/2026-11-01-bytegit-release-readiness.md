@@ -201,6 +201,22 @@ Dozer release 构建耗时约 3m34s（最终 HEAD），Digger 约 1m39s；使用
 
 > 打包只在临时克隆执行；未调用主工作树的自动升版入口，未覆盖已安装应用。
 
+## 3.7 A1–A9 验收矩阵（自动化部分）
+
+| ID | 状态 | 证据 |
+|---|---|---|
+| A1 子目录/外部修改 | 自动化通过，GUI 未验证 | runtime `a_subdirectory_project_sees_an_external_empty_commit`、`checkout_is_reported_as_head_change`；Files `pure_mapping_from_entries_filters_to_the_project_subtree` |
+| A2 乱序/A→B→A/双 worktree | 通过 | runtime `a_b_a...`、`unsubscribe_then_resubscribe...`、`identity_mismatch...`、`two_worktrees...`、`a_late_older_subscribe_intent...`；R1/R2 audit 回归 |
+| A3 一次刷新 ≤1 status/无二次分支读取 | 通过 | runtime `one_query_discovers_and_reads_status_once`；Files `snapshot_applied_..._without_spawning_a_query` |
+| A4 并发/有界/双期限 | 通过（macOS） | runtime `global_concurrency_is_capped...`；bytegit aggregator/inbox 测试；macOS 真实 FS 用例 |
+| A5 失效矩阵/HEAD/index/config | 通过（单元） | `Categories::from_change`、HEAD/Index 对照、Git Log `HEAD || REFS || FULL_RESCAN`、rescan/控制目录监听测试 |
+| A6 Usage 单次遍历/缓存 | 部分 | `DoGitStats` 单次日桶 + LRU/HEAD 失效测试；merge/reset/shallow deepen 未做真实仓库端到端 |
+| A7 目录 IO / DB 锁 / refs 不扫盘 | 部分 | 后台目录计划/合并、慢 Git 不持 DB 锁有测试；磁盘 10s 节流无专门时序测试，refs 不触发磁盘未端到端验证 |
+| A8 严格 patch/取消 | 部分 | 字节上限、UTF-8 边界、输入预算、取消/超时/stderr 截断测试；hook/filter/冲突旧测试通过；Windows job object 未验证 |
+| A9 错误/stale/无 patch 闭包 | 通过（依赖）/部分（GUI） | last-good/mismatch 测试；无 patch 克隆 check+测试；GUI stale 展示未人工验证 |
+
+说明：以上“通过”均指自动化测试；GUI 手工录像、Linux/Windows 事件与进程回收、A6 真实 merge/rebase/shallow 场景仍未验证。
+
 ## 4. 最终结论（未就绪）
 
 - **Dozer 实际运行路径是否完整包含本次重构：** 是（代码路径已接入 runtime，`cargo test -p dozer-app` 1136 passed）；缺 GUI 手工录像/日志证据。
