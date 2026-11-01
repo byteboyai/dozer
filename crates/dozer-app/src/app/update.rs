@@ -2744,6 +2744,28 @@ impl App {
                 remote_urls: remotes,
             },
         )));
+        // cwd 仍在同一工作区内的 tab 直接吃这份快照;跨工作区的 tab 保留它自己的
+        // 独立刷新路径(不能误用当前项目状态)。
+        let branch = head.and_then(|head| head.branch.clone());
+        if let Some(workdir) = snapshot.identity.workdir_root()
+            && let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id)
+        {
+            let info = dozer_panel_agent::tabs::WorkspaceGitInfo { branch, dirty };
+            let tab_ids: Vec<usize> = ws
+                .agent
+                .tabs
+                .iter()
+                .filter(|tab| tab.effective_cwd().starts_with(workdir))
+                .map(|tab| tab.tab_id)
+                .collect();
+            for tab_id in tab_ids {
+                dozer_panel_agent::card::apply_workspace_override(
+                    &mut ws.agent.tabs,
+                    tab_id,
+                    Some(info.clone()),
+                );
+            }
+        }
     }
 
     pub(crate) fn git_subscription_ready(
