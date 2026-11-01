@@ -330,13 +330,7 @@ pub enum Message {
     /// 后台目录读取结果:宿主按 generation 合并,必要时继续下一轮。
     FilesTreeRefresh(ProjectId, u64, u64, Vec<dozer_panel_files::fs::DirSnapshot>),
     /// 后台按真实 WorkspaceKey 解析后的 Agent tab 投影。
-    AgentGitProjection(
-        ProjectId,
-        dozer_git_runtime::SubscriptionToken,
-        Vec<usize>,
-        Option<String>,
-        bool,
-    ),
+    AgentGitProjection(Box<crate::host_adapters::agent_git_projection::Projection>),
     /// Git Log 面板的全部消息,内核只转发不解读——见
     /// `extensions::git_log::Message`。
     GitLog(git_log::Message),

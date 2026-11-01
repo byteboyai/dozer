@@ -302,6 +302,8 @@ pub struct Workspace {
     pub(crate) git_owner: u64,
     /// 订阅请求意图:每次 start_git_subscription 递增,ready 消息按它拒绝旧意图。
     pub(crate) git_subscription_request: u64,
+    /// 已接受快照的 Agent 投影版本,与订阅身份共同拒绝迟到后台结果。
+    pub(crate) agent_git_projection: crate::host_adapters::agent_git_projection::ProjectionState,
     /// 非 Git 目录没有工作区身份,runtime 拒绝订阅;退化为旧 `bytegit::watch`
     /// 只驱动文件树/预览刷新(不产生 Git 查询)。
     pub(crate) plain_watch: Option<bytegit::WatchHandle>,
@@ -604,6 +606,7 @@ impl Workspace {
             git_token: None,
             git_owner: next_git_owner(),
             git_subscription_request: 0,
+            agent_git_projection: Default::default(),
             plain_watch: None,
             disk_refresh_at: None,
             disk_refresh_inflight: false,

@@ -1038,18 +1038,17 @@ impl App {
             Message::ProjectTabClose(id) => self.project_tab_close(id),
             Message::ProjectSlotLoaded(id, payload) => self.project_slot_loaded(id, payload),
             Message::GitRuntimeEvent(event) => self.git_runtime_event(event),
-            Message::AgentGitProjection(project_id, token, tab_ids, branch, dirty) => {
-                if self.git_token_current(&token)
-                    && let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id)
+            Message::AgentGitProjection(projection) => {
+                if self.git_token_current(&projection.token)
+                    && let Some(ws) =
+                        loaded_workspace_mut(&mut self.projects, projection.project_id)
                 {
-                    let info = dozer_panel_agent::tabs::WorkspaceGitInfo { branch, dirty };
-                    for tab_id in tab_ids {
-                        dozer_panel_agent::card::apply_workspace_override(
-                            &mut ws.agent.tabs,
-                            tab_id,
-                            Some(info.clone()),
-                        );
-                    }
+                    ws.agent_git_projection.apply(
+                        projection.version,
+                        projection.tabs,
+                        projection.info,
+                        &mut ws.agent.tabs,
+                    );
                 }
             }
             Message::GitSubscriptionReady(project_id, owner, request, token) => {
@@ -2770,11 +2769,16 @@ impl App {
         )));
         // Agent tab 必须按真实 WorkspaceKey 匹配,不能只看 cwd 前缀:linked
         // worktree/嵌套仓库可以位于父工作区目录之下。身份解析放到后台。
+        // 即使新快照没有候选 tab,也必须撤销前一批后台解析的应用资格。
+        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+            return;
+        };
+        let version = ws.agent_git_projection.begin();
         let branch = head.and_then(|head| head.branch.clone());
         if let Some(workdir) = snapshot.identity.workdir_root()
             && let Some(key) = snapshot.identity.workspace_key().ok()
         {
-            let candidates: Vec<(usize, PathBuf)> = self
+            let candidates: Vec<crate::host_adapters::agent_git_projection::TabIdentity> = self
                 .projects
                 .get(&project_id)
                 .and_then(|slot| match slot {
@@ -2783,7 +2787,7 @@ impl App {
                             .tabs
                             .iter()
                             .filter(|tab| tab.effective_cwd().starts_with(workdir))
-                            .map(|tab| (tab.tab_id, tab.effective_cwd()))
+                            .map(crate::host_adapters::agent_git_projection::TabIdentity::capture)
                             .collect(),
                     ),
                     WorkspaceSlot::Stub { .. } => None,
@@ -2794,20 +2798,26 @@ impl App {
                 let proxy = self.proxy.clone();
                 self.handle.spawn(async move {
                     let mut matching = Vec::new();
-                    for (tab_id, cwd) in candidates {
+                    for identity in candidates {
                         let key = key.clone();
+                        let cwd = identity.cwd.clone();
                         let matched = tokio::task::spawn_blocking(move || {
                             resolved_workspace_key(&cwd).as_ref() == Some(&key)
                         })
                         .await
                         .unwrap_or(false);
                         if matched {
-                            matching.push(tab_id);
+                            matching.push(identity);
                         }
                     }
-                    let _ = proxy.send_event(Message::AgentGitProjection(
-                        project_id, token, matching, branch, dirty,
-                    ));
+                    let projection = crate::host_adapters::agent_git_projection::Projection {
+                        project_id,
+                        token,
+                        version,
+                        tabs: matching,
+                        info: dozer_panel_agent::tabs::WorkspaceGitInfo { branch, dirty },
+                    };
+                    let _ = proxy.send_event(Message::AgentGitProjection(Box::new(projection)));
                 });
             }
         }
