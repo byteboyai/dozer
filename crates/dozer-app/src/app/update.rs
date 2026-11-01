@@ -2729,9 +2729,13 @@ impl App {
             files::Message::SnapshotApplied(project_id, statuses, info),
         );
         if let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) {
-            ws.files.git_error = snapshot
-                .is_stale()
-                .then(|| "Git 状态暂不可用,保留上次成功结果".to_string());
+            ws.files.git_error = snapshot.is_stale().then(|| {
+                crate::i18n::host_text(
+                    "files.git_stale",
+                    "Git status is temporarily unavailable; showing the last successful result",
+                    self.locale.active_locale(),
+                )
+            });
         }
 
         let dirty = snapshot.status.last().is_some_and(|status| status.dirty);

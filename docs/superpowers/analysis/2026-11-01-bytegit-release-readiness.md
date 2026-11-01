@@ -191,7 +191,15 @@ Dozer panel boundary check                      通过
 | Digger | digger-hook | 2,755,776 | 24bd1ab4f0093a1a |
 | Digger | digger-mcp | 6,459,496 | 49d8c4132809e927 |
 
-Dozer release 构建耗时约 3m33s（最终 HEAD），Digger 约 1m39s；使用共享 target 目录，未安装/覆盖已安装应用。
+Dozer release 构建耗时约 3m34s（最终 HEAD），Digger 约 1m39s；使用共享 target 目录，未安装/覆盖已安装应用。
+
+隔离目录打包验证：
+
+- Dozer `.app`：`CFBundleShortVersionString` 与 `Cargo.toml` 一致（临时目录 0.5.314），`CFBundleVersion` 同步递增，四件套齐全，ad-hoc 签名。
+- Digger `.app`：版本 0.1.7、build 7，四件套齐全，ad-hoc 签名。
+- 发布前 i18n 门禁通过（`check-i18n.sh`，新增 clone cancel/timeout 与 stale 文案）。
+
+> 打包只在临时克隆执行；未调用主工作树的自动升版入口，未覆盖已安装应用。
 
 ## 4. 最终结论（未就绪）
 
