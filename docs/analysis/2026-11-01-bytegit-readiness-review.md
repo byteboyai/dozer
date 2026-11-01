@@ -2,7 +2,7 @@
 
 日期：2026-11-01。结论：**审核不通过，尚未具备发布条件。** 两产品确实新增了 runtime 接入，但依赖闭包未收口，接入层仍有订阅时序、目录刷新和失效分类问题。
 
-> 修复跟进（2026-11-01）：N1–N7 已修复并推送（bytegit `v0.9.1`、ByteUI `v0.5.1`、bytehost `v0.4.21`、Dozer `libs-2026-11-01c`）；两产品无本地 patch 克隆的 check/核心测试通过。剩余：CLI 可取消进程回收、release 四件套与 GUI/跨平台手工验收。详见执行记录 §3.5。
+> 修复跟进（2026-11-01）：N1–N7 已修复并推送（bytegit `v0.9.1`、ByteUI `v0.5.1`、bytehost `v0.4.21`、Dozer `libs-2026-11-01d`）；两产品无本地 patch 克隆的 check/核心测试通过。CLI 可取消进程 API 已在 bytegit `v0.9.2` 落地；剩余：产品取消 UI、release 四件套与 GUI/跨平台手工验收。详见执行记录 §3.5。
 
 依据：[交接计划](../superpowers/plans/2026-11-01-bytegit-release-readiness-handoff.md)、[规格](../superpowers/specs/2026-10-31-bytegit-refresh-optimization-design.md)、[执行方验收记录](../superpowers/analysis/2026-11-01-bytegit-release-readiness.md)。执行方记录自身也仍标记“进行中/未就绪”，不能将它解释成最终验收通过。
 
