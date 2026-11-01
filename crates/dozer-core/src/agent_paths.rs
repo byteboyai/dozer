@@ -103,6 +103,20 @@ pub fn v8agent_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
     project_dir_in(home, ".v8agent", cwd)
 }
 
+/// Qodercn 的项目目录:`~/.qoder-cn/projects/<cwd-key>`。目录编码与 Claude 一致
+/// ——所有非字母数字字符(含开头的 `/`)都换成短横线(实测
+/// `~/.qoder-cn/projects/` 下的真实目录名 `-Users-chrischiang-...`)。
+pub fn qodercn_project_dir(cwd: &Path) -> PathBuf {
+    qodercn_project_dir_in(&home_dir(), cwd)
+}
+
+/// `home` 显式传入版本,测试用(不碰 `HOME` 环境变量)。
+pub fn qodercn_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
+    home.join(".qoder-cn")
+        .join("projects")
+        .join(claude_project_key(cwd))
+}
+
 /// Goose 的 hook journal 存储目录:`~/.dozer/agents/goose/projects/<cwd-key>/`
 /// 下,每个 Dozer 会话一份 `<dozer-session-id>.jsonl`(见 spec D4)。这是
 /// Dozer 自有的 journal,不读也不写 Goose 自己的 `sessions.db`。
@@ -186,9 +200,11 @@ pub fn projects_root_in(agent: AgentKind, home: &Path) -> Option<PathBuf> {
         AgentKind::Claude => home.join(".claude").join("projects"),
         AgentKind::Codebuddy => home.join(".codebuddy").join("projects"),
         AgentKind::V8agent => home.join(".v8agent").join("projects"),
-        // Codex 按日期建目录(见 `codex_sessions_dir_in`);Qodercn 目前只做到 L1,
-        // 没有 transcript 解析;Unknown 不是 agent。
-        AgentKind::Unknown | AgentKind::Codex | AgentKind::Qodercn => return None,
+        // Qodercn 是 Claude 同款 JSONL 形状(见 `transcripts::parse` 的分派),
+        // 按项目建目录在 `~/.qoder-cn/projects/<cwd-key>`。Codex 按日期建
+        // 目录(见 `codex_sessions_dir_in`);Unknown 不是 agent。
+        AgentKind::Qodercn => home.join(".qoder-cn").join("projects"),
+        AgentKind::Unknown | AgentKind::Codex => return None,
     })
 }
 
@@ -202,7 +218,10 @@ pub fn project_session_dir_in(agent: AgentKind, home: &Path, cwd: &Path) -> Opti
         AgentKind::Goose => goose_project_dir_in(home, cwd),
         AgentKind::Aider => aider_project_dir_in(home, cwd),
         AgentKind::V8agent => v8agent_project_dir_in(home, cwd),
-        AgentKind::Unknown | AgentKind::Codex | AgentKind::Qodercn => return None,
+        // Qodercn 的项目子目录编码与 Claude 一致(所有非字母数字字符含开头
+        // 斜杠都换成短横线,见 `claude_project_key`)。
+        AgentKind::Qodercn => qodercn_project_dir_in(home, cwd),
+        AgentKind::Unknown | AgentKind::Codex => return None,
     })
 }
 
@@ -326,15 +345,18 @@ mod tests {
     }
 
     #[test]
-    fn agents_without_per_project_dirs_are_exactly_unknown_codex_qodercn() {
+    fn agents_without_per_project_dirs_are_exactly_unknown_and_codex() {
         let home = Path::new("/h");
         let none: Vec<_> = AgentKind::ALL
             .into_iter()
             .filter(|a| projects_root_in(*a, home).is_none())
             .collect();
-        assert_eq!(
-            none,
-            vec![AgentKind::Unknown, AgentKind::Codex, AgentKind::Qodercn]
-        );
+        assert_eq!(none, vec![AgentKind::Unknown, AgentKind::Codex]);
+    }
+
+    #[test]
+    fn qodercn_dir_uses_qoder_cn_root_with_claude_style_encoding() {
+        let d = qodercn_project_dir_in(Path::new("/home/u"), Path::new("/a/b/c"));
+        assert_eq!(d, PathBuf::from("/home/u/.qoder-cn/projects/-a-b-c"));
     }
 }

@@ -10,6 +10,22 @@ use std::time::Duration;
 
 const SUMMARY_START_MARKER: &str = "<<<DOZER_SUMMARY_JSON>>>";
 const SUMMARY_END_MARKER: &str = "<<<END_DOZER_SUMMARY_JSON>>>";
+/// Qodercn 只读总结/群聊共用:`-p` 只放一句指针(指向「上文」= 标准输入里
+/// 喂入的指示与对话记录),真正内容走 stdin。与 group_adapter 的 T3c 金丝雀
+/// 实测契约一致——qodercn 把 stdin 内容拼在 `-p` 文字之前。
+const QODERCN_SUMMARY_POINTER: &str =
+    "请严格按上文(标准输入)给出的指示与对话记录处理,只输出约定的结果。";
+/// Qodercn 只读:`--tools` 把内置工具集限定为读/搜(不放开再黑名单),实测
+/// 写文件/跑 shell/联网均无对应工具;黑名单是第二道防线。
+const QODERCN_TOOLS: &str = "Read,Grep,Glob";
+const QODERCN_DENIED_TOOLS: [&str; 6] = [
+    "Bash",
+    "Edit",
+    "Write",
+    "NotebookEdit",
+    "WebFetch",
+    "WebSearch",
+];
 const HEADLESS_TIMEOUT: Duration = Duration::from_secs(90);
 const TITLE_MAX_CHARS: usize = 100;
 const SUMMARY_MAX_CHARS: usize = 300;
@@ -124,9 +140,9 @@ pub(crate) fn bare_program_name(agent: AgentKind) -> Option<&'static str> {
         AgentKind::Goose => Some("goose"),
         AgentKind::Aider => Some("aider"),
         AgentKind::V8agent => Some("v8agent"),
-        // qodercn 本期(L1)只接入终端/hook/MCP,没有 headless 适配器:群聊发言、
-        // 会话总结、任务处理都不会选它。需要时先实测 `-p`/`--output-format` 与只读权限参数。
-        AgentKind::Qodercn => None,
+        // qodercn 接入 headless:群聊已随 T3c 金丝雀实测,总结复用同一套 `-p`
+        // + `--tools`/`--disallowed-tools` 只读契约(见 `build_command_parts`)。
+        AgentKind::Qodercn => Some("qodercn"),
         AgentKind::Unknown => None,
     }
 }
@@ -340,8 +356,26 @@ pub(crate) fn build_command_parts(
             cmd.env_remove(dozer_core::paths::session_env());
             Some((cmd, None))
         }
+        AgentKind::Qodercn => {
+            // 复用 group_adapter 已验证的只读契约:`-p` 放指针(指向 stdin 的
+            // 「上文」),指示 + 对话记录拼进 stdin;清 `DOZER_SESSION_ID` 防止
+            // 总结运行触发 hook/transcript 落库;`--no-session-persistence`
+            // 避免 `~/.qoder-cn/projects/` 下新增可恢复会话。
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.arg("-p")
+                .arg(QODERCN_SUMMARY_POINTER)
+                .arg("--no-session-persistence")
+                .arg("--tools")
+                .arg(QODERCN_TOOLS);
+            for tool in QODERCN_DENIED_TOOLS {
+                cmd.arg("--disallowed-tools").arg(tool);
+            }
+            cmd.env_remove(dozer_core::paths::session_env());
+            let stdin_text = format!("{instruction}\n\n{data}");
+            Some((cmd, Some(stdin_text.into_bytes())))
+        }
         // L1 不做 headless(见 `bare_program_name`)。
-        AgentKind::Qodercn | AgentKind::Unknown => None,
+        AgentKind::Unknown => None,
     }
 }
 
@@ -918,13 +952,32 @@ mod tests {
     }
 
     #[test]
-    fn qodercn_has_no_headless_adapter_yet() {
-        assert_eq!(bare_program_name(AgentKind::Qodercn), None);
-        assert!(build_command_parts(AgentKind::Qodercn, "qodercn", "i", "d").is_none());
+    fn qodercn_summary_uses_readonly_tool_contract() {
+        assert_eq!(bare_program_name(AgentKind::Qodercn), Some("qodercn"));
+        // 任务处理仍不在范围内(L3),但总结/群聊的 headless 适配器已就绪。
         assert!(
             build_task_command(AgentKind::Qodercn, "qodercn", Path::new("/tmp"), "s", "p")
                 .is_none()
         );
+        let (cmd, stdin) =
+            build_command_parts(AgentKind::Qodercn, "qodercn", "指令", "数据").unwrap();
+        let std_cmd = cmd.as_std();
+        assert_eq!(std_cmd.get_program(), "qodercn");
+        let args: Vec<String> = std_cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.contains(&"-p".to_string()));
+        assert!(args.contains(&"--no-session-persistence".to_string()));
+        assert!(args.contains(&"--tools".to_string()));
+        assert!(args.contains(&QODERCN_TOOLS.to_string()));
+        assert!(args.contains(&"--disallowed-tools".to_string()));
+        assert!(args.contains(&"Bash".to_string()));
+        assert!(args.contains(&"WebSearch".to_string()));
+        // 指示 + 数据经 stdin,不落在 `-p` 参数里。
+        let stdin_text = String::from_utf8_lossy(stdin.as_ref().unwrap());
+        assert!(stdin_text.contains("指令"));
+        assert!(stdin_text.contains("数据"));
     }
 
     #[test]

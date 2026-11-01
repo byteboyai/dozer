@@ -40,6 +40,19 @@ fn fallback_key(conversation_id: &str, turn_index: i64) -> String {
     format!("{conversation_id}:{turn_index}")
 }
 
+/// 读一行 JSONL 的 `timestamp`,统一成 epoch 毫秒。Claude/OpenCode/Qoder 都
+/// 走这条:数值(epoch 毫秒)直接采纳;ISO-8601 字符串(如
+/// `"2026-10-30T05:22:55.014Z"`,与 Codex 同款形状)经 `parse_codex_timestamp_ms`
+/// 转换。解析不出返回 None——只影响这一行的排序展示,不值得为极端形状 panic。
+fn parse_timestamp_ms(v: &Value) -> Option<u64> {
+    if let Some(n) = v.get("timestamp").and_then(|t| t.as_u64()) {
+        return Some(n);
+    }
+    v.get("timestamp")
+        .and_then(|t| t.as_str())
+        .and_then(parse_codex_timestamp_ms)
+}
+
 /// CLI 自己往 transcript 里注入的合成"人类消息"(斜杠命令回显、本地
 /// 命令的标准输出回显、local-command-caveat/system-reminder 包裹块)——
 /// 不是用户真正打的字,不该被当成一个对话回合摄取:既污染逐回合审阅
@@ -144,7 +157,7 @@ fn parse_claude_shaped_chunk(
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let ts = v.get("timestamp").and_then(|t| t.as_u64());
+        let ts = parse_timestamp_ms(&v);
         let message_key = v
             .get("uuid")
             .and_then(|u| u.as_str())
@@ -371,7 +384,7 @@ fn parse_codebuddy_shaped_chunk(
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let ts = v.get("timestamp").and_then(|t| t.as_u64());
+        let ts = parse_timestamp_ms(&v);
         let message_key = v
             .get("id")
             .and_then(|i| i.as_str())
@@ -929,9 +942,12 @@ pub fn parse_chunk(
         AgentKind::Codex => parse_codex_shaped_chunk(text, conversation_id, starting_turn_index),
         AgentKind::Goose => parse_goose_hook_chunk(text, conversation_id, starting_turn_index),
         AgentKind::Aider => parse_aider_chunk(text, conversation_id, starting_turn_index),
-        // qodercn 的 transcript 格式还没拿到真实对话样本(本机只有空会话),不猜形状:
-        // 本期(L1)不摄取,返回空,等 L2 用真实 payload 写解析。
-        AgentKind::Qodercn => Vec::new(),
+        // Qodercn 的 transcript 是 Claude 同款 JSONL 形状(实测本机
+        // `~/.qoder-cn/projects/<cwd>/<uuid>.jsonl` 与 Claude Code 字段一致,
+        // 含 `usage` token 字段),直接复用 Claude 解析器。
+        AgentKind::Qodercn => {
+            parse_claude_shaped_chunk(text, conversation_id, starting_turn_index, &MUTATING_TOOLS)
+        }
     }
 }
 
@@ -975,8 +991,8 @@ pub fn extract_turn_trace_detail(raw_json: &str, agent: AgentKind) -> TurnTraceD
         // Aider canonical 行只有 human/ai 文本,没有结构化工具/思考字段,
         // 读时补全维持全空(见 parse_aider_chunk)。
         AgentKind::Aider => TurnTraceDetail::default(),
-        // 同 `parse_chunk`:L1 不摄取 qodercn,所以也没有可读时补全的明细。
-        AgentKind::Qodercn => TurnTraceDetail::default(),
+        // Qodercn 复用 Claude 形状(见 `parse_chunk`),读时补全同样走 Claude 分支。
+        AgentKind::Qodercn => extract_claude_trace_detail(&v),
     }
 }
 
@@ -1134,10 +1150,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn qodercn_is_not_ingested_until_its_transcript_shape_is_known() {
-        // 即使喂一段看起来像 Claude 的行也不能猜着解析:L1 明确不摄取。
-        let line = r#"{"type":"user","message":{"role":"user","content":"hi"}}"#;
-        assert!(parse_chunk(AgentKind::Qodercn, line, "c1", 0).is_empty());
+    fn qodercn_transcript_is_parsed_via_claude_shape() {
+        // Qodercn 的 JSONL 与 Claude Code 同款,应产出人类回合并解析 ISO 时间戳。
+        let line = r#"{"type":"user","uuid":"u1","timestamp":"2026-10-30T05:22:55.014Z","message":{"role":"user","content":"把所有分支合并掉"}}"#;
+        let turns = parse_chunk(AgentKind::Qodercn, line, "c1", 0);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].role, "human");
+        assert_eq!(turns[0].content, "把所有分支合并掉");
+        assert!(turns[0].ts.is_some(), "ISO-8601 时间戳应被解析成毫秒");
+        // 用户行没有结构化工具/思考明细,读时补全回全空。
         let detail = extract_turn_trace_detail(line, AgentKind::Qodercn);
         assert_eq!(detail, TurnTraceDetail::default());
     }

@@ -466,12 +466,8 @@ impl TranscriptStore {
     /// dozerd 自己的 PTY session id(两者是不同的 id 空间:后者只在
     /// agent 活着时存在,回填历史文件时根本没有)。
     pub fn ingest_session(&self, agent: AgentKind, file_path: &Path) -> Result<()> {
-        // qodercn 本期(L1)没有 transcript 解析器(还没拿到真实对话样本)。它的每个 hook 事件都带
-        // transcript_path,走到这里;若放行,会建出 0 轮的空会话行并把 `parsed_offset` 推到文件尾,
-        // L2 上线后这段内容就读不到了。所以在碰任何文件/数据库之前直接返回。
-        if agent == AgentKind::Qodercn {
-            return Ok(());
-        }
+        // Qodercn 的 transcript 是 Claude 同款 JSONL(见 `transcripts::parse`
+        // 的分派),现在正常摄取,不再提前返回。
         let conversation_id = conversation_id_for_path(file_path).ok_or_else(|| {
             anyhow::anyhow!("无法从文件名派生 conversation_id: {}", file_path.display())
         })?;
@@ -1107,10 +1103,10 @@ mod tests {
         assert_eq!(agent_from_str("something-new"), AgentKind::Unknown);
     }
 
-    /// qodercn 每个 hook 事件都带 transcript_path,会走到 `ingest_session`。L1 没有它的解析器:
-    /// 不能建 0 轮的空会话行,更不能推进 `parsed_offset`——否则 L2 上线后已有内容会被跳过。
+    /// qodercn 的 transcript 是 Claude 同款 JSONL,现在走 Claude 解析器摄取:
+    /// 应建出会话行 + 回合行,且 `agent_kind` 记成 `qodercn`。
     #[test]
-    fn ingesting_a_qodercn_transcript_has_no_side_effects_yet() {
+    fn ingesting_a_qodercn_transcript_creates_conversation_and_turns() {
         let tmp = tempfile::tempdir().unwrap();
         let store = TranscriptStore::open(&tmp.path().join("dozer.db")).unwrap();
         let file = tmp
@@ -1118,7 +1114,7 @@ mod tests {
             .join("11111111-2222-3333-4444-555555555555.jsonl");
         std::fs::write(
             &file,
-            "{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":100,\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
         )
         .unwrap();
 
@@ -1131,11 +1127,15 @@ mod tests {
         let turns: i64 = conn
             .query_row("SELECT COUNT(*) FROM conversation_turns", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(
-            (conversations, turns),
-            (0, 0),
-            "L1 不摄取 qodercn,不留任何痕迹"
-        );
+        assert_eq!((conversations, turns), (1, 1), "qodercn 现在应被摄取");
+        let agent: String = conn
+            .query_row(
+                "SELECT agent_kind FROM conversations WHERE conversation_id = ?1",
+                ["11111111-2222-3333-4444-555555555555"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(agent, "qodercn");
     }
 
     fn fixture(dir: &Path, name: &str, content: &str) -> std::path::PathBuf {

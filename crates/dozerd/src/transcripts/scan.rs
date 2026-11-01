@@ -302,4 +302,34 @@ mod tests {
         assert_eq!(found[0].0, AgentKind::Codex);
         assert!(found[0].1.ends_with("rollout-a.jsonl"));
     }
+
+    #[test]
+    fn discover_all_transcript_files_in_includes_qodercn() {
+        let home = tempfile::tempdir().unwrap();
+        let qoder_dir = dozer_core::agent_paths::qodercn_project_dir_in(
+            home.path(),
+            std::path::Path::new("/proj/a"),
+        );
+        std::fs::create_dir_all(&qoder_dir).unwrap();
+        std::fs::write(qoder_dir.join("s1.jsonl"), "{}").unwrap();
+
+        let mut found = discover_all_transcript_files_in(home.path());
+        found.sort_by_key(|(_, p)| p.to_string_lossy().into_owned());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, AgentKind::Qodercn);
+        assert!(found[0].1.ends_with("s1.jsonl"));
+    }
+
+    #[test]
+    fn discover_project_transcript_files_in_includes_qodercn_by_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = std::path::Path::new("/proj/a");
+        let qoder_dir = dozer_core::agent_paths::qodercn_project_dir_in(home.path(), cwd);
+        std::fs::create_dir_all(&qoder_dir).unwrap();
+        std::fs::write(qoder_dir.join("s1.jsonl"), "{}").unwrap();
+
+        let found = discover_project_transcript_files_in(home.path(), cwd);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, AgentKind::Qodercn);
+    }
 }
