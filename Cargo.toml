@@ -61,4 +61,4 @@ byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.5.1" }
 # bytegit Git 底层：tag 只在这里钉一次，消费 crate 用 `bytegit.workspace = true`，
 # 需要 watch/testutil 的 crate 在自身清单里补 `features = [...]`（features 会合并）。
 # 升级 bytegit 时只改这一段；本地联调仍用不提交的 `.cargo/config.toml` patch。
-bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.9.1" }
+bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.9.2" }
