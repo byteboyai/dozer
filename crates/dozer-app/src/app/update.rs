@@ -2727,6 +2727,11 @@ impl App {
             project_id,
             files::Message::SnapshotApplied(project_id, statuses, info),
         );
+        if let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) {
+            ws.files.git_error = snapshot
+                .is_stale()
+                .then(|| "Git 状态暂不可用,保留上次成功结果".to_string());
+        }
 
         let dirty = snapshot.status.last().is_some_and(|status| status.dirty);
         let mut seen = std::collections::HashSet::new();
