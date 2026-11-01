@@ -125,7 +125,9 @@ mod tests {
         // 切到 B:必须清掉旧 in-flight,并且 B 能立刻启动自己的刷新。
         ws.reset_for_project(FileTree::new(root.clone()));
         ws.file_tree.as_mut().unwrap().toggle(&root);
-        let new = ws.begin_tree_refresh(&[], true).expect("新项目应能启动刷新");
+        let new = ws
+            .begin_tree_refresh(&[], true)
+            .expect("新项目应能启动刷新");
         assert!(new.generation > old.generation);
         assert!(
             ws.apply_tree_refresh(old.generation, vec![]).is_none(),

@@ -297,6 +297,7 @@ pub struct Workspace {
     /// 磁盘占用最近一次启动时间:工作区事件连续到来时按 10s 最短间隔合并,
     /// 激活/打开/回合结束走 force。
     pub(crate) disk_refresh_at: Option<std::time::Instant>,
+    pub(crate) disk_refresh_inflight: bool,
     /// Project 信息面板 per-project 状态——见 `extensions::project::WorkspaceState`。
     pub(crate) project_panel: project::WorkspaceState,
     /// 预览 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
@@ -473,6 +474,9 @@ impl Workspace {
     /// 10s 最短间隔,避免构建产物连续写入时反复遍历目录。
     pub(crate) fn spawn_disk_usage(&mut self, io: &ShellIo, force: bool) {
         let now = std::time::Instant::now();
+        if self.disk_refresh_inflight {
+            return;
+        }
         if !force
             && self
                 .disk_refresh_at
@@ -484,6 +488,7 @@ impl Workspace {
             return;
         };
         self.disk_refresh_at = Some(now);
+        self.disk_refresh_inflight = true;
         spawn_disk_usage_refresh(project.id, PathBuf::from(&project.path), io);
     }
 
@@ -594,6 +599,7 @@ impl Workspace {
             git_subscription_request: 0,
             plain_watch: None,
             disk_refresh_at: None,
+            disk_refresh_inflight: false,
             preview_tab_first: 0,
             preview_tab_overflow_anchor: None,
             project_preview_tab_first: 0,

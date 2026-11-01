@@ -1528,6 +1528,9 @@ impl App {
                 let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
                     return;
                 };
+                if matches!(msg, project::Message::DiskUsageLoaded(..)) {
+                    ws.disk_refresh_inflight = false;
+                }
                 let Some(project) = ws.project.as_ref() else {
                     return;
                 };

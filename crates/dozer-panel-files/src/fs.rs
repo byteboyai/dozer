@@ -27,6 +27,8 @@ struct Entry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirSnapshot {
     pub dir: PathBuf,
+    /// 后台读取时目录是否仍存在;UI 合并不再做 `is_dir` 系统调用。
+    pub exists: bool,
     pub entries: Vec<DirEntryData>,
 }
 
@@ -72,6 +74,7 @@ pub fn read_dir_snapshots(request: &TreeRefreshRequest) -> Vec<DirSnapshot> {
         .iter()
         .map(|dir| DirSnapshot {
             dir: dir.clone(),
+            exists: dir.is_dir(),
             entries: read_children_data(dir, request.show_dotfiles),
         })
         .collect()
@@ -244,7 +247,7 @@ impl FileTree {
     pub fn apply_dir_snapshots(&mut self, snapshots: Vec<DirSnapshot>) {
         self.search.get_mut().take();
         for snapshot in snapshots {
-            if snapshot.dir.is_dir() {
+            if snapshot.exists {
                 self.children.insert(
                     snapshot.dir,
                     snapshot.entries.into_iter().map(Entry::from).collect(),
