@@ -154,7 +154,7 @@ cargo test --locked -p dozer-panel-files      161 passed
 
 | 项 | 处理 | 证据 |
 |---|---|---|
-| N1 远端依赖 | bytegit `v0.9.1`、ByteUI `v0.5.1`、bytehost `v0.4.21` 已发布；Dozer `libs-2026-11-01b`（`e19c0966`）已推送；Digger 全部共享依赖切到该 tag | 无 patch 克隆：Dozer 1138 passed；Digger 717 passed；`cargo tree` 单一 bytegit/git2 |
+| N1 远端依赖 | bytegit `v0.9.1`、ByteUI `v0.5.1`、bytehost `v0.4.21` 已发布；Dozer `libs-2026-11-01c`（`659453c9`）已推送；Digger 全部共享依赖切到该 tag | 无 patch 克隆：Dozer 1138 passed；Digger 717 passed；`cargo tree` 单一 bytegit/git2 |
 | N2 切项目 in-flight | `reset_for_project` 清 pending/in-flight 并推进 generation | `switching_projects_cancels_the_old_inflight_tree_refresh` |
 | N3 订阅意图乱序 | discover 前分配 intent；runtime 拒绝旧 intent；宿主用 request generation 拒绝旧 ready | runtime `a_late_older_subscribe_intent...`；宿主 request 校验 |
 | N4 首快照早于 ready | ready 后显式 `refresh_manual`，保证至少一次有效结果 | 宿主 ready 分支 |
@@ -170,6 +170,8 @@ Dozer  cargo test -p dozer-app                  1138 passed, 2 ignored
 Dozer  runtime/panels/usage/store 测试          全部通过
 Digger cargo check -p digger-desktop            通过
 Digger cargo test --lib -p digger-desktop       717 passed
+两产品 check-shared-deps.sh --offline          通过
+Dozer panel boundary check                      通过
 ```
 
 ## 4. 最终结论（未就绪）
