@@ -373,12 +373,9 @@ pub fn update(
                 tree.set_show_dotfiles(!tree.dotfiles_shown());
             }
         }
-        Message::GitInfoLoaded(_, info) => {
-            ws_state.git_loaded = true;
-            ws_state.git_is_repo = info.is_repo;
-            ws_state.current_branch = info.current_branch;
-            ws_state.current_branch_has_commits = info.current_branch_has_commits;
-            ws_state.git_branches = info.branches;
+        Message::GitInfoLoaded(_, info) => apply_git_info(ws_state, info),
+        Message::SnapshotApplied(_, statuses, info) => {
+            ws_state.apply_snapshot(statuses, info);
         }
         Message::BranchPickerOpen => {
             // 弹层外观归产品,库只把内容排进请求队列;`branch_picker_open`
@@ -825,6 +822,15 @@ pub fn update(
         // app 层拦截口径)。
         Message::TabContextMenuCloseTab(_, _) => {}
     }
+}
+
+/// 把分支栏信息落到面板状态(legacy `GitInfoLoaded` 与组合快照共用)。
+fn apply_git_info(ws_state: &mut WorkspaceState, info: GitInfo) {
+    ws_state.git_loaded = true;
+    ws_state.git_is_repo = info.is_repo;
+    ws_state.current_branch = info.current_branch;
+    ws_state.current_branch_has_commits = info.current_branch_has_commits;
+    ws_state.git_branches = info.branches;
 }
 
 /// 异步加载一次 git 仓库信息:判项目根是否在仓库内、读当前分支、读本地分支

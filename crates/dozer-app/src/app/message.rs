@@ -321,12 +321,14 @@ pub enum Message {
     /// `update` 在 UI 线程上装配成 `Workspace`,替换掉那份"加载中"占位
     /// (载荷是一次性信封,见 [`RestorePayload`])。
     ProjectSlotLoaded(i64, RestorePayload),
-    /// 项目:`bytegit::watch` 监听到工作区/`.git` 引用变化,该重新跑一次 git 刷新
-    /// 了(D4)。`GitChange::refs_changed` 决定这次触发要不要顺带做 Plan 2 的
-    /// Git Log 快照重建。这条消息同时喂给 Files(刷新 git_statuses)、Project(刷新
-    /// branch/dirty)和 Git Log(条件触发快照重建)三个独立扩展,
-    /// 内核继续拦截、分别转发,不包进任何一个 extension 的 `Message`。
-    ProjectFsChanged(ProjectId, bytegit::GitChange),
+    /// 共享 GitRuntime 的事件:监听批次或已校验的工作区快照。
+    GitRuntimeEvent(dozer_git_runtime::RuntimeEvent),
+    /// 共享 GitRuntime 返回的订阅 token(异步解析身份后落回)。
+    GitSubscriptionReady(ProjectId, u64, dozer_git_runtime::SubscriptionToken),
+    /// 非 Git 目录的旧式监听事件:只刷新树/预览/磁盘,不产生 Git 查询。
+    PlainFsChanged(ProjectId, bytegit::GitChange),
+    /// 后台目录读取结果:宿主按 generation 合并,必要时继续下一轮。
+    FilesTreeRefresh(ProjectId, u64, Vec<dozer_panel_files::fs::DirSnapshot>),
     /// Git Log 面板的全部消息,内核只转发不解读——见
     /// `extensions::git_log::Message`。
     GitLog(git_log::Message),

@@ -134,6 +134,18 @@ pub fn apply_refresh(
     tab.workspace_override = workspace;
 }
 
+/// 宿主已验证 token 后,直接把同一工作区快照投影到某个 tab 的卡片。
+/// `None` 表示 cwd 回到项目根、不再需要独立的工作区覆盖。
+pub fn apply_workspace_override(
+    tabs: &mut [SessionTab],
+    tab_id: usize,
+    workspace: Option<WorkspaceGitInfo>,
+) {
+    if let Some(tab) = tabs.iter_mut().find(|t| t.tab_id == tab_id) {
+        tab.workspace_override = workspace;
+    }
+}
+
 /// agent 会话当前 cwd 所属仓库的分支/脏标。
 pub fn workspace_git_info(cwd: &Path) -> Option<WorkspaceGitInfo> {
     let repo = bytegit::Repo::discover_workdir(cwd).ok()?;
@@ -278,6 +290,39 @@ mod tests {
 
         // workspace 的 None 必须无条件清除覆盖。
         apply_refresh(&mut tabs, 1, None, None, None, None);
+        assert!(tabs[0].workspace_override.is_none());
+    }
+
+    #[test]
+    fn a_host_snapshot_can_set_and_clear_a_tabs_workspace_override() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut tabs = vec![tab(rt.handle())];
+        apply_workspace_override(
+            &mut tabs,
+            1,
+            Some(WorkspaceGitInfo {
+                branch: Some("other".into()),
+                dirty: true,
+            }),
+        );
+        assert_eq!(
+            tabs[0]
+                .workspace_override
+                .as_ref()
+                .map(|w| w.branch.as_deref()),
+            Some(Some("other"))
+        );
+        apply_workspace_override(&mut tabs, 1, None);
+        assert!(tabs[0].workspace_override.is_none());
+        // 已关闭的 tab 不受影响。
+        apply_workspace_override(
+            &mut tabs,
+            999,
+            Some(WorkspaceGitInfo {
+                branch: Some("x".into()),
+                dirty: false,
+            }),
+        );
         assert!(tabs[0].workspace_override.is_none());
     }
 

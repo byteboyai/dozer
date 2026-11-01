@@ -1,0 +1,37 @@
+--- a/src/workspace_watch.rs
++++ b/src/workspace_watch.rs
+@@ -1517,3 +1517,34 @@
+         RepoIdentity::for_test(Some(path.clone()), path.join(".git"), path.join(".git"))
+     }
+ }
++
++#[cfg(test)]
++mod audit_regressions {
++    use super::*;
++    #[test]
++    fn audit_rescan_flag_must_override_an_irrelevant_path() {
++        let id=RepoIdentity::for_test(Some("/r".into()),"/r/.git".into(),"/r/.git".into());
++        let c=Classifier::new(&id).unwrap();
++        let event=notify::Event::new(notify::EventKind::Other)
++            .add_path("/r/.git/objects/x".into())
++            .set_flag(notify::event::Flag::Rescan);
++        assert!(event.need_rescan());
++        assert!(c.classify_event(&event).kinds.contains(WorkspaceChangeKind::FULL_RESCAN),"backend requested rescan but classifier discarded it");
++    }
++}
++
++#[cfg(test)]
++mod audit_target_regressions {
++    use super::*;
++    #[test]
++    fn audit_linked_worktree_must_watch_common_exclude() {
++        let id=RepoIdentity::for_test(Some("/w".into()),"/main/.git/worktrees/w".into(),"/main/.git".into());
++        let c=Classifier::new(&id).unwrap();
++        let targets=extra_targets(&c);
++        let excluded=Path::new("/main/.git/info/exclude");
++        assert!(targets.iter().any(|t| match t.mode {
++            notify::RecursiveMode::Recursive => excluded.starts_with(&t.path),
++            notify::RecursiveMode::NonRecursive => excluded.parent()==Some(t.path.as_path()),
++        }),"common info/exclude is classified as CONFIG but has no watcher target: {targets:?}");
++    }
++}

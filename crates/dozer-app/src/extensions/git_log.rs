@@ -314,6 +314,7 @@ pub enum Message {
     SnapshotLoaded(
         PathBuf,
         usize,
+        u64,
         Result<GitLogSnapshot, dozer_model::LocalizedText>,
     ),
     /// 点文件列表某一行,选中它(右下面板据此展示该文件的 diff)。
@@ -366,7 +367,14 @@ pub struct LoadedDiff {
 /// Git Log 面板的全部状态。现在挂在 `App`(不按项目分,见设计文档"非
 /// 目标"——这次纯重构不改这个现状),以后要改成按项目分的话,类型本身
 /// 不用变,只是挪个持有位置。
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingSnapshot {
+    repo_path: PathBuf,
+    max_count: usize,
+    generation: u64,
+}
+
+#[derive(Default, Debug, Clone)]
 pub struct State {
     cache: Option<GitLogSnapshot>,
     error: Option<dozer_model::LocalizedText>,
@@ -399,9 +407,12 @@ pub struct State {
     /// `(commit, path)`。跟 `loaded_diff` 的 `(commit, path)` 不一致就还
     /// 需要再推一次;webview 那一帧还没进池就不写,下一帧重试,内容不丢。
     diff_sent_for: Option<(CommitId, String)>,
-    /// 最近一次派发的 `build` 请求 (repo_path, max_count)——落地时核对
-    /// 还对不对得上"现在真正需要的",不对就丢弃。
-    pending: Option<(PathBuf, usize)>,
+    /// 最近一次派发的 `build` 请求——落地时核对 generation 还对不对得上
+    /// "现在真正需要的",不对就丢弃。相同 path/max_count 的重复请求也各有
+    /// 唯一 generation,旧结果不能清掉最新 pending。
+    pending: Option<PendingSnapshot>,
+    /// 单调递增的快照请求版本。
+    next_generation: u64,
     /// 面板底部分支下拉是否展开。
     branch_picker_open: bool,
     /// 当前仓库的本地分支列表(`bytegit::Repo::local_branches` 结果缓存,内核在
@@ -693,9 +704,12 @@ pub fn update(
             // 否则:项目已切换,或用户点了别的提交——这份结果过期了,丢弃。
             None
         }
-        Message::SnapshotLoaded(repo_path, max_count, result) => {
-            let still_pending = state.pending.as_ref().map(|(p, m)| (p.as_path(), *m))
-                == Some((repo_path.as_path(), max_count));
+        Message::SnapshotLoaded(repo_path, max_count, generation, result) => {
+            let still_pending = state.pending.as_ref().is_some_and(|pending| {
+                pending.generation == generation
+                    && pending.repo_path == repo_path
+                    && pending.max_count == max_count
+            });
             if !still_pending {
                 return None;
             }
@@ -775,7 +789,13 @@ pub fn request_refresh(
 ) {
     state.selected = None;
     state.detail = None;
-    state.pending = Some((repo_path.clone(), max_count));
+    state.next_generation = state.next_generation.wrapping_add(1);
+    let generation = state.next_generation;
+    state.pending = Some(PendingSnapshot {
+        repo_path: repo_path.clone(),
+        max_count,
+        generation,
+    });
     handle.spawn(async move {
         let repo_path2 = repo_path.clone();
         let result = match tokio::task::spawn_blocking(move || build(&repo_path2, max_count)).await
@@ -794,7 +814,9 @@ pub fn request_refresh(
                 &[("e", &e.to_string())],
             )),
         };
-        emit(Message::SnapshotLoaded(repo_path, max_count, result));
+        emit(Message::SnapshotLoaded(
+            repo_path, max_count, generation, result,
+        ));
     });
 }
 
@@ -3068,13 +3090,17 @@ mod tests {
     async fn snapshot_loaded_lands_when_pending_matches() {
         let repo_path = PathBuf::from("/tmp/repo");
         let mut state = State {
-            pending: Some((repo_path.clone(), 10)),
+            pending: Some(PendingSnapshot {
+                repo_path: repo_path.clone(),
+                max_count: 10,
+                generation: 7,
+            }),
             ..State::default()
         };
         let handle = tokio::runtime::Handle::current();
         let result = update(
             &mut state,
-            Message::SnapshotLoaded(repo_path.clone(), 10, Ok(snapshot_at(&repo_path, 10))),
+            Message::SnapshotLoaded(repo_path.clone(), 10, 7, Ok(snapshot_at(&repo_path, 10))),
             &handle,
             |_| {},
         );
@@ -3088,18 +3114,74 @@ mod tests {
     async fn snapshot_loaded_discarded_when_pending_mismatches() {
         let repo_path = PathBuf::from("/tmp/repo");
         let mut state = State {
-            pending: Some((repo_path.clone(), 10)),
+            pending: Some(PendingSnapshot {
+                repo_path: repo_path.clone(),
+                max_count: 10,
+                generation: 7,
+            }),
             ..State::default()
         };
         let handle = tokio::runtime::Handle::current();
         update(
             &mut state,
-            Message::SnapshotLoaded(repo_path.clone(), 20, Ok(snapshot_at(&repo_path, 20))),
+            Message::SnapshotLoaded(repo_path.clone(), 20, 8, Ok(snapshot_at(&repo_path, 20))),
             &handle,
             |_| {},
         );
         assert!(state.cache.is_none(), "max_count 对不上,不该落地");
-        assert_eq!(state.pending, Some((repo_path, 10)), "pending 也不该被清掉");
+        assert_eq!(
+            state.pending,
+            Some(PendingSnapshot {
+                repo_path,
+                max_count: 10,
+                generation: 7,
+            }),
+            "pending 也不该被清掉"
+        );
+    }
+
+    #[tokio::test]
+    async fn older_result_cannot_clear_a_newer_request_with_the_same_path_and_count() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let mut state = State::default();
+        let handle = tokio::runtime::Handle::current();
+        request_refresh(&mut state, repo_path.clone(), 50, &handle, |_| {});
+        let older = state.pending.as_ref().unwrap().generation;
+        request_refresh(&mut state, repo_path.clone(), 50, &handle, |_| {});
+        let newer = state.pending.as_ref().unwrap().generation;
+        assert!(newer > older);
+
+        update(
+            &mut state,
+            Message::SnapshotLoaded(
+                repo_path.clone(),
+                50,
+                older,
+                Ok(snapshot_at(&repo_path, 50)),
+            ),
+            &handle,
+            |_| {},
+        );
+        assert!(state.cache.is_none(), "旧结果不能落地");
+        assert_eq!(
+            state.pending.as_ref().map(|pending| pending.generation),
+            Some(newer),
+            "旧结果不能清掉最新 pending"
+        );
+
+        update(
+            &mut state,
+            Message::SnapshotLoaded(
+                repo_path.clone(),
+                50,
+                newer,
+                Ok(snapshot_at(&repo_path, 50)),
+            ),
+            &handle,
+            |_| {},
+        );
+        assert!(state.cache.is_some());
+        assert!(state.pending.is_none());
     }
 
     #[tokio::test]
@@ -3107,7 +3189,11 @@ mod tests {
         let repo_path = PathBuf::from("/tmp/repo");
         let mut state = State {
             cache: Some(snapshot_at(&repo_path, 10)),
-            pending: Some((repo_path.clone(), 10)),
+            pending: Some(PendingSnapshot {
+                repo_path: repo_path.clone(),
+                max_count: 10,
+                generation: 7,
+            }),
             ..State::default()
         };
         let handle = tokio::runtime::Handle::current();
@@ -3116,6 +3202,7 @@ mod tests {
             Message::SnapshotLoaded(
                 repo_path,
                 10,
+                7,
                 Err(dozer_model::LocalizedText::literal(GIT_LOG_OWNER, "boom")),
             ),
             &handle,
@@ -3180,7 +3267,11 @@ mod tests {
         request_refresh(&mut state, repo_path.clone(), 50, &handle, |_| {});
         assert!(state.selected.is_none());
         assert!(state.detail.is_none());
-        assert_eq!(state.pending, Some((repo_path, 50)));
+        assert!(
+            state.pending.as_ref().is_some_and(|pending| {
+                pending.repo_path == repo_path && pending.max_count == 50
+            })
+        );
     }
 
     /// 切项目的重建入口必须把旧项目的快照/diff 侧状态全清掉——否则新快照
@@ -3220,7 +3311,11 @@ mod tests {
         // request_refresh 的既有语义原样保留:选中/详情清空 + 记录 pending。
         assert!(state.selected.is_none());
         assert!(state.detail.is_none());
-        assert_eq!(state.pending, Some((new_repo, 50)));
+        assert!(
+            state.pending.as_ref().is_some_and(|pending| {
+                pending.repo_path == new_repo && pending.max_count == 50
+            })
+        );
     }
 
     fn make_commit_row(summary: &str) -> CommitRow {

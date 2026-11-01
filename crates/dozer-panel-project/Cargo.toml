@@ -14,8 +14,8 @@ dozer-i18n = { path = "../dozer-i18n" }
 dozer-panel-host = { path = "../dozer-panel-host" }
 byteui.workspace = true
 bytehost-core.workspace = true
-# "修复项目"的 git init 步骤;与 dozer-app 用同一个 tag,保证图里只有一份 bytegit。
-bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1" }
+# "修复项目"的 git init 步骤;tag 统一在 workspace 声明,保证图里只有一份 bytegit。
+bytegit.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

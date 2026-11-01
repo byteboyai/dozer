@@ -887,24 +887,29 @@ pub(crate) async fn load_home_recents(
         let mut files: Vec<HomeRecentFile> = Vec::new();
         for p in &projects_owned {
             let cwd = PathBuf::from(&p.path);
-            if let Ok(repo) = bytegit::Repo::discover_workdir(&cwd) {
-                for (path, _status) in git_status::file_statuses(repo.root()) {
-                    let Ok(meta) = std::fs::metadata(&path) else {
-                        continue; // 路径已在磁盘消失(用户手动删了),静默跳过(spec §4)
-                    };
-                    let modified_ms = meta
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0);
-                    files.push(HomeRecentFile {
-                        project_id: p.id,
-                        path,
-                        project_name: p.name.clone(),
-                        modified_ms,
-                    });
+            // 只看项目子树,不看整个仓库;同仓库的其它项目各自保留关联。
+            for (path, status) in git_status::file_statuses(&cwd) {
+                if status.ignored {
+                    continue; // 忽略目录/文件的 mtime 不能冒充"最近文件"
                 }
+                let Ok(meta) = std::fs::metadata(&path) else {
+                    continue; // 路径已在磁盘消失(用户手动删了),静默跳过(spec §4)
+                };
+                if !meta.is_file() {
+                    continue; // 只收普通文件(排除目录/设备/符号链接目标异常)
+                }
+                let modified_ms = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                files.push(HomeRecentFile {
+                    project_id: p.id,
+                    path,
+                    project_name: p.name.clone(),
+                    modified_ms,
+                });
             }
         }
         files
@@ -996,6 +1001,43 @@ mod tests {
         assert_eq!(files[0].project_id, 1, "卡片点击应带回所属项目 id");
         assert!(files[0].path.ends_with("a.txt"));
         assert!(convs.is_empty(), "两个项目都没有 daemon 返回的会话");
+    }
+
+    #[tokio::test]
+    async fn load_home_recents_uses_the_project_subtree_and_skips_ignored_files() {
+        let repo = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(repo.path())
+            .status()
+            .unwrap();
+        std::fs::write(repo.path().join(".gitignore"), "*.log\n").unwrap();
+        std::fs::create_dir(repo.path().join("proj")).unwrap();
+        std::fs::write(repo.path().join("outside.txt"), "x").unwrap();
+        std::fs::write(repo.path().join("proj/inside.txt"), "x").unwrap();
+        std::fs::write(repo.path().join("proj/ignored.log"), "x").unwrap();
+
+        let projects = vec![ProjectInfo {
+            id: 7,
+            path: repo.path().join("proj").to_string_lossy().into_owned(),
+            name: "sub".into(),
+            last_active_ms: 0,
+            created_ms: 0,
+            updated_ms: 0,
+        }];
+        let (files, _) = load_home_recents(&client_for_test(), &projects).await;
+        assert!(
+            files.iter().any(|f| f.path.ends_with("inside.txt")),
+            "项目子树内的文件应入选: {files:?}"
+        );
+        assert!(
+            !files.iter().any(|f| f.path.ends_with("outside.txt")),
+            "仓库根下、项目外文件不能进入: {files:?}"
+        );
+        assert!(
+            !files.iter().any(|f| f.path.ends_with("ignored.log")),
+            "ignored 文件不能冒充最近文件: {files:?}"
+        );
     }
 
     #[tokio::test]

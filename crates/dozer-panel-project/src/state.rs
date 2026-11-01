@@ -172,6 +172,13 @@ impl WorkspaceState {
     }
 
     /// 项目级分支名(Project 面板/Agent 卡片工作区行共用读口)。
+    /// 宿主已验证 token 的组合快照:纯写入,不查询、不等待。
+    pub fn apply_git_snapshot(&mut self, snapshot: GitSnapshot) {
+        self.branch = snapshot.branch;
+        self.dirty = snapshot.dirty;
+        self.remote_url = snapshot.remote_urls;
+    }
+
     pub fn branch(&self) -> Option<&str> {
         self.branch.as_deref()
     }
@@ -332,6 +339,14 @@ pub enum ProjectToolbarTarget {
     Memory,
 }
 
+/// 组合快照里与 Project 面板有关的部分。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GitSnapshot {
+    pub branch: Option<String>,
+    pub dirty: bool,
+    pub remote_urls: Vec<String>,
+}
+
 /// 组合 git 刷新结果里跟 Project 有关的部分(`branch`/`dirty`/`remote_url`)、
 /// daemon 改名结果。`GitRefreshed`/`NameRenamed` 由产品内核分发,带 `project_id`,
 /// 走"按项目路由";其余是用户交互消息。
@@ -345,6 +360,8 @@ pub enum Message {
     /// 面板头部"＋"按钮 hover 动画上报,见 [`ProjectToolbarTarget`] 文档。
     ToolbarHover(ProjectToolbarTarget, bool),
     GitRefreshed(i64, Option<String>, bool, Vec<String>),
+    /// 宿主已验证 token 的纯数据入口:不查询、不等待,只应用同一份工作区快照。
+    SnapshotApplied(i64, GitSnapshot),
     /// 磁盘占用统计结果(排除构建产物后的字节数)。
     DiskUsageLoaded(i64, u64),
     /// daemon 改名结果。带 `project_id`,走"按项目路由"。
@@ -502,6 +519,7 @@ impl Message {
     pub fn result_project(&self) -> Option<i64> {
         match self {
             Self::AsyncResult(token, _) => dozer_panel_host::project_of(token.scope()),
+            Self::SnapshotApplied(id, _) => Some(*id),
             _ => None,
         }
     }

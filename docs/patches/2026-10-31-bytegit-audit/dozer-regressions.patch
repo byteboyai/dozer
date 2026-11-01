@@ -1,0 +1,66 @@
+--- a/crates/dozer-git-runtime/tests/runtime.rs
++++ b/crates/dozer-git-runtime/tests/runtime.rs
+@@ -616,3 +616,63 @@
+         identity(&repo).workdir_root().unwrap()
+     );
+ }
++
++// Review regressions: expected correct behavior; added only in the audit copy.
++#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
++async fn audit_unsubscribe_must_not_release_a_running_query_permit() {
++    let repo = TempRepo::new();
++    let blocker = Blocker::closed();
++    let backend = TestBackend::with_blocker(identity(&repo), blocker.clone());
++    let (runtime, _events) = GitRuntime::start_with(config().with_max_concurrent_queries(1), backend.clone(), TestClock::new());
++    let first = runtime.subscribe(1, repo.path(), true).await.unwrap();
++    wait_until(|| backend.query_calls.load(Ordering::SeqCst) == 1).await;
++    runtime.unsubscribe(&first);
++    let _second = runtime.subscribe(1, repo.path(), true).await.unwrap();
++    // Wait at most 200ms for the incorrectly admitted second task. Always release
++    // backend work before asserting, so tokio shutdown never hangs on the probe.
++    for _ in 0..20 {
++        if backend.query_calls.load(Ordering::SeqCst) > 1 { break; }
++        tokio::time::sleep(Duration::from_millis(10)).await;
++    }
++    let observed = backend.max_in_flight.load(Ordering::SeqCst);
++    blocker.release();
++    runtime.shutdown();
++    assert!(observed <= 1, "global cap=1, observed actual concurrent queries={observed}");
++}
++
++struct AuditReopenBackend {
++    id: RepoIdentity,
++    calls: AtomicUsize,
++    gates: [Arc<Blocker>; 2],
++}
++impl QueryBackend for AuditReopenBackend {
++    fn discover(&self, _: &Path) -> Result<RepoIdentity, QueryFailure> { Ok(self.id.clone()) }
++    fn query(&self, request: &QueryRequest) -> Result<QueryOutput, QueryFailure> {
++        let n = self.calls.fetch_add(1, Ordering::SeqCst);
++        let mut output = default_output(&self.id, request);
++        output.head = Some(Ok(HeadData { branch: Some(if n == 0 { "old" } else { "new" }.into()), commit: None }));
++        if n < 2 { self.gates[n].wait(); }
++        Ok(output)
++    }
++}
++#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
++async fn audit_old_query_cannot_be_retagged_as_reopened_subscription() {
++    let repo=TempRepo::new();
++    let backend=Arc::new(AuditReopenBackend { id:identity(&repo), calls:AtomicUsize::new(0), gates:[Blocker::closed(),Blocker::closed()] });
++    let (runtime, mut events)=GitRuntime::start_with(config(),backend.clone(),TestClock::new());
++    let old=runtime.subscribe(1,repo.path(),true).await.unwrap();
++    wait_until(||backend.calls.load(Ordering::SeqCst)==1).await;
++    runtime.unsubscribe(&old);
++    let current=runtime.subscribe(1,repo.path(),true).await.unwrap();
++    for _ in 0..20 {
++        if backend.calls.load(Ordering::SeqCst) >= 2 { break; }
++        tokio::time::sleep(Duration::from_millis(10)).await;
++    }
++    backend.gates[0].release();
++    let result=tokio::time::timeout(Duration::from_millis(200),events.next()).await;
++    backend.gates[1].release();
++    runtime.shutdown();
++    if let Ok(Some(RuntimeEvent::Snapshot {token,snapshot}))=result {
++        assert_ne!(snapshot.head.last().and_then(|h|h.branch.as_deref()),Some("old"),"old result was published with current token: event_epoch={}, current_epoch={}",token.activation_epoch,current.activation_epoch);
++    }
++}

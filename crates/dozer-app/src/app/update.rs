@@ -24,7 +24,7 @@ use crate::panel_host::ActivationCtx;
 use crate::term::terminal;
 use crate::workspace::{
     RestorePayload, SshOut, TabAttachedArgs, TabBackend, Workspace, exited_marker,
-    spawn_disk_usage_refresh, spawn_project_git_refresh, tab_display_width, tab_title,
+    tab_display_width, tab_title,
 };
 use byteui::interaction::icons;
 use dozer_core::protocol::{BookmarkInfo, ProjectInfo};
@@ -1037,8 +1037,19 @@ impl App {
             Message::ProjectTabSwitch(id) => self.project_tab_switch(id),
             Message::ProjectTabClose(id) => self.project_tab_close(id),
             Message::ProjectSlotLoaded(id, payload) => self.project_slot_loaded(id, payload),
-            Message::ProjectFsChanged(project_id, changes) => {
-                self.project_fs_changed(project_id, changes)
+            Message::GitRuntimeEvent(event) => self.git_runtime_event(event),
+            Message::GitSubscriptionReady(project_id, request, token) => {
+                self.git_subscription_ready(project_id, request, token)
+            }
+            Message::PlainFsChanged(project_id, changes) => {
+                self.plain_fs_changed(project_id, changes)
+            }
+            Message::FilesTreeRefresh(project_id, generation, snapshots) => {
+                let next = loaded_workspace_mut(&mut self.projects, project_id)
+                    .and_then(|ws| ws.files.apply_tree_refresh(generation, snapshots));
+                if let Some(request) = next {
+                    spawn_tree_refresh(project_id, request, &self.shell_io());
+                }
             }
             Message::GitLog(git_log::Message::ColumnDragStart) => {
                 // Git Log 三栏布局里左右分割线开始拖拽——扩展发不了 app 级
@@ -2314,6 +2325,7 @@ impl App {
                 ws.recent_projects = recent;
             });
             self.sync_terminal_grid(); // 清放大态后重算网格,理由见 `ProjectSelect`
+            self.sync_git_active();
             self.persist_open_projects();
             return;
         }
@@ -2334,6 +2346,7 @@ impl App {
             self.sync_git_log_to_active_project();
         }
         self.sync_terminal_grid(); // 同上
+        self.sync_git_active();
         self.persist_open_projects();
         // 新开的项目 tab(区别于"已开着、只是前台化"那条 `focus_project_tab`
         // 早退分支):静默跑一次 ensure(README/.dozer/git/agent 历史),不
@@ -2376,6 +2389,7 @@ impl App {
         // cols/rows(最终审查 Required Fix #2)。重算是幂等的:算出来
         // 与当前 `cols/rows` 相同时 `PaneResized` 的去重会原地返回。
         self.sync_terminal_grid();
+        self.sync_git_active();
         self.persist_open_projects();
         // 按下项目页签＝选中＋准备被拖走(同终端/预览页签)。
         if let Some(idx) = self.project_order.iter().position(|p| *p == id) {
@@ -2401,6 +2415,9 @@ impl App {
             return;
         };
         if let WorkspaceSlot::Loaded(mut ws) = slot {
+            if let Some(token) = ws.git_token.take() {
+                io.git_runtime.unsubscribe(&token);
+            }
             // 关页签 = 结束该项目下所有会话(abort 转发任务 + kill
             // daemon 侧会话)。不 kill 的话会话会继续在 daemon 上跑,
             // 还会被下次 bootstrap 恢复出来。
@@ -2423,6 +2440,7 @@ impl App {
             }
         }
         self.sync_terminal_grid(); // 清放大态后重算网格,理由同 `ProjectTabSwitch`
+        self.sync_git_active();
         self.persist_open_projects();
         // 关掉(或删掉)的是最后一个项目:落到首页而不是"未打开任何项目"的占位。
         self.enter_home_if_no_projects();
@@ -2525,6 +2543,12 @@ impl App {
             return;
         }
         let io = self.shell_io();
+        // 占位若已拿到 token,换对象前先退订,避免旧监听继续指向占位状态。
+        if let Some(WorkspaceSlot::Loaded(cur)) = self.projects.get(&id)
+            && let Some(token) = &cur.git_token
+        {
+            io.git_runtime.unsubscribe(token);
+        }
         let mut ws = Workspace::from_restore(&io, *restore, inherited);
         // 重挂出来的会话,终端模型是按 `DEFAULT_COLS`×`DEFAULT_ROWS`
         // 建的,得按当前窗口几何纠正一次。这里**不能**指望
@@ -2539,44 +2563,95 @@ impl App {
         self.agent_context_refresh(id);
     }
 
-    pub(crate) fn project_fs_changed(
-        &mut self,
-        project_id: ProjectId,
-        changes: bytegit::GitChange,
-    ) {
-        // 工作区类变更:文件树 + 打开的 webview 预览即时跟进。`notify` 递上
-        // 的是具体变更路径 `changes.paths`,文件树按"受影响即相关"整棵从盘重
-        // 读已缓存目录(`reload_tree_from_disk`,只重读已展开/缓存过的层,开销
-        // 小),预览则只重载路径命中的 webview tab。
+    fn plain_fs_changed(&mut self, project_id: ProjectId, changes: bytegit::GitChange) {
+        // `.git` 创建后从 plain watch 升格为 runtime 订阅。
+        self.with_project(project_id, |ws, io| ws.reconcile_git_mode(io));
         if changes.workdir_changed || changes.refs_changed {
             let locale = self.locale.active_locale().to_string();
+            let paths = changes.paths;
             self.with_project(project_id, move |ws, io| {
-                ws.files.reload_tree_from_disk();
-                ws.preview.reload_webviews_for(&changes.paths, &locale);
-                ws.project_preview
-                    .reload_webviews_for(&changes.paths, &locale);
-                // Task 7:根文件/include 变化后重跑受影响的 PlantUML 图,重读
-                // include。放在 `reload_webviews_for` 之后立即取走队列。
+                if let Some(request) = ws.files.begin_tree_refresh(&paths, false) {
+                    spawn_tree_refresh(project_id, request, io);
+                }
+                ws.preview.reload_webviews_for(&paths, &locale);
+                ws.project_preview.reload_webviews_for(&paths, &locale);
                 ws.spawn_pending_plantuml_reloads(PanelKind::Files, io);
                 ws.spawn_pending_plantuml_reloads(PanelKind::Project, io);
             });
         }
         self.with_project(project_id, |ws, io| {
-            let Some(project) = &ws.project else { return };
-            let repo_path = PathBuf::from(&project.path);
-            spawn_project_git_refresh(project_id, repo_path.clone(), io);
-            spawn_disk_usage_refresh(project_id, repo_path, io);
+            ws.spawn_disk_usage(io, false);
         });
-        // 只有 `.git` 引用类变化(分支切换/外部提交/其他 worktree
-        // 提交)才值得重建 Git Log 快照——纯工作区文件编辑不影响
-        // 提交历史,重算是纯浪费。`git_log_cache` 是 `App` 级、不是
-        // 按项目分的(见 `sync_git_log_to_active_project`),所以这里
-        // 必须先核实这条事件本来就是"当前聚焦项目"发出的
-        // (`project_id == self.active_project_id`)——否则后台项目
-        // 的引用变化会拿"缓存路径恰好等于前台项目路径"这个巧合当
-        // 通行证,把前台正打开的详情/选中态平白清掉,而其实什么都
-        // 没变。项目 id 匹配之外再核一次路径,双保险防状态漂移。
-        if changes.refs_changed
+    }
+
+    pub(crate) fn git_runtime_event(&mut self, event: dozer_git_runtime::RuntimeEvent) {
+        match event {
+            dozer_git_runtime::RuntimeEvent::Watch { token, change } => {
+                self.git_runtime_watch(token, &change);
+            }
+            dozer_git_runtime::RuntimeEvent::Snapshot { token, snapshot } => {
+                self.git_runtime_snapshot(token, &snapshot);
+            }
+        }
+    }
+
+    fn git_token_current(&self, token: &dozer_git_runtime::SubscriptionToken) -> bool {
+        match self.projects.get(&token.project_id) {
+            Some(WorkspaceSlot::Loaded(ws)) => ws.git_token.as_ref() == Some(token),
+            _ => false,
+        }
+    }
+
+    fn git_runtime_watch(
+        &mut self,
+        token: dozer_git_runtime::SubscriptionToken,
+        change: &dozer_git_runtime::WatchedPaths,
+    ) {
+        if !self.git_token_current(&token) {
+            return;
+        }
+        let project_id = token.project_id;
+        let full = change
+            .kinds
+            .contains(bytegit::WorkspaceChangeKind::FULL_RESCAN);
+        let workdir = change.kinds.contains(bytegit::WorkspaceChangeKind::WORKDIR);
+        if full {
+            self.with_project(project_id, |ws, io| ws.reconcile_git_mode(io));
+        }
+        let project_root = self
+            .projects
+            .get(&project_id)
+            .and_then(|slot| match slot {
+                WorkspaceSlot::Loaded(ws) => ws.project.as_ref(),
+                WorkspaceSlot::Stub { .. } => None,
+            })
+            .map(|project| PathBuf::from(&project.path));
+        // Git 状态仍由 runtime 保守失效(隐藏路径里的已跟踪文件不能漏),
+        // 但树/预览只在可见路径变化时重读,避免 target/ 构建产物造成树重读风暴。
+        let visible = full
+            || change
+                .paths
+                .iter()
+                .any(|path| !path_is_hidden(project_root.as_deref(), path));
+        if (workdir || full) && visible {
+            let locale = self.locale.active_locale().to_string();
+            let paths = change.paths.clone();
+            self.with_project(project_id, move |ws, io| {
+                if let Some(request) = ws.files.begin_tree_refresh(&paths, full) {
+                    spawn_tree_refresh(project_id, request, io);
+                }
+                ws.preview.reload_webviews_for(&paths, &locale);
+                ws.project_preview.reload_webviews_for(&paths, &locale);
+                ws.spawn_pending_plantuml_reloads(PanelKind::Files, io);
+                ws.spawn_pending_plantuml_reloads(PanelKind::Project, io);
+            });
+            // 磁盘占用独立节流:连续工作区事件按 10s 最短间隔合并。
+            self.with_project(project_id, |ws, io| {
+                ws.spawn_disk_usage(io, false);
+            });
+        }
+        // Git Log 只关心引用/HEAD 变化;后台项目不重建前台缓存。
+        if git_log_change_requires_refresh(change.kinds)
             && self.active_project_id == Some(project_id)
             && let Some(repo_path) = self.git_log.cache_repo_path().map(|p| p.to_path_buf())
             && self
@@ -2585,9 +2660,6 @@ impl App {
                 .as_deref()
                 == Some(repo_path.as_path())
         {
-            // 引用变化只是要"内容不变、重新拉一遍",窗口大小维持原样——
-            // 用 `cache_max_count()`(读当前缓存的 max_count),不是"加载
-            // 更多"专用、会 `+LOAD_MORE_STEP` 的 `next_load_more_count()`。
             let max = self.git_log.cache_max_count();
             let handle = self.handle.clone();
             let proxy = self.proxy.clone();
@@ -2596,6 +2668,112 @@ impl App {
             };
             git_log::request_refresh(&mut self.git_log, repo_path, max, &handle, emit);
         }
+    }
+
+    fn git_runtime_snapshot(
+        &mut self,
+        token: dozer_git_runtime::SubscriptionToken,
+        snapshot: &dozer_git_runtime::WorkspaceSnapshot,
+    ) {
+        if !self.git_token_current(&token) {
+            return;
+        }
+        // `.git` 重指向:不应用旧身份数据,退订并重新订阅当前路径。
+        if snapshot.identity_mismatch.is_some() {
+            let io = self.shell_io();
+            if let Some(ws) = loaded_workspace_mut(&mut self.projects, token.project_id) {
+                if let Some(old) = ws.git_token.take() {
+                    io.git_runtime.unsubscribe(&old);
+                }
+                ws.start_git_subscription(&io);
+            }
+            return;
+        }
+        let project_id = token.project_id;
+        let Some(project_path) = self
+            .projects
+            .get(&project_id)
+            .and_then(|slot| match slot {
+                WorkspaceSlot::Loaded(ws) => ws.project.as_ref(),
+                WorkspaceSlot::Stub { .. } => None,
+            })
+            .map(|project| PathBuf::from(&project.path))
+        else {
+            return;
+        };
+
+        let statuses = snapshot
+            .status
+            .last()
+            .map(|status| {
+                files::git_status::file_statuses_from_entries(
+                    &project_path,
+                    &snapshot.identity,
+                    status.entries.clone(),
+                )
+            })
+            .unwrap_or_default();
+        let head = snapshot.head.last();
+        let info = files::GitInfo {
+            is_repo: true,
+            current_branch: head.and_then(|head| head.branch.clone()),
+            current_branch_has_commits: head.and_then(|head| head.commit).is_some(),
+            branches: snapshot.branches.last().cloned().unwrap_or_default(),
+        };
+        self.files_project_message(
+            project_id,
+            files::Message::SnapshotApplied(project_id, statuses, info),
+        );
+
+        let dirty = snapshot.status.last().is_some_and(|status| status.dirty);
+        let mut seen = std::collections::HashSet::new();
+        let mut remotes = Vec::new();
+        for remote in snapshot.remotes.last().into_iter().flatten() {
+            if seen.insert(remote.url.clone()) {
+                remotes.push(remote.url.clone());
+            }
+        }
+        let _ = self.update(Message::Project(project::Message::SnapshotApplied(
+            project_id,
+            project::GitSnapshot {
+                branch: head.and_then(|head| head.branch.clone()),
+                dirty,
+                remote_urls: remotes,
+            },
+        )));
+    }
+
+    pub(crate) fn git_subscription_ready(
+        &mut self,
+        project_id: ProjectId,
+        request: u64,
+        token: dozer_git_runtime::SubscriptionToken,
+    ) {
+        if token.project_id != project_id {
+            return;
+        }
+        let Some(runtime) = self.git_runtime.clone() else {
+            return;
+        };
+        let active = self.active_project_id == Some(project_id);
+        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+            runtime.unsubscribe(&token);
+            return;
+        };
+        if request != ws.git_subscription_request {
+            // 迟到的旧 ready 不能覆盖当前意图。
+            runtime.unsubscribe(&token);
+            return;
+        }
+        let old = ws.git_token.replace(token.clone());
+        if let Some(old) = old
+            && old != token
+        {
+            runtime.unsubscribe(&old);
+        }
+        runtime.set_active(&token, active);
+        // 首次快照可能早于 ready 被丢弃:确认后主动补一次,保证有有效结果。
+        runtime.refresh_manual(&token);
     }
 
     pub(crate) fn database_test_connection_result(
@@ -4408,11 +4586,10 @@ impl App {
     fn agent_turn_ended(&mut self, project_id: ProjectId, _tab_id: usize) {
         self.with_project(project_id, |ws, io| {
             ws.spawn_conversations_refresh(io);
-            if let Some(project) = &ws.project {
-                let repo_path = PathBuf::from(&project.path);
-                spawn_project_git_refresh(project_id, repo_path.clone(), io);
-                spawn_disk_usage_refresh(project_id, repo_path, io);
+            if let Some(token) = &ws.git_token {
+                io.git_runtime.refresh_manual(token);
             }
+            ws.spawn_disk_usage(io, true);
         });
     }
 
@@ -4776,6 +4953,44 @@ impl App {
     }
 }
 
+/// 在后台读取计划里的目录,结果回灌成 `FilesTreeRefresh`。每个项目同一时刻
+/// 只有一个任务(in-flight 由 `WorkspaceState` 保证),期间变更合并到下一轮。
+fn spawn_tree_refresh(
+    project_id: ProjectId,
+    request: dozer_panel_files::fs::TreeRefreshRequest,
+    io: &crate::workspace::ShellIo,
+) {
+    let generation = request.generation;
+    let handle = io.handle.clone();
+    let proxy = io.proxy.clone();
+    handle.spawn(async move {
+        let snapshots = tokio::task::spawn_blocking(move || {
+            dozer_panel_files::fs::read_dir_snapshots(&request)
+        })
+        .await
+        .unwrap_or_default();
+        let _ = proxy.send_event(Message::FilesTreeRefresh(project_id, generation, snapshots));
+    });
+}
+
+/// Git Log 图需要重建的原因位:引用、HEAD 切换/detach,或已无法局部解释的
+/// FullRescan。Index(纯 `git add`)不重建图。
+fn git_log_change_requires_refresh(kinds: bytegit::WorkspaceChangeKind) -> bool {
+    use bytegit::WorkspaceChangeKind as K;
+    kinds.contains(K::REFS) || kinds.contains(K::HEAD) || kinds.contains(K::FULL_RESCAN)
+}
+
+/// 树/预览是否应因这个路径重读。`project_root` 用于换算到项目内相对路径;
+/// 路径不在项目内时按原样检查(保守)。
+fn path_is_hidden(project_root: Option<&std::path::Path>, path: &std::path::Path) -> bool {
+    let rel = project_root
+        .and_then(|root| path.strip_prefix(root).ok())
+        .unwrap_or(path);
+    rel.components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .any(|name| crate::project::HIDDEN.contains(&name))
+}
+
 #[cfg(test)]
 mod host_event_routing_tests {
     use super::*;
@@ -5080,5 +5295,20 @@ mod reload_by_path_tests {
             &mut pane,
             std::path::Path::new("/nope/x.rs")
         ));
+    }
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    use super::*;
+
+    #[test]
+    fn git_log_refreshes_on_head_and_refs_but_not_a_pure_index_change() {
+        use bytegit::WorkspaceChangeKind as K;
+        assert!(git_log_change_requires_refresh(K::HEAD));
+        assert!(git_log_change_requires_refresh(K::REFS));
+        assert!(git_log_change_requires_refresh(K::FULL_RESCAN));
+        assert!(!git_log_change_requires_refresh(K::INDEX));
+        assert!(!git_log_change_requires_refresh(K::WORKDIR));
     }
 }

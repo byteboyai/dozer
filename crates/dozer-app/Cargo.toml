@@ -55,7 +55,8 @@ dozer-hook = { path = "../dozer-hook" }
 # 新建 agent 会话时静默注册对应 CLI 的 dozer-mcp（第一个写工具 2026-08-27）。
 dozer-mcp = { path = "../dozer-mcp" }
 byteui.workspace = true
-bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1", features = ["watch"] }
+bytegit = { workspace = true, features = ["watch"] }
+dozer-git-runtime = { path = "../dozer-git-runtime" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
@@ -127,7 +128,7 @@ sha2 = "0.10"
 tracing-subscriber.workspace = true
 tempfile = "3"
 # 面板单元测试用 `TempRepo` 造真实仓库。
-bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1", features = ["testutil"] }
+bytegit = { workspace = true, features = ["testutil"] }
 
 # macOS 原生右键菜单(`native_menu`)已搬进 byteui(`byteui::native_menu`),它依赖的
 # resvg / usvg / tiny-skia / objc2-quartz-core 现在由 byteui 持有,这里不再直接声明。

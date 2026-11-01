@@ -3,7 +3,7 @@
 //! 这是 Dozer 自己的**呈现语义**(哪几种状态归为"未跟踪/新增/修改",目录取子孙中的最高档),
 //! 不是 git 查询——查询在 `bytegit`。原先在 `delivery.rs`,P6 起随 `delivery.rs` 一起拆掉后搬到这里。
 
-use bytegit::{ChangeKind as GitChange, Repo, StatusOptions};
+use bytegit::{ChangeKind as GitChange, Repo, RepoIdentity, StatusEntry, StatusOptions};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -31,31 +31,29 @@ pub struct FileGitStatus {
 
 /// 项目目录相对仓库根的前缀(项目就是仓库根时为空)。`project` 不存在或不在仓库工作区内时 `None`。
 ///
-/// `repo.root()` 是 libgit2 解析后的真实路径(macOS 上 `/var/...` 会变成 `/private/var/...`),
+/// 仓库根是 libgit2 解析后的真实路径(macOS 上 `/var/...` 会变成 `/private/var/...`),
 /// 所以先规范化项目路径再求前缀。
-pub(crate) fn project_prefix(repo: &Repo, project: &Path) -> Option<PathBuf> {
+pub(crate) fn project_prefix(root: &Path, project: &Path) -> Option<PathBuf> {
     let canon = project.canonicalize().ok()?;
-    Some(canon.strip_prefix(repo.root()).ok()?.to_path_buf())
+    Some(canon.strip_prefix(root).ok()?.to_path_buf())
 }
 
-/// 取项目所在仓库的文件级状态(含未跟踪与被忽略),只含项目目录之内的路径。`project` 在仓库
-/// 子目录里也行(向上查找仓库)。非 git / 打开失败返回空。键是 `project.join(相对项目的路径)`,
-/// 与文件树里的路径同口径。
-pub fn file_statuses(project: &Path) -> HashMap<PathBuf, FileGitStatus> {
+/// 把一次已经完成的 `bytegit` 状态条目纯映射成文件树装饰。`identity` 提供仓库根,
+/// `project` 是项目目录(可在仓库子目录);仓库里项目之外的条目被丢弃,键是
+/// `project.join(相对项目的路径)`,与文件树里的路径同口径。
+///
+/// 这个入口不打开仓库、不查询状态,供已拿到组合快照的宿主直接应用;旧
+/// [`file_statuses`] 只是 discover + status + 本函数的包装。
+pub fn file_statuses_from_entries(
+    project: &Path,
+    identity: &RepoIdentity,
+    entries: impl IntoIterator<Item = StatusEntry>,
+) -> HashMap<PathBuf, FileGitStatus> {
     let mut map = HashMap::new();
-    let Ok(git_repo) = Repo::discover(project) else {
+    let Some(root) = identity.workdir_root() else {
         return map;
     };
-    let Some(prefix) = project_prefix(&git_repo, project) else {
-        return map;
-    };
-    let repo = project;
-    let opts = StatusOptions {
-        include_untracked: true,
-        include_ignored: true,
-        detect_renames: false,
-    };
-    let Ok(entries) = git_repo.status(opts) else {
+    let Some(prefix) = project_prefix(root, project) else {
         return map;
     };
     for entry in entries {
@@ -66,7 +64,7 @@ pub fn file_statuses(project: &Path) -> HashMap<PathBuf, FileGitStatus> {
         let st = entry.state;
         if st.ignored {
             map.insert(
-                repo.join(rel),
+                project.join(rel),
                 FileGitStatus {
                     kind: ChangeKind::Modified,
                     staged: false,
@@ -90,7 +88,7 @@ pub fn file_statuses(project: &Path) -> HashMap<PathBuf, FileGitStatus> {
             ChangeKind::Modified
         };
         map.insert(
-            repo.join(rel),
+            project.join(rel),
             FileGitStatus {
                 kind,
                 staged,
@@ -100,6 +98,26 @@ pub fn file_statuses(project: &Path) -> HashMap<PathBuf, FileGitStatus> {
         );
     }
     map
+}
+
+/// 取项目所在仓库的文件级状态(含未跟踪与被忽略),只含项目目录之内的路径。`project` 在仓库
+/// 子目录里也行(向上查找仓库)。非 git / 打开失败返回空。
+pub fn file_statuses(project: &Path) -> HashMap<PathBuf, FileGitStatus> {
+    let Ok(repo) = Repo::discover(project) else {
+        return HashMap::new();
+    };
+    let Ok(identity) = repo.identity() else {
+        return HashMap::new();
+    };
+    let opts = StatusOptions {
+        include_untracked: true,
+        include_ignored: true,
+        detect_renames: false,
+    };
+    let Ok(entries) = repo.status(opts) else {
+        return HashMap::new();
+    };
+    file_statuses_from_entries(project, &identity, entries)
 }
 
 /// 文件树名称颜色要编码的 git 状态档位,按优先级从高到低:
@@ -616,6 +634,42 @@ mod tests {
             rolled.get(Path::new("/r/out")).copied(),
             Some(TreeState::Ignored),
             "目录自身被忽略时应恒为 Ignored,不受子孙状态或 HashMap 迭代顺序影响"
+        );
+    }
+
+    #[test]
+    fn pure_mapping_from_entries_filters_to_the_project_subtree() {
+        let t = bytegit::testutil::TempRepo::new();
+        t.commit_file("proj/a.txt", "one\n", "c1");
+        t.commit_file("outside.txt", "one\n", "c2");
+        t.write_untracked("proj/a.txt", "changed\n");
+        t.write_untracked("proj/new.txt", "n\n");
+        t.write_untracked("outside.txt", "changed\n");
+
+        let repo = t.open();
+        let identity = repo.identity().unwrap();
+        let entries = repo
+            .status_snapshot(bytegit::StatusOptions {
+                include_untracked: true,
+                include_ignored: true,
+                detect_renames: false,
+            })
+            .unwrap()
+            .entries;
+        let project = t.path().join("proj");
+        let m = file_statuses_from_entries(&project, &identity, entries);
+
+        assert_eq!(
+            m.get(&project.join("a.txt")).map(|s| s.kind),
+            Some(ChangeKind::Modified)
+        );
+        assert_eq!(
+            m.get(&project.join("new.txt")).map(|s| s.kind),
+            Some(ChangeKind::New)
+        );
+        assert!(
+            !m.keys().any(|p| p.ends_with("outside.txt")),
+            "仓库根下的其它项目路径不能进入子项目装饰: {m:?}"
         );
     }
 

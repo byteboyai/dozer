@@ -53,7 +53,9 @@ pub(crate) fn spawn_preview_command_poller(
     });
 }
 use iced_winit::winit::event_loop::EventLoopProxy;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(test)]
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Handle;
@@ -144,6 +146,9 @@ pub struct ShellIo {
     pub(crate) client: Client,
     pub(crate) handle: Handle,
     pub(crate) proxy: EventLoopProxy<Message>,
+    /// 进程内共享的 Git 读取运行时。所有项目订阅/刷新都走它,不再每个项目
+    /// 各自 discover + status。
+    pub(crate) git_runtime: dozer_git_runtime::GitRuntime,
     /// 启动时探测一次的客户端能力快照(见 `crate::capabilities`)。Workspace
     /// 侧的预览路由/预算从这里读取,不再自己探测硬件。
     pub(crate) capabilities: Arc<crate::capabilities::ClientCapabilities>,
@@ -281,9 +286,17 @@ pub struct Workspace {
     pub(crate) project: Option<ProjectInfo>,
     /// 最近项目（切换用）。
     pub(crate) recent_projects: Vec<ProjectInfo>,
-    /// 本项目的实时文件系统监听(D4)。`None` 只可能出现在 watcher 启动
-    /// 失败时(降级为"只在开项目/回合结束时刷新")。Drop 时自动停止。
-    pub(crate) git_watch: Option<bytegit::WatchHandle>,
+    /// 本项目在共享 `GitRuntime` 里的订阅;`None` = 尚未订阅或订阅失败。
+    /// 关闭项目/改路径时显式退订。
+    pub(crate) git_token: Option<dozer_git_runtime::SubscriptionToken>,
+    /// 订阅请求意图:每次 start_git_subscription 递增,ready 消息按它拒绝旧意图。
+    pub(crate) git_subscription_request: u64,
+    /// 非 Git 目录没有工作区身份,runtime 拒绝订阅;退化为旧 `bytegit::watch`
+    /// 只驱动文件树/预览刷新(不产生 Git 查询)。
+    pub(crate) plain_watch: Option<bytegit::WatchHandle>,
+    /// 磁盘占用最近一次启动时间:工作区事件连续到来时按 10s 最短间隔合并,
+    /// 激活/打开/回合结束走 force。
+    pub(crate) disk_refresh_at: Option<std::time::Instant>,
     /// Project 信息面板 per-project 状态——见 `extensions::project::WorkspaceState`。
     pub(crate) project_panel: project::WorkspaceState,
     /// 预览 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
@@ -438,8 +451,7 @@ impl Workspace {
         // 启动就把"恢复出来的东西"（或 `None`）推一次:dozerd 可能比 GUI
         // 活得久,上次会话留下的缓存值不该在新会话里冒充当前上下文。
         ws.spawn_preview_context_push(io);
-        spawn_project_git_refresh(project_id, repo_path.clone(), io);
-        spawn_disk_usage_refresh(project_id, repo_path, io);
+        ws.spawn_disk_usage(io, true);
         ws.spawn_conversations_refresh(io);
         browser::request_bookmarks_refresh(
             &ws.browser.requests,
@@ -453,31 +465,97 @@ impl Workspace {
                 }
             },
         );
-        ws.start_git_watch(io);
+        ws.start_git_subscription(io);
         ws
     }
 
-    /// 启动本项目的实时文件系统监听(D4)。失败(比如 fd 耗尽)只记一条
-    /// warn,不影响项目正常打开——退化成"只在开项目/回合结束时刷新"这个
-    /// D4 之前就有的行为。
-    pub(crate) fn start_git_watch(&mut self, io: &ShellIo) {
+    /// 启动一次磁盘占用统计。`force` 用于打开/激活/回合结束;工作区事件走
+    /// 10s 最短间隔,避免构建产物连续写入时反复遍历目录。
+    pub(crate) fn spawn_disk_usage(&mut self, io: &ShellIo, force: bool) {
+        let now = std::time::Instant::now();
+        if !force
+            && self
+                .disk_refresh_at
+                .is_some_and(|last| now.duration_since(last) < std::time::Duration::from_secs(10))
+        {
+            return;
+        }
+        let Some(project) = &self.project else {
+            return;
+        };
+        self.disk_refresh_at = Some(now);
+        spawn_disk_usage_refresh(project.id, PathBuf::from(&project.path), io);
+    }
+
+    /// 普通目录 ↔ Git 仓库的身份切换:`.git` 创建/删除后重新 discover,
+    /// 停旧 watcher 并切到 runtime(或退回 plain watch)。
+    pub(crate) fn reconcile_git_mode(&mut self, io: &ShellIo) {
+        let Some(project) = &self.project else {
+            return;
+        };
+        let is_repo = bytegit::Repo::discover_workdir(&PathBuf::from(&project.path)).is_ok();
+        match (is_repo, self.git_token.is_some()) {
+            (true, false) => {
+                self.plain_watch = None;
+                self.start_git_subscription(io);
+            }
+            (false, true) => {
+                if let Some(token) = self.git_token.take() {
+                    io.git_runtime.unsubscribe(&token);
+                }
+                self.plain_watch = None;
+                self.start_git_subscription(io);
+            }
+            (false, false) if self.plain_watch.is_none() => {
+                self.start_git_subscription(io);
+            }
+            _ => {}
+        }
+    }
+
+    /// 订阅共享 `GitRuntime`。订阅是异步的(先解析工作区身份),结果经
+    /// `GitSubscriptionReady` 落回本 `Workspace`;之后的监听/刷新都只认 token。
+    pub(crate) fn start_git_subscription(&mut self, io: &ShellIo) {
         let Some(p) = &self.project else {
             return;
         };
         let project_id = p.id;
-        let repo = PathBuf::from(&p.path);
-        let proxy = io.proxy.clone();
-        // 忽略名单由我们自己传:文件树恒不显示的那几个目录/文件名(含嵌套层)的改动不触发刷新。
-        let options = bytegit::WatchOptions::new(std::time::Duration::from_millis(300))
-            .ignore(bytegit::IgnoreRules::new(crate::project::HIDDEN));
-        match bytegit::watch(&repo, options, move |changes| {
-            let _ = proxy.send_event(Message::ProjectFsChanged(project_id, changes));
-        }) {
-            Ok(handle) => self.git_watch = Some(handle),
-            Err(err) => {
-                dozer_core::log_warn!(LOG, project_id, %err, "bytegit watch 启动失败,降级为手动刷新")
+        let path = PathBuf::from(&p.path);
+        self.git_subscription_request = self.git_subscription_request.wrapping_add(1);
+        let request = self.git_subscription_request;
+        // 非 Git 目录没有工作区身份:仍要保留文件树/预览的实时刷新。
+        if bytegit::Repo::discover_workdir(&path).is_err() {
+            let proxy = io.proxy.clone();
+            let options = bytegit::WatchOptions::new(std::time::Duration::from_millis(300))
+                .ignore(bytegit::IgnoreRules::new(crate::project::HIDDEN));
+            match bytegit::watch(&path, options, move |changes| {
+                let _ = proxy.send_event(Message::PlainFsChanged(project_id, changes));
+            }) {
+                Ok(handle) => self.plain_watch = Some(handle),
+                Err(err) => {
+                    dozer_core::log_warn!(LOG, project_id, %err, "非 Git 目录监听启动失败")
+                }
             }
+            return;
         }
+        let runtime = io.git_runtime.clone();
+        let proxy = io.proxy.clone();
+        io.handle.spawn(async move {
+            match runtime.subscribe(project_id, path, true).await {
+                Ok(token) => {
+                    let _ =
+                        proxy.send_event(Message::GitSubscriptionReady(project_id, request, token));
+                }
+                Err(err) => {
+                    dozer_core::log_warn!(
+                        LOG,
+                        project_id,
+                        %err,
+                        "git runtime 订阅失败,降级为手动刷新"
+                    );
+                }
+            }
+        });
     }
 
     /// `WorkspaceSlot::Stub` 促成 `Loaded` 之前的占位内容:一个"什么都没有"
@@ -512,7 +590,10 @@ impl Workspace {
             project: None,
             project_panel: project::WorkspaceState::default(),
             recent_projects: Vec::new(),
-            git_watch: None,
+            git_token: None,
+            git_subscription_request: 0,
+            plain_watch: None,
+            disk_refresh_at: None,
             preview_tab_first: 0,
             preview_tab_overflow_anchor: None,
             project_preview_tab_first: 0,
@@ -694,18 +775,16 @@ impl Workspace {
         self.loading = false;
         self.files
             .reset_for_project(FileTree::new(PathBuf::from(&project.path)));
-        // 复用中的 `Workspace`(就地改写成另一个项目,见本方法文档)可能还
-        // 挂着上一个项目的 watcher——显式清掉再重开,而不是指望
-        // `start_git_watch` 成功时的赋值顺带把旧的 drop 掉:万一新项目的
-        // 路径打不开 watcher(见其内部 `Err` 分支),不清的话旧 watcher 会
-        // 带着旧 project_id 继续在后台跑,`Message::ProjectFsChanged` 送来
-        // 的刷新信号会挂在一个此刻已经不对应这份 `Workspace` 的项目 id 上。
-        self.git_watch = None;
+        // 复用中的 `Workspace`(就地改写成另一个项目)必须先退订上一个项目,
+        // 否则旧 token 的结果/监听会挂在一个已经不对应这份 `Workspace` 的 id 上。
+        if let Some(old) = self.git_token.take() {
+            io.git_runtime.unsubscribe(&old);
+        }
+        self.plain_watch = None;
         self.conversations = conversations::WorkspaceState::default();
         self.usage = usage::WorkspaceState::default();
         self.codehealth = codehealth::WorkspaceState::default();
         self.group_chat = crate::extensions::group_chat::WorkspaceState::default();
-        let project_id = project.id;
         let repo_path = PathBuf::from(&project.path);
         self.project_panel = project::WorkspaceState::new(
             crate::project_meta::load_description(&repo_path),
@@ -717,8 +796,7 @@ impl Workspace {
         // 启动就把"恢复出来的东西"（或 `None`）推一次:dozerd 可能比 GUI
         // 活得久,上次会话留下的缓存值不该在新会话里冒充当前上下文。
         self.spawn_preview_context_push(io);
-        spawn_project_git_refresh(project_id, repo_path.clone(), io);
-        spawn_disk_usage_refresh(project_id, repo_path, io);
+        self.spawn_disk_usage(io, true);
         self.spawn_conversations_refresh(io);
         browser::request_bookmarks_refresh(
             &self.browser.requests,
@@ -732,11 +810,7 @@ impl Workspace {
                 }
             },
         );
-        // D4:新开的项目页签也要有实时刷新——此前只有跨重启恢复
-        // (`from_restore`)/`Stub` 促成时会启动 watcher,直接开新项目这条最
-        // 常见的路径反而漏了,退化成"只在开项目/回合结束时刷新"(code
-        // review 发现)。
-        self.start_git_watch(io);
+        self.start_git_subscription(io);
     }
 
     /// tab 关闭 = 结束会话：中断转发任务（`rx` 随任务栈析构）并 kill
@@ -1685,36 +1759,11 @@ impl Workspace {
     }
 }
 
-/// 项目 git/磁盘状态在多个地方触发刷新,完成后分发成两条
-/// 独立消息:`Files(StatusesRefreshed)` 只带文件级状态,`Project(GitRefreshed)`
-/// 带分支/脏/remote。两个 extension 互不知道对方存在,内核是唯一知道
-/// "这两份数据同源"的地方(设计文档"关键语义确认")。既有调用点:
-/// `Workspace::from_restore`/`adopt_project`/回合结束(`agent_state_changed`)/
-/// `Message::ProjectFsChanged`——因为要同时认识 `files::Message`/
-/// `project::Message` 两个类型,不适合作为任何一个 extension 的自由函数,
-/// 也不需要 `&self`,做成纯自由函数、参数显式传入。
-pub(crate) fn spawn_project_git_refresh(project_id: i64, repo_path: PathBuf, io: &ShellIo) {
-    let proxy = io.proxy.clone();
-    io.handle.spawn(async move {
-        let (b, d, s, r) = tokio::task::spawn_blocking({
-            let repo_path = repo_path.clone();
-            move || project_git_snapshot(&repo_path)
-        })
-        .await
-        .unwrap_or((None, false, HashMap::new(), Vec::new()));
-        let _ = proxy.send_event(Message::Files(files::Message::StatusesRefreshed(
-            project_id, s,
-        )));
-        let _ = proxy.send_event(Message::Project(project::Message::GitRefreshed(
-            project_id, b, d, r,
-        )));
-    });
-}
-
-/// 项目的 git 快照:`(当前分支, 是否有改动, 文件级状态, 全部 remote 的 URL)`。
+/// 旧组合快照的纯函数参照,只保留给回归测试对照新 runtime 的映射口径。
 ///
-/// 全部向上查找:项目目录在仓库子目录里时,分支/remote 取整个仓库的,"是否有改动"是整个仓库
-/// 的(不只项目子树),文件状态只含项目目录之内的路径(规格 O9 / D14)。
+/// 生产路径已改走 `dozer_git_runtime`:一次 discover/status,面板只应用
+/// `SnapshotApplied`。这里不再发起任何异步任务。
+#[cfg(test)]
 pub(crate) fn project_git_snapshot(
     repo_path: &Path,
 ) -> (
@@ -1742,6 +1791,7 @@ pub(crate) fn project_git_snapshot(
 
 /// 仓库**全部** remote 的 fetch URL:去重、按 remote 名字升序(与 `git remote -v` 的顺序一致);
 /// 没有 remote / 不在仓库里为空 `Vec`。向上查找。
+#[cfg(test)]
 fn unique_remote_urls(path: &Path) -> Vec<String> {
     let Ok(remotes) = bytegit::Repo::discover(path).and_then(|repo| repo.remotes()) else {
         return Vec::new();
@@ -1757,7 +1807,7 @@ fn unique_remote_urls(path: &Path) -> Vec<String> {
 }
 
 /// 磁盘占用是独立于组合 git 刷新的异步任务——避免大仓库的目录遍历拖慢
-/// 分支/脏标显示。触发点与 `spawn_project_git_refresh` 相同。
+/// 分支/脏标显示。触发点:打开/激活/回合结束/工作区事件。
 pub(crate) fn spawn_disk_usage_refresh(project_id: i64, repo_path: PathBuf, io: &ShellIo) {
     let proxy = io.proxy.clone();
     io.handle.spawn(async move {

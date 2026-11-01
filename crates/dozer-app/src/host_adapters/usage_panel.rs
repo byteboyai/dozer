@@ -20,7 +20,8 @@ use crate::app::{HoverId, Message as AppMessage, PanelKind};
 use byteui::interaction::icons;
 use dozer_model::AgentKind;
 use dozer_panel_usage::adapter::{
-    GitStatsProvider, NoticeLevel, PanelDisplay, PanelHeadKind, UsageNotice,
+    GitStatsError, GitStatsProvider, GitSummary, NoticeLevel, PanelDisplay, PanelHeadKind,
+    UsageNotice,
 };
 use dozer_panel_usage::{WorkspaceState, activation, on_activate};
 use iced_widget::core::{Color, Element};
@@ -96,7 +97,60 @@ impl PanelDisplay<AppMessage> for crate::app::App {
 /// 产品的 [`GitStatsProvider`](adapter::GitStatsProvider):包 `bytegit::Repo`,语义与
 /// 抽取前 `extensions/usage/mod.rs` 的 `count_git_commits`/`count_git_commits_by_day`
 /// 逐字一致(非 git 仓库/任何错误一律 0 / 空)。
-pub struct DoGitStats;
+pub struct DoGitStats {
+    cache: dozer_git_runtime::StatsCache,
+}
+
+impl DoGitStats {
+    pub fn new() -> Self {
+        Self {
+            cache: dozer_git_runtime::StatsCache::default(),
+        }
+    }
+}
+
+/// 进程级共享的 Git 统计 provider:缓存必须跨 Usage 激活存活,不能在每次
+/// `activate` 里新建。
+static SHARED_GIT_STATS: std::sync::OnceLock<std::sync::Arc<DoGitStats>> =
+    std::sync::OnceLock::new();
+
+pub fn shared_git_stats() -> std::sync::Arc<DoGitStats> {
+    SHARED_GIT_STATS
+        .get_or_init(|| std::sync::Arc::new(DoGitStats::new()))
+        .clone()
+}
+
+impl Default for DoGitStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 影响统计结果的小型版本指纹:历史边界(replace/grafts/alternates)与配置。
+fn stats_fingerprint(identity: &bytegit::RepoIdentity) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let paths = [
+        identity.common_dir().join("shallow"),
+        identity.common_dir().join("info/grafts"),
+        identity.common_dir().join("objects/info/alternates"),
+        identity.common_dir().join("refs/replace"),
+        identity.common_dir().join("config"),
+        identity.git_dir().join("config.worktree"),
+    ];
+    for path in paths {
+        path.hash(&mut hasher);
+        if let Ok(meta) = std::fs::metadata(&path) {
+            meta.len().hash(&mut hasher);
+            if let Ok(modified) = meta.modified()
+                && let Ok(since) = modified.duration_since(std::time::UNIX_EPOCH)
+            {
+                since.as_nanos().hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
+}
 
 impl GitStatsProvider for DoGitStats {
     fn commit_count(&self, project_path: &std::path::Path) -> u64 {
@@ -115,6 +169,39 @@ impl GitStatsProvider for DoGitStats {
             return std::collections::BTreeMap::new();
         };
         repo.commit_count_by_day().unwrap_or_default()
+    }
+
+    /// 一次日桶遍历后求和;非 git/空仓库/后端错误仍按旧语义回落 0。
+    fn summary(&self, project_path: &std::path::Path) -> Result<GitSummary, GitStatsError> {
+        let Ok(repo) = bytegit::Repo::discover(project_path) else {
+            return Ok(GitSummary::default());
+        };
+        let Ok(identity) = repo.identity() else {
+            return Ok(GitSummary::default());
+        };
+        let Ok(workspace_key) = identity.workspace_key() else {
+            return Ok(GitSummary::default());
+        };
+        let head = repo.head().ok().and_then(|head| head.commit);
+        let key = dozer_git_runtime::StatsKey {
+            workspace_key,
+            head,
+            fingerprint: stats_fingerprint(&identity),
+        };
+        if let Some(cached) = self.cache.get(&key) {
+            return Ok(GitSummary {
+                total: cached.total,
+                by_day: cached.by_day,
+            });
+        }
+        let by_day = repo.commit_count_by_day().unwrap_or_default();
+        let total = by_day.values().sum();
+        let stats = dozer_git_runtime::CommitStats {
+            total,
+            by_day: by_day.clone(),
+        };
+        self.cache.insert(key, stats);
+        Ok(GitSummary { total, by_day })
     }
 }
 
@@ -157,10 +244,49 @@ pub fn activate(
             ctx.project_id,
             ctx.project_path,
             ctx.io.services().usage.clone(),
-            std::sync::Arc::new(DoGitStats),
+            shared_git_stats(),
             ctx.io.handle().clone(),
             ctx.io.emitter(),
         )
     });
     on_activate(state, lib_ctx.as_ref());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytegit::testutil::TempRepo;
+
+    #[test]
+    fn shared_git_stats_survives_activation_and_keeps_one_cache() {
+        let a = shared_git_stats();
+        let b = shared_git_stats();
+        assert!(
+            std::sync::Arc::ptr_eq(&a, &b),
+            "Usage 激活必须共用一个 provider/cache"
+        );
+    }
+
+    #[test]
+    fn do_git_stats_summary_sums_the_single_day_bucket_pass() {
+        let t = TempRepo::new();
+        t.commit_file("a.txt", "1\n", "one");
+        t.commit_file("a.txt", "2\n", "two");
+        let git = DoGitStats::new();
+        let summary = git.summary(t.path()).unwrap();
+        assert_eq!(summary.total, summary.by_day.values().sum::<u64>());
+        assert_eq!(summary.total, 2);
+        assert_eq!(git.cache.len(), 1, "首次结果应进入缓存");
+
+        // 相同 HEAD/边界命中缓存,不再新增条目。
+        let again = git.summary(t.path()).unwrap();
+        assert_eq!(again, summary);
+        assert_eq!(git.cache.len(), 1);
+
+        // 新提交 → HEAD 变化 → 新键、新结果。
+        t.commit_file("a.txt", "3\n", "three");
+        let newer = git.summary(t.path()).unwrap();
+        assert_eq!(newer.total, 3);
+        assert_eq!(git.cache.len(), 2, "HEAD 变化不能复用旧结果");
+    }
 }

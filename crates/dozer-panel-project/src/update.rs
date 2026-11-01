@@ -45,10 +45,16 @@ pub fn update(
             unreachable!("由内核拦截处理,见 project::Message::ToolbarHover 文档")
         }
         Message::GitRefreshed(_, branch, dirty, remote_url) => {
-            ws_state.branch = branch;
-            ws_state.dirty = dirty;
-            ws_state.remote_url = remote_url;
+            apply_git_snapshot(
+                ws_state,
+                crate::state::GitSnapshot {
+                    branch,
+                    dirty,
+                    remote_urls: remote_url,
+                },
+            );
         }
+        Message::SnapshotApplied(_, snapshot) => apply_git_snapshot(ws_state, snapshot),
         Message::DiskUsageLoaded(_, bytes) => {
             ws_state.disk_usage_bytes = Some(bytes);
         }
@@ -669,6 +675,11 @@ pub fn spawn_repair_run(
             }
         }
     });
+}
+
+/// 把组合快照里的 Project 部分落到状态;legacy `GitRefreshed` 与新入口共用。
+fn apply_git_snapshot(ws_state: &mut WorkspaceState, snapshot: GitSnapshot) {
+    ws_state.apply_git_snapshot(snapshot);
 }
 
 /// 项目名称编辑的共享提交逻辑:回车提交(`NameEditSubmit`)与失焦提交

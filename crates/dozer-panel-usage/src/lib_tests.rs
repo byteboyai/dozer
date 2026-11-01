@@ -716,4 +716,39 @@ fn no_git_stats_is_the_neutral_default() {
         g.commits_by_day(std::path::Path::new("/does/not/exist"))
             .is_empty()
     );
+    let summary = g.summary(std::path::Path::new("/does/not/exist")).unwrap();
+    assert_eq!(summary.total, 0);
+    assert!(summary.by_day.is_empty());
+}
+
+#[test]
+fn the_default_summary_calls_each_legacy_method_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingGit {
+        total_calls: AtomicUsize,
+        day_calls: AtomicUsize,
+    }
+    impl crate::adapter::GitStatsProvider for CountingGit {
+        fn commit_count(&self, _p: &std::path::Path) -> u64 {
+            self.total_calls.fetch_add(1, Ordering::SeqCst);
+            5
+        }
+        fn commits_by_day(&self, _p: &std::path::Path) -> BTreeMap<i64, u64> {
+            self.day_calls.fetch_add(1, Ordering::SeqCst);
+            BTreeMap::from([(1, 5)])
+        }
+    }
+
+    let git = CountingGit {
+        total_calls: AtomicUsize::new(0),
+        day_calls: AtomicUsize::new(0),
+    };
+    let summary = git
+        .summary(std::path::Path::new("/does/not/exist"))
+        .unwrap();
+    assert_eq!(summary.total, 5);
+    assert_eq!(summary.by_day, BTreeMap::from([(1, 5)]));
+    assert_eq!(git.total_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(git.day_calls.load(Ordering::SeqCst), 1);
 }

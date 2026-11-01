@@ -16,11 +16,65 @@ pub enum PathKind {
 /// 文件树里恒不显示的目录/文件名。
 pub const HIDDEN: [&str; 5] = [".git", "target", "node_modules", ".DS_Store", "__pycache__"];
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Entry {
     path: PathBuf,
     name: String,
     is_dir: bool,
+}
+
+/// 一个目录的只读快照;可在后台线程读取、回到 UI 线程合并。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirSnapshot {
+    pub dir: PathBuf,
+    pub entries: Vec<DirEntryData>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirEntryData {
+    pub path: PathBuf,
+    pub name: String,
+    pub is_dir: bool,
+}
+
+impl From<DirEntryData> for Entry {
+    fn from(value: DirEntryData) -> Self {
+        Self {
+            path: value.path,
+            name: value.name,
+            is_dir: value.is_dir,
+        }
+    }
+}
+
+impl From<Entry> for DirEntryData {
+    fn from(value: Entry) -> Self {
+        Self {
+            path: value.path,
+            name: value.name,
+            is_dir: value.is_dir,
+        }
+    }
+}
+
+/// 一次后台目录刷新的计划:只包含受影响、且当前已缓存的目录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeRefreshRequest {
+    pub generation: u64,
+    pub dirs: Vec<PathBuf>,
+    pub show_dotfiles: bool,
+}
+
+/// 后台线程读取计划里的目录。不碰 UI 状态,不修改展开/选择/搜索。
+pub fn read_dir_snapshots(request: &TreeRefreshRequest) -> Vec<DirSnapshot> {
+    request
+        .dirs
+        .iter()
+        .map(|dir| DirSnapshot {
+            dir: dir.clone(),
+            entries: read_children_data(dir, request.show_dotfiles),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,11 +110,17 @@ pub struct FileTree {
 /// `self.show_dotfiles` 口径;`toggle`/`refresh`/`search_rows` 未缓存的目录
 /// 都走它,保证手动展开与搜索结果看到的口径一致。
 fn read_children(tree: &FileTree, dir: &Path) -> Vec<Entry> {
+    read_children_data(dir, tree.show_dotfiles)
+        .into_iter()
+        .map(Entry::from)
+        .collect()
+}
+
+fn read_children_data(dir: &Path, show_dot: bool) -> Vec<DirEntryData> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
-    let show_dot = tree.show_dotfiles;
-    let mut entries: Vec<Entry> = rd
+    let mut entries: Vec<DirEntryData> = rd
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
@@ -71,7 +131,7 @@ fn read_children(tree: &FileTree, dir: &Path) -> Vec<Entry> {
                 return None;
             }
             let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            Some(Entry {
+            Some(DirEntryData {
                 path: e.path(),
                 name,
                 is_dir,
@@ -149,6 +209,50 @@ impl FileTree {
             } else {
                 self.children.remove(&dir);
                 self.expanded.remove(&dir);
+            }
+        }
+    }
+
+    /// 计算受影响且当前已缓存的目录。`full` 时返回全部缓存目录;否则只取
+    /// 变更路径自身(若是已缓存目录)与它的直接父目录。不做任何磁盘 IO。
+    pub fn refresh_plan(&self, paths: &[PathBuf], full: bool) -> Vec<PathBuf> {
+        if full {
+            return self.children.keys().cloned().collect();
+        }
+        let mut dirs = HashSet::new();
+        for path in paths {
+            if self.children.contains_key(path) {
+                dirs.insert(path.clone());
+            }
+            if let Some(parent) = path.parent()
+                && self.children.contains_key(parent)
+            {
+                dirs.insert(parent.to_path_buf());
+            }
+        }
+        let mut out: Vec<PathBuf> = dirs.into_iter().collect();
+        out.sort();
+        out
+    }
+
+    pub fn show_dotfiles(&self) -> bool {
+        self.show_dotfiles
+    }
+
+    /// 合并后台读到的目录快照。目录被删除时连同其已缓存子孙/展开态一起
+    /// 丢弃;展开、选择、搜索的关键字不变(搜索缓存只失效)。
+    pub fn apply_dir_snapshots(&mut self, snapshots: Vec<DirSnapshot>) {
+        self.search.get_mut().take();
+        for snapshot in snapshots {
+            if snapshot.dir.is_dir() {
+                self.children.insert(
+                    snapshot.dir,
+                    snapshot.entries.into_iter().map(Entry::from).collect(),
+                );
+            } else {
+                self.children
+                    .retain(|dir, _| !dir.starts_with(&snapshot.dir));
+                self.expanded.retain(|dir| !dir.starts_with(&snapshot.dir));
             }
         }
     }

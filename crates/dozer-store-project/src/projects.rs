@@ -4,15 +4,66 @@
 //! 多连接足够（无需连接池）。
 
 use anyhow::{Context, Result};
-use bytegit::Repo;
+use bytegit::{Repo, WorkspaceKey};
 use dozer_model::ProjectInfo;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use std::path::Path;
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+/// Git 时间的可替换提供者。生产直接用 bytegit;测试可以阻塞它来证明数据库锁
+/// 已经释放。
+pub trait ProjectGitTime: Send + Sync {
+    fn head_commit_ms(&self, dir: &Path) -> Option<u64>;
+}
+
+#[derive(Debug, Default)]
+struct RealGitTime;
+
+impl ProjectGitTime for RealGitTime {
+    fn head_commit_ms(&self, dir: &Path) -> Option<u64> {
+        git_head_commit_ms(dir)
+    }
+}
+
+/// 一次列表内按工作区复用 HEAD 时间(同仓库多个项目不重复 discover)。
+#[derive(Default)]
+struct GitTimeCache {
+    by_workspace: HashMap<WorkspaceKey, Option<u64>>,
+    by_path: HashMap<PathBuf, Option<u64>>,
+}
+
+impl GitTimeCache {
+    fn head_ms(&mut self, provider: &dyn ProjectGitTime, path: &str) -> Option<u64> {
+        let dir = Path::new(path);
+        if !dir.is_dir() {
+            return None;
+        }
+        if let Ok(repo) = Repo::discover_workdir(dir)
+            && let Ok(identity) = repo.identity()
+            && let Ok(key) = identity.workspace_key()
+        {
+            if let Some(ms) = self.by_workspace.get(&key) {
+                return *ms;
+            }
+            let ms = provider.head_commit_ms(dir);
+            self.by_workspace.insert(key, ms);
+            return ms;
+        }
+        // 非仓库/裸仓库:按路径缓存结果,避免同一列表反复探测。
+        if let Some(ms) = self.by_path.get(dir) {
+            return *ms;
+        }
+        let ms = provider.head_commit_ms(dir);
+        self.by_path.insert(dir.to_path_buf(), ms);
+        ms
+    }
+}
 
 pub struct ProjectStore {
     conn: Mutex<Connection>,
+    git_time: Arc<dyn ProjectGitTime>,
 }
 
 fn now_ms() -> u64 {
@@ -48,6 +99,7 @@ fn git_head_commit_ms(dir: &Path) -> Option<u64> {
 
 /// 计算项目的 git 感知更新时间：优先取仓库最新 commit 时间，若该仓库没有
 /// commit，或 commit 时间早于 `last_active_ms`，则回落为 `last_active_ms`。
+#[cfg(test)]
 fn compute_updated_ms(path: &str, last_active_ms: u64) -> u64 {
     let commit = git_head_commit_ms(Path::new(path));
     match commit {
@@ -107,7 +159,15 @@ impl ProjectStore {
         }
         Ok(Self {
             conn: Mutex::new(conn),
+            git_time: Arc::new(RealGitTime),
         })
+    }
+
+    #[cfg(test)]
+    fn with_git_time(path: &Path, git_time: Arc<dyn ProjectGitTime>) -> Result<Self> {
+        let mut store = Self::new(path)?;
+        store.git_time = git_time;
+        Ok(store)
     }
 
     /// upsert（按 path）+ 刷新活跃时间，返回该项目。P2a 起不再"置为当前
@@ -115,46 +175,66 @@ impl ProjectStore {
     /// `created_ms` 仅在首次插入时写入（= 本次 `open` 的活跃戳，即 Dozer
     /// 中新建该项目的时间）；之后 `open` 只刷新 `last_active_ms`。
     pub fn open(&self, path: &str) -> Result<ProjectInfo> {
-        let conn = self.conn.lock().expect("db lock");
-        let ts = next_active_stamp(&conn);
-        conn.execute(
-            "INSERT INTO projects (path, name, last_active_ms, created_ms) VALUES (?1, ?2, ?3, ?3)
-             ON CONFLICT(path) DO UPDATE SET last_active_ms = ?3",
-            rusqlite::params![path, basename(path), ts],
-        )?;
-        conn.query_row(
-            "SELECT id, path, name, last_active_ms, created_ms FROM projects WHERE path = ?1",
-            [path],
-            row_to_project,
-        )
-        .map_err(Into::into)
+        let raw = {
+            let conn = self.conn.lock().expect("db lock");
+            let ts = next_active_stamp(&conn);
+            conn.execute(
+                "INSERT INTO projects (path, name, last_active_ms, created_ms) VALUES (?1, ?2, ?3, ?3)
+                 ON CONFLICT(path) DO UPDATE SET last_active_ms = ?3",
+                rusqlite::params![path, basename(path), ts],
+            )?;
+            conn.query_row(
+                "SELECT id, path, name, last_active_ms, created_ms FROM projects WHERE path = ?1",
+                [path],
+                row_to_raw,
+            )?
+        };
+        // 数据库锁已释放:慢 Git 不能让其它项目访问排队。
+        Ok(into_project(
+            raw,
+            &mut GitTimeCache::default(),
+            &*self.git_time,
+        ))
     }
 
     pub fn list(&self) -> Result<Vec<ProjectInfo>> {
-        let conn = self.conn.lock().expect("db lock");
-        let mut stmt = conn.prepare(
-            "SELECT id, path, name, last_active_ms, created_ms FROM projects ORDER BY last_active_ms DESC",
-        )?;
-        let rows = stmt.query_map([], row_to_project)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        let rows = {
+            let conn = self.conn.lock().expect("db lock");
+            let mut stmt = conn.prepare(
+                "SELECT id, path, name, last_active_ms, created_ms FROM projects ORDER BY last_active_ms DESC",
+            )?;
+            let rows = stmt.query_map([], row_to_raw)?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let mut cache = GitTimeCache::default();
+        Ok(rows
+            .into_iter()
+            .map(|row| into_project(row, &mut cache, &*self.git_time))
+            .collect())
     }
 
     /// 按 id 改名。`id` 不存在时返回 `Err`（不做静默 no-op）。
     pub fn rename(&self, id: i64, name: &str) -> Result<ProjectInfo> {
-        let conn = self.conn.lock().expect("db lock");
-        let affected = conn.execute(
-            "UPDATE projects SET name = ?1 WHERE id = ?2",
-            rusqlite::params![name, id],
-        )?;
-        if affected == 0 {
-            anyhow::bail!("项目 id={id} 不存在");
-        }
-        conn.query_row(
-            "SELECT id, path, name, last_active_ms, created_ms FROM projects WHERE id = ?1",
-            [id],
-            row_to_project,
-        )
-        .map_err(Into::into)
+        let raw = {
+            let conn = self.conn.lock().expect("db lock");
+            let affected = conn.execute(
+                "UPDATE projects SET name = ?1 WHERE id = ?2",
+                rusqlite::params![name, id],
+            )?;
+            if affected == 0 {
+                anyhow::bail!("项目 id={id} 不存在");
+            }
+            conn.query_row(
+                "SELECT id, path, name, last_active_ms, created_ms FROM projects WHERE id = ?1",
+                [id],
+                row_to_raw,
+            )?
+        };
+        Ok(into_project(
+            raw,
+            &mut GitTimeCache::default(),
+            &*self.git_time,
+        ))
     }
 
     pub fn remove(&self, id: i64) -> Result<()> {
@@ -177,25 +257,70 @@ impl ProjectStore {
     }
 }
 
-fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<ProjectInfo> {
-    let path: String = row.get(1)?;
-    let last_active_ms = row.get::<_, i64>(3)? as u64;
-    let created_ms = row.get::<_, i64>(4)? as u64;
-    let updated_ms = compute_updated_ms(&path, last_active_ms);
-    Ok(ProjectInfo {
+/// 数据库行(不含 Git 派生值),锁内只读这个。
+struct RawProjectRow {
+    id: i64,
+    path: String,
+    name: String,
+    last_active_ms: u64,
+    created_ms: u64,
+}
+
+fn row_to_raw(row: &rusqlite::Row) -> rusqlite::Result<RawProjectRow> {
+    Ok(RawProjectRow {
         id: row.get(0)?,
-        path,
+        path: row.get(1)?,
         name: row.get(2)?,
-        last_active_ms,
-        created_ms,
-        updated_ms,
+        last_active_ms: row.get::<_, i64>(3)? as u64,
+        created_ms: row.get::<_, i64>(4)? as u64,
     })
+}
+
+fn into_project(
+    row: RawProjectRow,
+    cache: &mut GitTimeCache,
+    git_time: &dyn ProjectGitTime,
+) -> ProjectInfo {
+    let commit = cache.head_ms(git_time, &row.path);
+    let updated_ms = match commit {
+        Some(c) if c >= row.last_active_ms => c,
+        _ => row.last_active_ms,
+    };
+    ProjectInfo {
+        id: row.id,
+        path: row.path,
+        name: row.name,
+        last_active_ms: row.last_active_ms,
+        created_ms: row.created_ms,
+        updated_ms,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::process::Command;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+
+    /// 可阻塞的 Git 时间提供者:先放行建行,再打开阻塞开关验证 DB 锁已释放。
+    struct GateGitTime {
+        block: AtomicBool,
+        entered: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl ProjectGitTime for GateGitTime {
+        fn head_commit_ms(&self, _dir: &Path) -> Option<u64> {
+            if self.block.load(Ordering::SeqCst) {
+                let _ = self.entered.send(());
+                let _ = self.release.lock().unwrap().recv();
+                Some(u64::MAX)
+            } else {
+                Some(0)
+            }
+        }
+    }
 
     #[test]
     fn open_list_and_persist() {
@@ -430,5 +555,45 @@ mod tests {
         commit_at(&wt, "b.txt", "2", T + 200);
         assert_eq!(updated(&main, 1_000), (T as u64 + 100) * 1000);
         assert_eq!(updated(&wt, 1_000), (T as u64 + 200) * 1000);
+    }
+
+    #[test]
+    fn a_slow_git_time_does_not_hold_the_database_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("dozer.db");
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let provider = Arc::new(GateGitTime {
+            block: AtomicBool::new(false),
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        });
+        let store = Arc::new(ProjectStore::with_git_time(&db, provider.clone()).unwrap());
+
+        let project_dir = dir.path().join("project");
+        std::fs::create_dir(&project_dir).unwrap();
+        let path = project_dir.to_str().unwrap();
+        let opened = store.open(path).unwrap();
+
+        provider.block.store(true, Ordering::SeqCst);
+        let list_store = store.clone();
+        let list = std::thread::spawn(move || list_store.list());
+
+        // list 正在慢 Git 时间里;数据库锁必须已释放,path_of/remove 仍能完成。
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("list 应进入 Git 时间");
+        let other = store
+            .path_of(opened.id)
+            .expect("慢 Git 期间数据库访问不能被锁住");
+        assert_eq!(other.as_deref(), Some(path));
+        store
+            .remove(opened.id)
+            .expect("慢 Git 期间删除也不能被锁住");
+
+        release_tx.send(()).unwrap();
+        let rows = list.join().unwrap().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].updated_ms, u64::MAX, "Git 时间生效");
     }
 }

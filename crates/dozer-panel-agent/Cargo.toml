@@ -13,7 +13,7 @@ dozer-services = { path = "../dozer-services" }
 dozer-panel-host = { path = "../dozer-panel-host" }
 dozer-panel-term = { path = "../dozer-panel-term" }
 dozer-i18n = { path = "../dozer-i18n" }
-bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1" }
+bytegit.workspace = true
 serde_json.workspace = true
 byteui.workspace = true
 tokio.workspace = true

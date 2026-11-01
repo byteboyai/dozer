@@ -1,0 +1,17 @@
+[package]
+name = "dozer-git-runtime"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# Dozer/Digger 共享的 Git 读取调度层:订阅、合并、generation 校验、监听桥接、补偿校验。
+# 刻意保持小依赖闭包:只依赖 bytegit 与 tokio,不含 iced / byteui / dozer-app /
+# dozer-client / dozer-core。面板通过宿主注入的纯快照消费,不反向依赖本 crate。
+[dependencies]
+bytegit = { workspace = true, features = ["watch"] }
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+# 测试用真实临时仓库夹具(TempRepo)。
+bytegit = { workspace = true, features = ["testutil"] }

@@ -1,0 +1,57 @@
+--- a/crates/dozer-git-runtime/tests/runtime.rs
++++ b/crates/dozer-git-runtime/tests/runtime.rs
+@@ -714,3 +714,54 @@
+         );
+     }
+ }
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
++async fn audit_initial_snapshot_is_not_replayed_when_host_installs_token_late() {
++    let repo = TempRepo::new();
++    let backend = TestBackend::new(identity(&repo));
++    let (runtime, mut events) = GitRuntime::start_with(config(), backend.clone(), TestClock::new());
++    let token = runtime.subscribe(1, repo.path(), true).await.unwrap();
++    // Same ordering as a host whose Snapshot message is processed before its
++    // GitSubscribed message: the first event is rejected because no token is set.
++    let _dropped = next_snapshot(&mut events, 1).await;
++    runtime.set_active(&token, true); // What both hosts do on subscription-ready.
++    let replay = tokio::time::timeout(Duration::from_millis(200), events.next()).await;
++    runtime.shutdown();
++    assert!(replay.is_ok(), "host discarded early snapshot; subscription-ready neither replays nor refreshes it");
++}
++
++struct LateDiscoverBackend {
++    old: RepoIdentity,
++    current: RepoIdentity,
++    entered: AtomicUsize,
++    gate: Arc<Blocker>,
++}
++impl QueryBackend for LateDiscoverBackend {
++    fn discover(&self, path: &Path) -> Result<RepoIdentity, QueryFailure> {
++        if path.canonicalize().unwrap() == self.old.workdir_root().unwrap() {
++            self.entered.store(1, Ordering::SeqCst);
++            self.gate.wait();
++            Ok(self.old.clone())
++        } else { Ok(self.current.clone()) }
++    }
++    fn query(&self, request: &QueryRequest) -> Result<QueryOutput, QueryFailure> {
++        let id = if request.path == self.old.workdir_root().unwrap() { &self.old } else { &self.current };
++        Ok(default_output(id, request))
++    }
++}
++#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
++async fn audit_slow_obsolete_discover_does_not_replace_newer_subscription_intent() {
++    let a = TempRepo::new(); let b = TempRepo::new();
++    let backend=Arc::new(LateDiscoverBackend {old:identity(&a),current:identity(&b),entered:AtomicUsize::new(0),gate:Blocker::closed()});
++    let (runtime,mut events)=GitRuntime::start_with(config(),backend.clone(),TestClock::new());
++    let old_runtime=runtime.clone();let old_path=a.path().to_owned();
++    let old=tokio::spawn(async move { old_runtime.subscribe(1, old_path,true).await });
++    wait_until(||backend.entered.load(Ordering::SeqCst)==1).await;
++    let current=runtime.subscribe(1,b.path(),true).await.unwrap();
++    let _=next_snapshot(&mut events,1).await;
++    backend.gate.release();
++    let _obsolete=old.await.unwrap().unwrap();
++    let event=tokio::time::timeout(Duration::from_secs(2),events.next()).await.unwrap().unwrap();
++    runtime.shutdown();
++    assert_eq!(event.token(), &current,"obsolete discover installed old workspace with a newer completion epoch");
++}

@@ -50,6 +50,32 @@ fn git_refreshed_updates_four_fields() {
 }
 
 #[test]
+fn snapshot_applied_is_pure_and_updates_all_git_fields() {
+    let mut ws = new_ws();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    update(
+        &mut ws,
+        Message::SnapshotApplied(
+            1,
+            GitSnapshot {
+                branch: Some("feature".into()),
+                dirty: true,
+                remote_urls: vec!["https://x.git".into()],
+            },
+        ),
+        1,
+        "名字",
+        &test_repo_path(),
+        &test_services(),
+        rt.handle(),
+        |_| panic!("纯快照应用不应发起异步请求"),
+    );
+    assert_eq!(ws.branch(), Some("feature"));
+    assert!(ws.dirty());
+    assert_eq!(ws.remote_url.as_slice(), ["https://x.git"]);
+}
+
+#[test]
 fn branch_and_dirty_accessors_read_current_state() {
     let mut ws = new_ws();
     let rt = tokio::runtime::Runtime::new().unwrap();

@@ -10,7 +10,7 @@ pub mod view;
 
 pub use dozer_panel_project::update::*;
 pub use dozer_panel_project::{
-    CaptureDescriptionEditFocus, CaptureNameEditFocus, Message, ProjectToolbarTarget,
+    CaptureDescriptionEditFocus, CaptureNameEditFocus, GitSnapshot, Message, ProjectToolbarTarget,
     WorkspaceState, name_field_id, take_description_edit_focused, take_name_edit_focused,
 };
 pub use view::*;

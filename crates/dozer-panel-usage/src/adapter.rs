@@ -16,11 +16,34 @@ use std::path::Path;
 
 /// 面板需要的 Git 统计窄接口。Dozer 实现包 `bytegit::Repo`;Digger 提供自己的
 /// 语义(或显式 Unavailable)。库不关心 Git 实现。
+/// Git 统计接缝自己的错误类型(不暴露 bytegit/git2)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitStatsError {
+    pub message: String,
+}
+
+/// 一次统计结果:总数与日桶来自同一次遍历。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GitSummary {
+    pub total: u64,
+    pub by_day: BTreeMap<i64, u64>,
+}
+
 pub trait GitStatsProvider: Send + Sync {
     /// 项目仓库 HEAD 可达的提交总数;非 git 仓库/任何错误记 0。
     fn commit_count(&self, project_path: &Path) -> u64;
     /// HEAD 可达提交按 UTC 提交日的逐日计数;非 git 仓库/任何错误返回空。
     fn commits_by_day(&self, project_path: &Path) -> BTreeMap<i64, u64>;
+
+    /// 一次拿到总数与日桶。默认实现调用两次旧方法(兼容第三方 provider);
+    /// 它**无法**恢复旧方法已经吞掉的错误,这是接口的已知限制。新实现应
+    /// 覆盖为一次遍历。
+    fn summary(&self, project_path: &Path) -> Result<GitSummary, GitStatsError> {
+        Ok(GitSummary {
+            total: self.commit_count(project_path),
+            by_day: self.commits_by_day(project_path),
+        })
+    }
 }
 
 /// 不提供 Git 统计的实现(如 Digger 尚未接 Git):恒 0 / 空。可用 `Default`。
@@ -33,6 +56,9 @@ impl GitStatsProvider for NoGitStats {
     }
     fn commits_by_day(&self, _project_path: &Path) -> BTreeMap<i64, u64> {
         BTreeMap::new()
+    }
+    fn summary(&self, _project_path: &Path) -> Result<GitSummary, GitStatsError> {
+        Ok(GitSummary::default())
     }
 }
 

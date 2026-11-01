@@ -7,7 +7,7 @@ use crate::tree::{TreeDrag, TreeDragPhase};
 use iced_widget::core::Rectangle;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::adapter::PreviewKind;
@@ -178,6 +178,10 @@ pub enum Message {
     /// 异步加载 git 仓库信息的结果:落 `git_is_repo`/`current_branch`/
     /// `git_branches` 并置 `git_loaded`。
     GitInfoLoaded(i64, GitInfo),
+    /// 宿主已验证 token 的组合快照:文件级状态与分支栏信息同一次应用,
+    /// **不**触发额外的 discover/分支读取。legacy [`Message::StatusesRefreshed`]
+    /// 仍保留原行为(会补一次分支信息加载),新路径由宿主使用本消息。
+    SnapshotApplied(i64, HashMap<PathBuf, FileGitStatus>, GitInfo),
     /// 展开/收起底部分支切换弹层。
     BranchPickerOpen,
     BranchPickerClose,
@@ -374,6 +378,12 @@ pub struct WorkspaceState {
     /// 待交给 host 的需求(系统对话框、跨面板命令);`App::update` 每条消息后排空执行。
     pub host: dozer_panel_host::HostOutbox<Message>,
     pub file_tree: Option<FileTree>,
+    /// 后台目录刷新的 generation 与合并状态:同一时刻只允许一个读盘任务,
+    /// 期间的变更合并到 pending,完成后补一次。
+    tree_refresh_generation: u64,
+    tree_refresh_inflight: bool,
+    pending_tree_paths: BTreeSet<PathBuf>,
+    pending_tree_full: bool,
     pub git_statuses: HashMap<PathBuf, FileGitStatus>,
     /// 目录 → 聚合 git 状态(由 `git_status::rollup_dir_statuses` 在
     /// `StatusesRefreshed` 时一并算出),文件树渲染 O(1) 查表,取代每行
@@ -620,6 +630,12 @@ impl WorkspaceState {
     /// `tree_delete_confirm`/`tree_edit` 这一点,纯迁移不新增行为)。
     pub fn reset_for_project(&mut self, file_tree: FileTree) {
         self.file_tree = Some(file_tree);
+        // 切项目必须撤销旧项目后台读盘的应用资格:清 in-flight/pending,并
+        // 推进 generation(A→B→A 的旧结果也不能碰到新生命周期)。
+        self.tree_refresh_inflight = false;
+        self.pending_tree_paths.clear();
+        self.pending_tree_full = false;
+        self.tree_refresh_generation = self.tree_refresh_generation.wrapping_add(1);
         self.tree_selected = HashSet::new();
         self.tree_selection_anchor = None;
         self.git_statuses = HashMap::new();
@@ -827,9 +843,74 @@ impl WorkspaceState {
     /// 目录,即时反映新增/删除/改名(现有 `FileTree::reload_from_disk`:只
     /// 重读已缓存过的目录、不清 `expanded`,当前展开层级保持不变)。由
     /// `App::project_fs_changed` 在 `git_watch` 上报的工作区变更里调用。
+    /// 宿主已验证 token 的组合快照:同一次应用文件状态与分支栏信息,不查询。
+    pub fn apply_snapshot(&mut self, statuses: HashMap<PathBuf, FileGitStatus>, info: GitInfo) {
+        self.dir_statuses = git_status::rollup_dir_statuses(&statuses);
+        self.git_statuses = statuses;
+        self.git_loaded = true;
+        self.git_is_repo = info.is_repo;
+        self.current_branch = info.current_branch;
+        self.current_branch_has_commits = info.current_branch_has_commits;
+        self.git_branches = info.branches;
+    }
+
     pub fn reload_tree_from_disk(&mut self) {
+        self.tree_refresh_inflight = false;
         if let Some(tree) = &mut self.file_tree {
             tree.reload_from_disk();
+        }
+    }
+
+    /// 开始一次后台目录刷新:只返回已缓存、受影响的目录;不做磁盘 IO。
+    /// 已有读盘任务时把变更合并到 pending 并返回 `None`。
+    pub fn begin_tree_refresh(
+        &mut self,
+        paths: &[PathBuf],
+        full: bool,
+    ) -> Option<crate::fs::TreeRefreshRequest> {
+        let Some(tree) = &self.file_tree else {
+            return None;
+        };
+        if self.tree_refresh_inflight {
+            self.pending_tree_full |= full;
+            self.pending_tree_paths.extend(paths.iter().cloned());
+            return None;
+        }
+        let dirs = tree.refresh_plan(paths, full);
+        if dirs.is_empty() {
+            return None;
+        }
+        self.tree_refresh_generation = self.tree_refresh_generation.wrapping_add(1);
+        self.tree_refresh_inflight = true;
+        Some(crate::fs::TreeRefreshRequest {
+            generation: self.tree_refresh_generation,
+            dirs,
+            show_dotfiles: tree.show_dotfiles(),
+        })
+    }
+
+    /// 合并后台读到的目录快照。generation 不是最新时丢弃;若有期间积压的
+    /// 变更,返回下一次刷新计划给宿主继续读盘。
+    pub fn apply_tree_refresh(
+        &mut self,
+        generation: u64,
+        snapshots: Vec<crate::fs::DirSnapshot>,
+    ) -> Option<crate::fs::TreeRefreshRequest> {
+        if !self.tree_refresh_inflight || generation != self.tree_refresh_generation {
+            return None;
+        }
+        if let Some(tree) = &mut self.file_tree {
+            tree.apply_dir_snapshots(snapshots);
+        }
+        self.tree_refresh_inflight = false;
+        let full = std::mem::take(&mut self.pending_tree_full);
+        let paths: Vec<PathBuf> = std::mem::take(&mut self.pending_tree_paths)
+            .into_iter()
+            .collect();
+        if full || !paths.is_empty() {
+            self.begin_tree_refresh(&paths, full)
+        } else {
+            None
         }
     }
 

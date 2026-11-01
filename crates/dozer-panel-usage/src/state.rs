@@ -181,9 +181,10 @@ pub fn spawn_refresh(
         // 丢进 spawn_blocking 不占异步 worker。
         let git_path = project_path.clone();
         let (git_commits, git_commits_by_day) = tokio::task::spawn_blocking(move || {
-            let total = git.commit_count(&git_path);
-            let by_day = git.commits_by_day(&git_path);
-            (total, by_day)
+            // 一次 summary:DoGitStats 只遍历一次日桶并求和;默认实现按旧方法
+            // 兼容。失败沿用旧语义回落 0/空,不改变 Usage 的成功/失败路径。
+            let summary = git.summary(&git_path).unwrap_or_default();
+            (summary.total, summary.by_day)
         })
         .await
         .unwrap_or((0, BTreeMap::new()));

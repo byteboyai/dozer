@@ -1,0 +1,24 @@
+--- a/crates/dozer-panel-files/src/tests.rs
++++ b/crates/dozer-panel-files/src/tests.rs
+@@ -2741,3 +2741,21 @@
+         ));
+     }
+ }
++
++// 发布就绪审核:旧项目的目录读取任务不得阻塞新项目。
++#[cfg(test)]
++mod readiness_review {
++    use crate::fs::FileTree;
++    use crate::state::WorkspaceState;
++
++    #[test]
++    fn switching_project_during_a_read_must_not_stall_refreshes() {
++        let old = tempfile::tempdir().unwrap();
++        let new = tempfile::tempdir().unwrap();
++        let mut state = WorkspaceState::new(FileTree::new(old.path().to_owned()));
++        state.begin_tree_refresh(&[], true).unwrap();
++        state.reset_for_project(FileTree::new(new.path().to_owned()));
++        assert!(state.begin_tree_refresh(&[], true).is_some(),
++            "新项目继承了旧项目的 in-flight 状态,但宿主会丢弃旧项目结果");
++    }
++}

@@ -221,6 +221,9 @@ pub struct App {
     pub(crate) client: Client,
     pub(crate) handle: Handle,
     pub(crate) proxy: EventLoopProxy<Message>,
+    /// 进程内共享的 Git 读取运行时(所有项目共用)。事件由独立任务转发成
+    /// `Message::GitRuntimeEvent`。
+    pub(crate) git_runtime: Option<dozer_git_runtime::GitRuntime>,
     /// 启动时**只探测一次**的客户端能力快照(硬件 + 预算 + 档位)。业务模块
     /// 一律从这里经 `shell_io()` 取用,不得再调用 sysinfo(见 `capabilities`)。
     pub(crate) capabilities: Arc<crate::capabilities::ClientCapabilities>,
@@ -760,6 +763,7 @@ impl App {
         safe_startup: bool,
     ) -> Self {
         let mut app = Self::new_shell(client, handle, proxy, None, capabilities, safe_startup);
+        app.start_git_runtime();
         // i18n Task 04:建立初始显示值(缓存/系统)并立即向 daemon 拉一次权威快照。
         app.locale_startup();
         let io = app.shell_io();
@@ -801,6 +805,7 @@ impl App {
         if pruned {
             app.persist_open_projects();
         }
+        app.sync_git_active();
         app.enter_home_if_no_projects();
         app
     }
@@ -827,6 +832,7 @@ impl App {
             capabilities,
             safe_startup,
         );
+        app.start_git_runtime();
         // daemon 不可用:只建立初始显示值(缓存/系统临时),不发起读取。
         if let Some(cached) = crate::locale_cache::load() {
             app.locale.adopt_initial(cached, SnapshotSource::Cached);
@@ -856,6 +862,7 @@ impl App {
             client,
             handle,
             proxy,
+            git_runtime: None,
             capabilities,
             safe_startup,
             locale: LocaleController::new(),
@@ -959,11 +966,50 @@ impl App {
         self.shell_io().panel_io(wrap)
     }
 
+    /// 建立进程内共享 GitRuntime 与事件转发任务(幂等)。必须在 tokio runtime
+    /// 内调用;两个启动构造函数各调一次。
+    pub(crate) fn start_git_runtime(&mut self) {
+        if self.git_runtime.is_some() {
+            return;
+        }
+        let (runtime, mut events) =
+            dozer_git_runtime::GitRuntime::start(dozer_git_runtime::RuntimeConfig::default());
+        self.git_runtime = Some(runtime);
+        let proxy = self.proxy.clone();
+        self.handle.spawn(async move {
+            while let Some(event) = events.next().await {
+                if proxy.send_event(Message::GitRuntimeEvent(event)).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    /// 把“当前聚焦项目”同步给 runtime:活动项目优先拿读取名额并参与 60s 重验,
+    /// 后台项目只保留监听。
+    pub(crate) fn sync_git_active(&self) {
+        let Some(runtime) = &self.git_runtime else {
+            return;
+        };
+        for (id, slot) in &self.projects {
+            if let WorkspaceSlot::Loaded(ws) = slot
+                && let Some(token) = &ws.git_token
+            {
+                runtime.set_active(token, Some(*id) == self.active_project_id);
+            }
+        }
+    }
+
     pub(crate) fn shell_io(&self) -> ShellIo {
         ShellIo {
             client: self.client.clone(),
             handle: self.handle.clone(),
             proxy: self.proxy.clone(),
+            git_runtime: self
+                .git_runtime
+                .as_ref()
+                .expect("git runtime must be started before shell_io")
+                .clone(),
             capabilities: self.capabilities.clone(),
             safe_startup: self.safe_startup,
             cols: self.cols,

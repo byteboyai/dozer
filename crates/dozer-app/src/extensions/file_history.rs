@@ -462,8 +462,18 @@ pub fn diff_against_current(
     let project = open_project_repo(repo_path)?;
     let patch = project
         .repo
-        .workdir_patch(id, &project.in_repo(file_path), MAX_PATCH_CHARS)
+        .workdir_patch_limited(
+            id,
+            &project.in_repo(file_path),
+            &bytegit::PatchOptions {
+                max_output_bytes: MAX_PATCH_CHARS,
+                ..bytegit::PatchOptions::default()
+            },
+        )
         .map_err(|e| e.message().to_string())?;
+    if patch.input_limited {
+        return Ok("… 文件过大,未生成 diff\n".to_string());
+    }
     let mut text = patch.text;
     if patch.truncated {
         text.push_str("\n… diff 过长,已截断显示\n");

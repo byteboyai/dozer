@@ -8,8 +8,9 @@ mod tests {
     use crate::i18n::{t, t_args};
     use crate::menu::{FileContextMenuParams, context_menu_items, tab_context_menu_items};
     use crate::state::{
-        AppState, ContextMenu, PendingMove, SEARCH_FOCUSED, TREE_EDIT_FOCUSED, TabContextMenu,
-        TreeEdit, TreeEditMode, WorkspaceState, take_search_focused, take_tree_edit_focused,
+        AppState, ContextMenu, GitInfo, PendingMove, SEARCH_FOCUSED, TREE_EDIT_FOCUSED,
+        TabContextMenu, TreeEdit, TreeEditMode, WorkspaceState, take_search_focused,
+        take_tree_edit_focused,
     };
     use crate::state::{DRAG_HOVER_EXPAND_DELAY, search_field_id};
     use crate::tree::{
@@ -61,6 +62,93 @@ mod tests {
 
     fn ws_with_tree(root: PathBuf) -> WorkspaceState {
         WorkspaceState::new(FileTree::new(root))
+    }
+
+    #[test]
+    fn begin_tree_refresh_is_offline_and_merges_changes_while_inflight() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir(root.join("a")).unwrap();
+        std::fs::create_dir(root.join("b")).unwrap();
+        std::fs::write(root.join("a/one.txt"), "1").unwrap();
+        std::fs::write(root.join("b/two.txt"), "2").unwrap();
+
+        let mut ws = ws_with_tree(root.clone());
+        // 缓存 a/b 两个目录(相当于用户展开过它们)。
+        {
+            let tree = ws.file_tree.as_mut().unwrap();
+            tree.toggle(&root);
+            tree.ensure_expanded(&root.join("a"));
+            tree.ensure_expanded(&root.join("b"));
+        }
+
+        // 只读计划:变更落在 a 下时不应把 b 也排进去。
+        let first = ws
+            .begin_tree_refresh(&[root.join("a/one.txt")], false)
+            .expect("应有刷新计划");
+        assert!(first.dirs.contains(&root.join("a")));
+        assert!(!first.dirs.contains(&root.join("b")));
+
+        // 读盘期间又有 b 的变更:合并进 pending,不并发第二个任务。
+        assert!(
+            ws.begin_tree_refresh(&[root.join("b/two.txt")], false)
+                .is_none()
+        );
+
+        // 旧 generation 结果直接丢弃。
+        assert!(
+            ws.apply_tree_refresh(first.generation.wrapping_sub(1), vec![])
+                .is_none()
+        );
+
+        let next = ws
+            .apply_tree_refresh(first.generation, vec![])
+            .expect("pending 变更应生成下一轮计划");
+        assert!(next.dirs.contains(&root.join("b")));
+        assert!(next.generation > first.generation);
+    }
+
+    #[test]
+    fn switching_projects_cancels_the_old_inflight_tree_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir(root.join("a")).unwrap();
+        let mut ws = ws_with_tree(root.clone());
+        {
+            let tree = ws.file_tree.as_mut().unwrap();
+            tree.toggle(&root);
+            tree.ensure_expanded(&root.join("a"));
+        }
+        let old = ws.begin_tree_refresh(&[], true).expect("旧项目全量刷新");
+        assert!(ws.begin_tree_refresh(&[], true).is_none());
+
+        // 切到 B:必须清掉旧 in-flight,并且 B 能立刻启动自己的刷新。
+        ws.reset_for_project(FileTree::new(root.clone()));
+        ws.file_tree.as_mut().unwrap().toggle(&root);
+        let new = ws.begin_tree_refresh(&[], true).expect("新项目应能启动刷新");
+        assert!(new.generation > old.generation);
+        assert!(
+            ws.apply_tree_refresh(old.generation, vec![]).is_none(),
+            "A 的迟到结果不能应用/清掉 B 的 in-flight"
+        );
+        assert!(ws.apply_tree_refresh(new.generation, vec![]).is_none());
+    }
+
+    #[test]
+    fn a_full_tree_refresh_uses_all_cached_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir(root.join("a")).unwrap();
+        std::fs::write(root.join("a/one.txt"), "1").unwrap();
+        let mut ws = ws_with_tree(root.clone());
+        {
+            let tree = ws.file_tree.as_mut().unwrap();
+            tree.toggle(&root);
+            tree.ensure_expanded(&root.join("a"));
+        }
+        let plan = ws.begin_tree_refresh(&[], true).unwrap();
+        assert!(plan.dirs.contains(&root));
+        assert!(plan.dirs.contains(&root.join("a")));
     }
 
     fn row(path: &str, is_dir: bool) -> TreeRow {
@@ -2084,6 +2172,44 @@ mod tests {
             "en",
         );
         assert_eq!(ws_state.git_statuses.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn snapshot_applied_updates_files_and_branch_without_spawning_a_query() {
+        let mut ws_state = ws_with_tree(std::env::temp_dir());
+        let mut app_state = AppState::default();
+        let mut statuses = HashMap::new();
+        statuses.insert(
+            PathBuf::from("/x"),
+            git_status::FileGitStatus {
+                kind: git_status::ChangeKind::Modified,
+                staged: false,
+                unstaged: true,
+                ignored: false,
+            },
+        );
+        let info = GitInfo {
+            is_repo: true,
+            current_branch: Some("main".into()),
+            current_branch_has_commits: true,
+            branches: vec!["main".into(), "next".into()],
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SnapshotApplied(1, statuses, info),
+            1,
+            &handle,
+            |_| panic!("组合快照应用不得再发起后台查询"),
+            &crate::external_apps::ExternalAppsConfig::default(),
+            &FilesCapabilities::all(),
+            "en",
+        );
+        assert_eq!(ws_state.git_statuses.len(), 1);
+        assert!(ws_state.git_loaded);
+        assert_eq!(ws_state.current_branch.as_deref(), Some("main"));
+        assert_eq!(ws_state.git_branches, vec!["main", "next"]);
     }
 
     #[tokio::test]

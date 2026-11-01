@@ -15,20 +15,19 @@ use std::path::Path;
 pub fn git_snapshot(project_root: &Path) -> Option<GitSnapshot> {
     // 向上查找:项目在仓库子目录时,HEAD/分支/改动取整个仓库的(规格 O9 / D14)。
     let repo = Repo::discover_workdir(project_root).ok()?;
-    let head = head_short_sha(project_root);
-    let branch = repo.head().ok().and_then(|head| head.branch);
+    // 同一个已打开仓库读 HEAD 一次即可,不再为短 SHA 二次 discover。
+    let head_info = repo.head().ok();
+    let head = head_info
+        .as_ref()
+        .and_then(|head| head.commit)
+        .map(|commit| commit.short(7));
+    let branch = head_info.and_then(|head| head.branch);
     let dirty = repo.is_dirty(StatusOptions::default()).unwrap_or(false);
     Some(GitSnapshot {
         head,
         branch,
         dirty,
     })
-}
-
-/// HEAD 提交的前 7 位。向上查找仓库。
-fn head_short_sha(dir: &Path) -> Option<String> {
-    let commit = Repo::discover_workdir(dir).ok()?.head().ok()?.commit?;
-    Some(commit.short(7))
 }
 
 /// 近 30 天各文件（相对项目根的规范化路径）的提交次数。Git 不可用/失败返回
@@ -513,20 +512,25 @@ mod tests {
     }
 
     #[test]
-    fn head_short_sha_is_seven_chars_and_looks_upward() {
+    fn git_snapshot_reuses_one_head_read_for_short_sha_and_branch() {
         let dir = repo_with_two_files();
         let r = dir.path();
-        let sha = head_short_sha(r).expect("有提交应有 sha");
+        let sha = git_snapshot(r)
+            .and_then(|snapshot| snapshot.head)
+            .expect("有提交应有 sha");
         assert_eq!(sha.len(), 7);
         assert!(sha.chars().all(|c| c.is_ascii_hexdigit()));
         // 向上查找:子目录取到同一个 sha;空仓库、非 git 目录是 None
         std::fs::create_dir(r.join("pkg")).unwrap();
-        assert_eq!(head_short_sha(&r.join("pkg")), Some(sha));
+        assert_eq!(
+            git_snapshot(&r.join("pkg")).and_then(|snapshot| snapshot.head),
+            Some(sha)
+        );
         let empty = tempfile::tempdir().unwrap();
         run_git(empty.path(), &["init", "-q"]);
-        assert_eq!(head_short_sha(empty.path()), None);
+        assert_eq!(git_snapshot(empty.path()).and_then(|s| s.head), None);
         let plain = tempfile::tempdir().unwrap();
-        assert_eq!(head_short_sha(plain.path()), None);
+        assert_eq!(git_snapshot(plain.path()), None);
     }
 
     // ---- bytegit P3:recent_churn 迁移前后必须一致的口径 ----
