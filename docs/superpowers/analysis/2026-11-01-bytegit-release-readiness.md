@@ -182,7 +182,7 @@ Dozer panel boundary check                      通过
 
 | 产品 | 二进制 | 大小 | sha256 前 16 位 |
 |---|---|---:|---|
-| Dozer | dozer | 43,294,856 | 423e388fa774f60e |
+| Dozer | dozer | 43,299,576 | deb78f4bd33eadf3 |
 | Dozer | dozerd | 8,787,800 | d117ba67c1fb6d34 |
 | Dozer | dozer-hook | 2,071,400 | 590a2c9b64e3d6bb |
 | Dozer | dozer-mcp | 4,187,992 | 46ef0a504c8c565e |
