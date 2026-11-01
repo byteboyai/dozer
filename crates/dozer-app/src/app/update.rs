@@ -5008,6 +5008,12 @@ fn spawn_tree_refresh(
     });
 }
 
+/// 只有工作区/完整重扫会重算磁盘占用;Refs/Index 不扫盘。
+fn kinds_require_disk_refresh(kinds: bytegit::WorkspaceChangeKind) -> bool {
+    use bytegit::WorkspaceChangeKind as K;
+    kinds.contains(K::WORKDIR) || kinds.contains(K::FULL_RESCAN)
+}
+
 /// Git Log 图需要重建的原因位:引用、HEAD 切换/detach,或已无法局部解释的
 /// FullRescan。Index(纯 `git add`)不重建图。
 fn git_log_change_requires_refresh(kinds: bytegit::WorkspaceChangeKind) -> bool {
@@ -5345,5 +5351,10 @@ mod readiness_tests {
         assert!(git_log_change_requires_refresh(K::FULL_RESCAN));
         assert!(!git_log_change_requires_refresh(K::INDEX));
         assert!(!git_log_change_requires_refresh(K::WORKDIR));
+
+        assert!(kinds_require_disk_refresh(K::WORKDIR));
+        assert!(kinds_require_disk_refresh(K::FULL_RESCAN));
+        assert!(!kinds_require_disk_refresh(K::REFS));
+        assert!(!kinds_require_disk_refresh(K::INDEX));
     }
 }

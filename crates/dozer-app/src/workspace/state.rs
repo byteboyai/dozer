@@ -474,14 +474,7 @@ impl Workspace {
     /// 10s 最短间隔,避免构建产物连续写入时反复遍历目录。
     pub(crate) fn spawn_disk_usage(&mut self, io: &ShellIo, force: bool) {
         let now = std::time::Instant::now();
-        if self.disk_refresh_inflight {
-            return;
-        }
-        if !force
-            && self
-                .disk_refresh_at
-                .is_some_and(|last| now.duration_since(last) < std::time::Duration::from_secs(10))
-        {
+        if !disk_refresh_allowed(self.disk_refresh_at, self.disk_refresh_inflight, force, now) {
             return;
         }
         let Some(project) = &self.project else {
@@ -1934,5 +1927,53 @@ mod git_snapshot_tests {
             vec![&sub.join("inner.txt")]
         );
         assert_eq!(remotes, vec!["https://example.com/x.git".to_string()]);
+    }
+}
+
+/// 磁盘统计是否允许启动:单飞行;非强制时距上次启动至少 10s。
+fn disk_refresh_allowed(
+    last: Option<std::time::Instant>,
+    inflight: bool,
+    force: bool,
+    now: std::time::Instant,
+) -> bool {
+    if inflight {
+        return false;
+    }
+    force || last.is_none_or(|last| now.duration_since(last) >= std::time::Duration::from_secs(10))
+}
+
+#[cfg(test)]
+mod disk_refresh_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn disk_refresh_is_single_flight_and_throttled_to_ten_seconds() {
+        let now = Instant::now();
+        assert!(disk_refresh_allowed(None, false, false, now));
+        assert!(!disk_refresh_allowed(None, true, false, now));
+        assert!(
+            !disk_refresh_allowed(None, true, true, now),
+            "in-flight 优先"
+        );
+        assert!(!disk_refresh_allowed(
+            Some(now - Duration::from_secs(9)),
+            false,
+            false,
+            now
+        ));
+        assert!(disk_refresh_allowed(
+            Some(now - Duration::from_secs(10)),
+            false,
+            false,
+            now
+        ));
+        assert!(disk_refresh_allowed(
+            Some(now - Duration::from_secs(1)),
+            false,
+            true,
+            now
+        ));
     }
 }
