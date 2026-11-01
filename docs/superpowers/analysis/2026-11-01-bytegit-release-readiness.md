@@ -154,7 +154,7 @@ cargo test --locked -p dozer-panel-files      161 passed
 
 | 项 | 处理 | 证据 |
 |---|---|---|
-| N1 远端依赖 | bytegit `v0.9.1`、ByteUI `v0.5.1`、bytehost `v0.4.21` 已发布；Dozer `libs-2026-11-01d`（`a0a0ea12`）已推送；Digger 全部共享依赖切到该 tag | 无 patch 克隆：Dozer 1138 passed；Digger 717 passed；`cargo tree` 单一 bytegit/git2 |
+| N1 远端依赖 | bytegit `v0.9.1`、ByteUI `v0.5.1`、bytehost `v0.4.21` 已发布；Dozer `libs-2026-11-01e`（`734f2800`）已推送；Digger 全部共享依赖切到该 tag | 无 patch 克隆：Dozer 1138 passed；Digger 717 passed；`cargo tree` 单一 bytegit/git2 |
 | N2 切项目 in-flight | `reset_for_project` 清 pending/in-flight 并推进 generation | `switching_projects_cancels_the_old_inflight_tree_refresh` |
 | N3 订阅意图乱序 | discover 前分配 intent；runtime 拒绝旧 intent；宿主用 request generation 拒绝旧 ready | runtime `a_late_older_subscribe_intent...`；宿主 request 校验 |
 | N4 首快照早于 ready | ready 后显式 `refresh_manual`，保证至少一次有效结果 | 宿主 ready 分支 |
@@ -182,14 +182,14 @@ Dozer panel boundary check                      通过
 
 | 产品 | 二进制 | 大小 | sha256 前 16 位 |
 |---|---|---:|---|
-| Dozer | dozer | 43,300,488 | a6c63a1b12db1fda |
+| Dozer | dozer | 43,328,056 | 6b44f2ced95ce74d |
 | Dozer | dozerd | 8,787,800 | d117ba67c1fb6d34 |
 | Dozer | dozer-hook | 2,071,400 | 590a2c9b64e3d6bb |
 | Dozer | dozer-mcp | 4,187,992 | 46ef0a504c8c565e |
-| Digger | digger | 44,635,864 | 23f4b0f6708d8582 |
-| Digger | diggerd | 13,485,272 | fda0dcdcdbd3de53 |
-| Digger | digger-hook | 2,755,776 | 24bd1ab4f0093a1a |
-| Digger | digger-mcp | 6,459,496 | 49d8c4132809e927 |
+| Digger | digger | 44,674,664 | 12a26cf0801f7061 |
+| Digger | diggerd | 13,485,976 | 9caaac9fd1af0bb5 |
+| Digger | digger-hook | 2,755,776 | 75c11f952d920a63 |
+| Digger | digger-mcp | 6,459,480 | c659297c974ae4c7 |
 
 Dozer release 构建耗时约 3m34s（最终 HEAD），Digger 约 1m39s；使用共享 target 目录，未安装/覆盖已安装应用。
 
