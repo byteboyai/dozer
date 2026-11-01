@@ -154,13 +154,14 @@ cargo test --locked -p dozer-panel-files      161 passed
 
 | 项 | 处理 | 证据 |
 |---|---|---|
-| N1 远端依赖 | bytegit `v0.9.1`、ByteUI `v0.5.1`、bytehost `v0.4.21` 已发布；Dozer `libs-2026-11-01c`（`659453c9`）已推送；Digger 全部共享依赖切到该 tag | 无 patch 克隆：Dozer 1138 passed；Digger 717 passed；`cargo tree` 单一 bytegit/git2 |
+| N1 远端依赖 | bytegit `v0.9.1`、ByteUI `v0.5.1`、bytehost `v0.4.21` 已发布；Dozer `libs-2026-11-01d`（`a0a0ea12`）已推送；Digger 全部共享依赖切到该 tag | 无 patch 克隆：Dozer 1138 passed；Digger 717 passed；`cargo tree` 单一 bytegit/git2 |
 | N2 切项目 in-flight | `reset_for_project` 清 pending/in-flight 并推进 generation | `switching_projects_cancels_the_old_inflight_tree_refresh` |
 | N3 订阅意图乱序 | discover 前分配 intent；runtime 拒绝旧 intent；宿主用 request generation 拒绝旧 ready | runtime `a_late_older_subscribe_intent...`；宿主 request 校验 |
 | N4 首快照早于 ready | ready 后显式 `refresh_manual`，保证至少一次有效结果 | 宿主 ready 分支 |
 | N5 Git Log HEAD | 失效条件改为 `REFS || HEAD || FULL_RESCAN`；Index 不重建 | `git_log_refreshes_on_head...` |
 | N6 普通目录升格 | Dozer/Digger 在 `.git` 创建/删除与 FullRescan 时重新 discover，切换 plain watch/runtime | `reconcile_git_mode`；Digger `refs_changed` 保留 |
 | N7 Usage 缓存生命周期 | provider/cache 提升为进程级 `OnceLock`，跨激活复用 | `shared_git_stats_survives_activation...` |
+| CLI 取消 | bytegit `v0.9.2` 新增 `OperationOptions`/可取消 clone/checkout：独立进程组、超时、stderr 256KiB、持续排空、bounded progress | 取消/超时/截断/进度回归 |
 
 无 patch 验收（隔离克隆，无 `.cargo/config.toml`，重新生成锁文件）：
 
@@ -180,13 +181,13 @@ Dozer panel boundary check                      通过
 - **Digger 实际运行路径是否完整包含本次重构：** 是（代码路径已接入 runtime，`cargo test -p digger-desktop` 717 passed + 集成测试通过）；缺 GUI 手工证据。
 - **两者是否能在无本地 patch 的 checkout 构建并通过现行门禁：** **是**（隔离克隆、无 `.cargo/config.toml`、重新生成 Cargo.lock）：Dozer `check` + 1138 tests，Digger `check` + 717 tests。
 - **是否仍有阻止发布的代码、依赖、测试或外部条件：** 仍有但已收窄。
-  1. CLI `clone`/`checkout` 可取消进程树回收未实现；
+  1. 可取消 CLI API 已实现，但两产品尚未提供取消 UI/把写操作迁到新入口；
   2. 两产品 release 四件套构建、打包资源/plist 一致性未执行；
   3. GUI 手工录像/日志与 A1–A9 最终矩阵未完成；
   4. macOS 已实测；Linux/Windows 事件与进程回收未验证；
   5. Digger 仍无 git remote（不影响本地无 patch 构建，但影响正式发布方式）。
 
-结论：**依赖闭包已收口，代码路径与自动化测试就绪；发布前仍需完成 CLI 取消、release 构建、GUI 手工验收与跨平台验证。** 因此暂不宣告最终发布就绪。
+结论：**依赖闭包已收口，代码路径与自动化测试就绪；发布前仍需完成产品取消入口、release 构建、GUI 手工验收与跨平台验证。** 因此暂不宣告最终发布就绪。
 
 ### 4.1 建议发布顺序（未执行）
 

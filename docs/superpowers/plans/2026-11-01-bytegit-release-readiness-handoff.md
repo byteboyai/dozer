@@ -59,7 +59,7 @@ G0 退出条件：所有执行者能明确回答“基于哪份源码、负责�
 - [x] 在 bytegit 检查并应用 `bytegit-fixes.patch`，复核未与其它修改冲突；不要先应用历史 regressions 补丁。（提交 `8763899`。）
 - [x] 验证 R3 rescan 优先级与 R4 linked worktree 的 exclude/attributes/grafts/alternates 监听、删除/重建恢复和降级反馈。
 - [x] 核对身份重新发现、普通目录新建 Git、缺失 refs 等尚未完成的 T3 子项，明确由底层还是宿主实现并提供测试。（bytegit 负责 FULL_RESCAN/degraded 与目标重建；普通目录首次 `.git` 与身份重接线由 runtime/宿主处理。缺失 refs 由 worker 定期重试并恢复。）
-- [ ] 完成原 T12 的严格 patch API 与可取消 Git 子进程接口，保持旧 API、hook/filter/冲突行为；向 B/C/D 交付迁移说明。（`workdir_patch_limited` 严格 UTF-8 字节上限、输入预算、协作式取消已落地并由 file_history 使用；CLI clone/checkout 的可取消进程树回收未做。）
+- [x] 完成原 T12 的严格 patch API 与可取消 Git 子进程接口，保持旧 API、hook/filter/冲突行为；向 B/C/D 交付迁移说明。（`v0.9.2` 增加 `OperationOptions`/可取消 clone/checkout：独立进程组、超时、stderr 256KiB、持续排空；旧 API 不变。产品取消 UI 尚未接。）
 - [ ] 核对 ByteUI 已提交新接口与产品需求；需要新 tag 才能构建时，在 byteui 完成验证及版本收口，禁止产品靠未发布本地接口通过。（已核对：ByteUI HEAD `541554f` 无 tag，最新 tag 仍 v0.5.0。）
 - [ ] 准备共享库版本发布材料：确切 commit、建议版本、API 变化、默认/all-features 测试、平台范围及 tag 可获取性证据。（bytegit 修复提交尚未发 tag。）
 
