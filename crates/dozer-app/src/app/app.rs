@@ -763,7 +763,6 @@ impl App {
         safe_startup: bool,
     ) -> Self {
         let mut app = Self::new_shell(client, handle, proxy, None, capabilities, safe_startup);
-        app.start_git_runtime();
         // i18n Task 04:建立初始显示值(缓存/系统)并立即向 daemon 拉一次权威快照。
         app.locale_startup();
         let io = app.shell_io();
@@ -832,7 +831,6 @@ impl App {
             capabilities,
             safe_startup,
         );
-        app.start_git_runtime();
         // daemon 不可用:只建立初始显示值(缓存/系统临时),不发起读取。
         if let Some(cached) = crate::locale_cache::load() {
             app.locale.adopt_initial(cached, SnapshotSource::Cached);
@@ -858,7 +856,7 @@ impl App {
     ) -> Self {
         let shell_layout = layout::load();
         let panel_layouts = panel_layouts::load();
-        let shell = Self {
+        let mut shell = Self {
             client,
             handle,
             proxy,
@@ -946,6 +944,8 @@ impl App {
             toast: toast::ToastCenter::default(),
             external_apps: external_apps::load(),
         };
+        // 必须在第一次 `shell_io()` 之前就绪:new_shell 自己的 footbar/poller 会取它。
+        shell.start_git_runtime();
         // 启动 footbar 采样任务(fire-and-forget):runtime drop 时任务自然取消。
         let io = shell.shell_io();
         footbar::spawn_sampler(&io);
