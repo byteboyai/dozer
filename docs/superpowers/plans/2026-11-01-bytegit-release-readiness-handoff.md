@@ -118,7 +118,7 @@ G2-D 退出条件：Digger 真实产品路径已调用新实现，两个面板�
 - [x] 在独立 checkout 清除本地 patch，以远端 Git tag 重建锁文件；不修改主工作树配置。（Dozer/Digger 各建无 `.cargo/config.toml` 克隆并重新生成锁文件。）
 - [x] Cargo.lock 的 bytegit、byteui、dozer-* 等共享来源全部为真实 git source；不存在本地路径、占位 tag 或同库多份版本。（两产品锁文件已替换为无 patch 生成版本。）
 - [ ] 运行两个项目的依赖守卫、宿主/面板边界检查与现行格式、clippy、构建、测试门禁；完整结果对照 G0 基线，既有失败不能静默忽略。（无 patch 克隆已跑 `cargo check`、核心测试与两产品 `check-shared-deps.sh --offline`；完整 workspace/release 门禁尚未重跑。）
-- [ ] 以 release profile 构建两款 App 的各自 GUI/daemon/hook/MCP 四件套；不得复用旧版本二进制冒充本次构建。
+- [x] 以 release profile 构建两款 App 的各自 GUI/daemon/hook/MCP 四件套；不得复用旧版本二进制冒充本次构建。（无 patch 隔离克隆构建成功，大小/hash 见验收报告 §3.6。）
 - [ ] 打包资源与 plist/二进制版本一致性可在隔离目录验证；不调用会自动升版本的发布入口，不覆盖已安装应用。
 - [ ] 形成协调版本/提交清单、性能报告、已知限制和回退组合，不发布 App tag/Release。
 

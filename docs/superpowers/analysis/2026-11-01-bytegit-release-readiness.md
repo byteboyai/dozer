@@ -175,6 +175,23 @@ Digger cargo test --lib -p digger-desktop       717 passed
 Dozer panel boundary check                      通过
 ```
 
+### 3.6 release 构建（2026-11-01）
+
+在无本地 patch 的隔离克隆中以 release profile 构建四件套：
+
+| 产品 | 二进制 | 大小 | sha256 前 16 位 |
+|---|---|---:|---|
+| Dozer | dozer | 43,267,800 | 1ae718681e0b8afc |
+| Dozer | dozerd | 8,787,800 | d117ba67c1fb6d34 |
+| Dozer | dozer-hook | 2,071,400 | 590a2c9b64e3d6bb |
+| Dozer | dozer-mcp | 4,187,992 | 46ef0a504c8c565e |
+| Digger | digger | 44,635,864 | 23f4b0f6708d8582 |
+| Digger | diggerd | 13,485,272 | fda0dcdcdbd3de53 |
+| Digger | digger-hook | 2,755,776 | 24bd1ab4f0093a1a |
+| Digger | digger-mcp | 6,459,496 | 49d8c4132809e927 |
+
+Dozer release 构建耗时约 4m24s，Digger 约 1m39s；使用共享 target 目录，未安装/覆盖已安装应用。
+
 ## 4. 最终结论（未就绪）
 
 - **Dozer 实际运行路径是否完整包含本次重构：** 是（代码路径已接入 runtime，`cargo test -p dozer-app` 1136 passed）；缺 GUI 手工录像/日志证据。
