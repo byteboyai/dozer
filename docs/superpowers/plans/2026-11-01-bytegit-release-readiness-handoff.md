@@ -105,7 +105,7 @@ G2-C 退出条件：实际应用路径测试和手工操作证据确认新 runti
 - [x] 处理项目切换、A→B→A、关闭重开、普通非 Git 目录与身份重接线；在入口拒绝旧 token。（普通非 Git 目录保留旧 watch 只刷树；身份 mismatch 触发重新订阅。）
 - [x] 接入后台目录结果、按需刷新及对应写操作反馈，检查 Agent 不额外重复查询同工作区。（目录走 runtime watch + 异步 `TreeRefreshRequest`；分支切换等写操作仍走 Files 面板既有路径。）
 - [x] 维持预览、编辑器、菜单和 Agent 操作能力，增加集成回归。（Digger lib 717 passed。）
-- [ ] 将共享依赖需求交给 E 收口，不以本地 Dozer/ByteUI patch 作为最终验证环境。（当前 `.cargo/config.toml` 仍 patch 到本地 Dozer/bytegit/byteui；`dozer-git-runtime` 使用 libs tag 占位。）
+- [x] 将共享依赖需求交给 E 收口，不以本地 Dozer/ByteUI patch 作为最终验证环境。（Digger 已切 `libs-2026-11-01b`、bytegit v0.9.1、byteui v0.5.1；无 patch 克隆 check/test 通过。）
 
 G2-D 退出条件：Digger 真实产品路径已调用新实现，两个面板数据同步，相关集成回归通过；没有 remote 不影响本地集成测试，但会影响未来正式发布方式，须单独记录。（代码路径已接入，`cargo test -p digger-desktop --lib` 717 passed；尚无 GUI 手工证据，依赖仍为本地 patch。）
 
@@ -113,11 +113,11 @@ G2-D 退出条件：Digger 真实产品路径已调用新实现，两个面板�
 
 先合入 A/B/C/D 的实际交付，再冻结版本。
 
-- [ ] 建立依赖顺序：bytegit/ByteUI 的可获取版本 → Dozer 共享 crates/libs 快照 → Dozer/Digger 产品依赖。
-- [ ] 核对共享 tag 是否真实包含目标 commit；版本号一致不等于代码一致，禁止用旧 tag 配本地新代码过验收。
-- [ ] 在独立 checkout 清除本地 patch，以远端 Git tag 重建锁文件；不修改主工作树配置。
-- [ ] Cargo.lock 的 bytegit、byteui、dozer-* 等共享来源全部为真实 git source；不存在本地路径、占位 tag 或同库多份版本。
-- [ ] 运行两个项目的依赖守卫、宿主/面板边界检查与现行格式、clippy、构建、测试门禁；完整结果对照 G0 基线，既有失败不能静默忽略。
+- [x] 建立依赖顺序：bytegit/ByteUI 的可获取版本 → Dozer 共享 crates/libs 快照 → Dozer/Digger 产品依赖。（bytegit v0.9.1、byteui v0.5.1、bytehost v0.4.21、Dozer libs-2026-11-01b。）
+- [x] 核对共享 tag 是否真实包含目标 commit；版本号一致不等于代码一致，禁止用旧 tag 配本地新代码过验收。（`cargo tree` 显示真实 commit；无 patch 克隆直接编译。）
+- [x] 在独立 checkout 清除本地 patch，以远端 Git tag 重建锁文件；不修改主工作树配置。（Dozer/Digger 各建无 `.cargo/config.toml` 克隆并重新生成锁文件。）
+- [x] Cargo.lock 的 bytegit、byteui、dozer-* 等共享来源全部为真实 git source；不存在本地路径、占位 tag 或同库多份版本。（两产品锁文件已替换为无 patch 生成版本。）
+- [ ] 运行两个项目的依赖守卫、宿主/面板边界检查与现行格式、clippy、构建、测试门禁；完整结果对照 G0 基线，既有失败不能静默忽略。（无 patch 克隆已跑 `cargo check` 与核心测试；`check-shared-deps.sh --offline`、完整 workspace/release 门禁尚未重跑。）
 - [ ] 以 release profile 构建两款 App 的各自 GUI/daemon/hook/MCP 四件套；不得复用旧版本二进制冒充本次构建。
 - [ ] 打包资源与 plist/二进制版本一致性可在隔离目录验证；不调用会自动升版本的发布入口，不覆盖已安装应用。
 - [ ] 形成协调版本/提交清单、性能报告、已知限制和回退组合，不发布 App tag/Release。

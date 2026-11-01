@@ -150,20 +150,41 @@ cargo test --locked -p dozer-panel-files      161 passed
 - 验证：`cargo test --locked -p digger-desktop --lib` → 717 passed；`cargo tree -i bytegit` 只有一份 v0.9.0，`git2` 只有一份。
 - 阻断：Digger 无 git remote；依赖仍靠本地 patch；`dozer-git-runtime` 还没有可被 Digger 引用的已发布 libs tag。
 
+## 3.5 复审 N1–N7 修复（2026-11-01）
+
+| 项 | 处理 | 证据 |
+|---|---|---|
+| N1 远端依赖 | bytegit `v0.9.1`、ByteUI `v0.5.1`、bytehost `v0.4.21` 已发布；Dozer `libs-2026-11-01b`（`e19c0966`）已推送；Digger 全部共享依赖切到该 tag | 无 patch 克隆：Dozer 1138 passed；Digger 717 passed；`cargo tree` 单一 bytegit/git2 |
+| N2 切项目 in-flight | `reset_for_project` 清 pending/in-flight 并推进 generation | `switching_projects_cancels_the_old_inflight_tree_refresh` |
+| N3 订阅意图乱序 | discover 前分配 intent；runtime 拒绝旧 intent；宿主用 request generation 拒绝旧 ready | runtime `a_late_older_subscribe_intent...`；宿主 request 校验 |
+| N4 首快照早于 ready | ready 后显式 `refresh_manual`，保证至少一次有效结果 | 宿主 ready 分支 |
+| N5 Git Log HEAD | 失效条件改为 `REFS || HEAD || FULL_RESCAN`；Index 不重建 | `git_log_refreshes_on_head...` |
+| N6 普通目录升格 | Dozer/Digger 在 `.git` 创建/删除与 FullRescan 时重新 discover，切换 plain watch/runtime | `reconcile_git_mode`；Digger `refs_changed` 保留 |
+| N7 Usage 缓存生命周期 | provider/cache 提升为进程级 `OnceLock`，跨激活复用 | `shared_git_stats_survives_activation...` |
+
+无 patch 验收（隔离克隆，无 `.cargo/config.toml`，重新生成锁文件）：
+
+```text
+Dozer  cargo check -p dozer-app                 通过
+Dozer  cargo test -p dozer-app                  1138 passed, 2 ignored
+Dozer  runtime/panels/usage/store 测试          全部通过
+Digger cargo check -p digger-desktop            通过
+Digger cargo test --lib -p digger-desktop       717 passed
+```
+
 ## 4. 最终结论（未就绪）
 
 - **Dozer 实际运行路径是否完整包含本次重构：** 是（代码路径已接入 runtime，`cargo test -p dozer-app` 1136 passed）；缺 GUI 手工录像/日志证据。
 - **Digger 实际运行路径是否完整包含本次重构：** 是（代码路径已接入 runtime，`cargo test -p digger-desktop` 717 passed + 集成测试通过）；缺 GUI 手工证据。
-- **两者是否能在无本地 patch 的 checkout 构建并通过现行门禁：** **否，未验证**。两产品 `.cargo/config.toml` 仍 patch 到本地 Dozer/bytegit/byteui；`dozer-git-runtime` 依赖仍是 tag 占位。
-- **是否仍有阻止发布的代码、依赖、测试或外部条件：** 是。
-  1. bytegit 修复提交 `8763899`、`6c91137` 未推送/未发 tag；
-  2. Dozer 共享库（含 `dozer-git-runtime`）未提交/未发 libs tag；
-  3. ByteUI HEAD `541554f` 无可用 tag；
-  4. Digger 无 git remote，依赖本地 patch；
-  5. 无本地 patch 的锁文件重建、两产品 release 构建、A1–A9 最终矩阵未执行；
-  6. GUI 手工验收证据缺失。
+- **两者是否能在无本地 patch 的 checkout 构建并通过现行门禁：** **是**（隔离克隆、无 `.cargo/config.toml`、重新生成 Cargo.lock）：Dozer `check` + 1138 tests，Digger `check` + 717 tests。
+- **是否仍有阻止发布的代码、依赖、测试或外部条件：** 仍有但已收窄。
+  1. CLI `clone`/`checkout` 可取消进程树回收未实现；
+  2. 两产品 release 四件套构建、打包资源/plist 一致性未执行；
+  3. GUI 手工录像/日志与 A1–A9 最终矩阵未完成；
+  4. macOS 已实测；Linux/Windows 事件与进程回收未验证；
+  5. Digger 仍无 git remote（不影响本地无 patch 构建，但影响正式发布方式）。
 
-结论：**未就绪**。下一阶段应先发布 bytegit/ByteUI/Dozer libs tag，再由 E 在隔离 checkout 清除 patch、重建锁文件、跑两产品门禁与 release 构建。
+结论：**依赖闭包已收口，代码路径与自动化测试就绪；发布前仍需完成 CLI 取消、release 构建、GUI 手工验收与跨平台验证。** 因此暂不宣告最终发布就绪。
 
 ### 4.1 建议发布顺序（未执行）
 
