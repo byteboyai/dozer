@@ -69,7 +69,7 @@
 |---|---|---|
 | ByteUI `v0.5.2` | `e33824578d0f6fa10f168657fe08d882ad6fadc4` | CI run 41572390741：success |
 | ByteHost `v0.4.22` | `729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e` | CI run 41572677875：success；joint-build 41573636762：success |
-| Dozer `libs-2026-11-03a` | `e019a56fb53bd9ab97eae0ac7c8152376b40b501` | Consumer check 41573001561：success；main 文档提交 `9da10a82` 的 41573499793：success |
+| Dozer `libs-2026-11-03a` | `e019a56fb53bd9ab97eae0ac7c8152376b40b501` | Consumer check 41573001561、`9da10a82` 的 41573499793、`c26b7174` 的 41574640539：success |
 | Digger main | `e82c048d8ba81ad507524335e5667bbee7472a1a` | Consumer check 41573423472：success |
 | ByteGit | `5472fa553ab34d97d9a1e4055c89d03b48eb4848` | 本批未改版本 |
 

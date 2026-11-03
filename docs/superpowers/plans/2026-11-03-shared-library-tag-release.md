@@ -167,5 +167,5 @@ git ls-remote "$RELEASE_REMOTE" \
 - Digger `cargo check --locked --offline --workspace --all-targets` 通过；workspace lib 测试 39/726/47/13/56 通过；host-deps 15、editor-selftest 4、shared-deps 通过。
 - Dozer `cargo check --locked --offline --workspace --all-targets` 通过；file-io 29、preview-core 166、dozerd 547、client 70、core 116、agent 83、preview 410、todo 69 通过。
 - T2 的候选 path 验证被实际发布后的正式 git 来源验证替代；未把候选 lock 当作发行锁。
-- CI：ByteUI 41572390741 success；ByteHost 41572677875 success、joint-build 重跑 41573636762 success；Dozer 41573001561/41573499793 success；Digger 41573423472 success。首次 ByteHost joint-build 41572677891 失败于旧 Digger 仍引用 ByteUI 0.5.1，Digger 更新后重跑通过。
+- CI：ByteUI 41572390741 success；ByteHost 41572677875 success、joint-build 重跑 41573636762 success；Dozer 41573001561/41573499793/41574640539 success；Digger 41573423472 success。首次 ByteHost joint-build 41572677891 失败于旧 Digger 仍引用 ByteUI 0.5.1，Digger 更新后重跑通过。
 - 未完成：完整 GUI/真实 agent/历史二进制组合/发行性能验收。
