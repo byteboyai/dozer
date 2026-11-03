@@ -98,6 +98,11 @@ pub async fn run(config: DaemonConfig) -> Result<()> {
 
     // 单实例检查必须在任何有副作用的启动工作之前(与原 main 相同:
     // 误启动的第二个守护进程不能先动手再发现自己不该启动)。
+    //
+    // 原子进程锁比 connect 探测更强:锁在日志/DB/apps/socket 之前取得并持有
+    // 到完全退出,锁文件不 unlink。connect 探测保留用于清理陈旧 socket。
+    let lock_path = socket.with_extension("lock");
+    let _process_lock = crate::process_lock::ProcessLock::acquire(&lock_path)?;
     server::ensure_single_instance(socket).await?;
 
     let _guard = dozer_core::log::init(
@@ -115,6 +120,16 @@ pub async fn run(config: DaemonConfig) -> Result<()> {
     let summary_jobs = Arc::new(crate::summary_jobs::SummaryJobStore::open(&db)?);
     let backfill_registry = Arc::new(crate::session_summary_backfill::BackfillRegistry::new());
     let todos = Arc::new(crate::todo::TodoStore::new(&db)?);
+    let executions = Arc::new(crate::task_execution::TaskExecutionStore::open(&db)?);
+    if let Ok(recovered) = executions.recover_running()
+        && recovered > 0
+    {
+        dozer_core::log_warn!(
+            LOG,
+            count = recovered,
+            "重启恢复:遗留任务执行已标记为 Interrupted"
+        );
+    }
     let categories = Arc::new(crate::todo_category::CategoryStore::new(&db)?);
     let memories = Arc::new(crate::memory::MemoryStore::new(&db)?);
     let file_edit_history = Arc::new(crate::file_edit_history::FileEditHistoryStore::new(&db)?);
@@ -143,19 +158,60 @@ pub async fn run(config: DaemonConfig) -> Result<()> {
         bytehost_apps::service::AppService::unavailable("app host runs in-process in this product")
     };
     let in_flight = crate::task_poller::new_in_flight();
-    if features.transcript_backfill {
-        let files = crate::transcripts::scan::discover_all_transcript_files();
-        dozer_core::log_info!(
-            LOG,
-            count = files.len(),
-            "启动回填:发现历史 transcript 文件"
-        );
-        crate::backfill::backfill_all(&transcripts, files);
-        match transcripts.ingest_codex_sqlite(None) {
-            Ok(count) => dozer_core::log_info!(LOG, count, "启动回填:已摄取 Codex SQLite 会话"),
-            Err(e) => dozer_core::log_warn!(LOG, error = %e, "Codex SQLite 启动回填失败"),
-        }
-    }
+    let (startup_ready, startup_wait) = tokio::sync::watch::channel(false);
+    let backfill_worker = if features.transcript_backfill {
+        let transcripts = transcripts.clone();
+        transcripts.ingestion().begin_scan();
+        let mut ready = startup_wait.clone();
+        let runtime = tokio::runtime::Handle::current();
+        Some(tokio::task::spawn_blocking(move || {
+            if !runtime.block_on(wait_for_startup(&mut ready)) {
+                return;
+            }
+            use dozer_core::protocol::BackfillPhase;
+            let worker = transcripts.ingestion();
+            let discovery = crate::transcripts::scan::visit_all_cancellable(
+                &dozer_core::agent_paths::home_dir(),
+                || !worker.stopped(),
+                |agent, path| {
+                    if worker.stopped() {
+                        return false;
+                    }
+                    worker.update(|s| s.discovered += 1);
+                    loop {
+                        if worker.stopped() {
+                            return false;
+                        }
+                        if worker.submit_scan(agent, path.clone()).is_ok() {
+                            return true;
+                        }
+                        worker.wait_capacity();
+                    }
+                },
+            );
+            worker.update(|s| {
+                s.phase = BackfillPhase::Ingesting;
+                s.failed = s.failed.saturating_add(discovery.failed);
+                if discovery.failed > 0 {
+                    s.last_error = Some("Transcript directory discovery failed".into());
+                }
+            });
+            while !worker.stopped() && worker.status().pending > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            if !worker.stopped() {
+                if let Err(e) = transcripts.ingest_codex_sqlite(None) {
+                    worker.update(|s| {
+                        s.failed += 1;
+                        s.last_error = Some(e.to_string());
+                    });
+                }
+                worker.end_scan();
+            }
+        }))
+    } else {
+        None
+    };
     let (summary_service, summary_worker, summary_shutdown) = if features.summaries {
         let summary_service = Arc::new(crate::summary_service::SummaryService {
             jobs: summary_jobs.clone(),
@@ -171,79 +227,146 @@ pub async fn run(config: DaemonConfig) -> Result<()> {
             let service = summary_service.clone();
             let flag = shutdown.clone();
             let scratch_root = paths::state_dir().join("summary-scratch");
-            tokio::spawn(async move {
-                service
-                    .run_worker(flag, move |agent, config| {
-                        Box::new(crate::summary_pipeline::ProviderSummarizer {
-                            agent,
-                            config,
-                            cwd: scratch_root.clone(),
-                        })
-                    })
-                    .await;
+            let runtime = tokio::runtime::Handle::current();
+            let registry = registry.clone();
+            let mut cancellation = summary_jobs.cancellation();
+            let mut ready = startup_wait.clone();
+            tokio::task::spawn_blocking(move || {
+                runtime.block_on(async move {
+                    if !wait_for_startup(&mut ready).await {
+                        return;
+                    }
+                    let worker = crate::process_runner::with_cancellation(
+                        cancellation.clone(),
+                        service.run_worker(flag.clone(), move |agent, config| {
+                            Box::new(crate::summary_pipeline::ProviderSummarizer {
+                                agent,
+                                config,
+                                cwd: scratch_root.clone(),
+                            })
+                        }),
+                    );
+                    tokio::pin!(worker);
+                    tokio::select! {_= &mut worker=>return,_=cancellation.changed()=>{}}
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                    let deadline = std::cmp::min(
+                        tokio::time::Instant::now() + std::time::Duration::from_secs(3),
+                        tokio::time::Instant::from_std(registry.shutdown_deadline()),
+                    );
+                    if tokio::time::timeout_at(deadline, &mut worker)
+                        .await
+                        .is_err()
+                    {
+                        dozer_core::log_warn!(
+                            LOG,
+                            "summary cancellation cleanup timed out; durable job state retained"
+                        );
+                    }
+                })
             })
         };
         (Some(summary_service), Some(worker), Some(shutdown))
     } else {
         (None, None, None)
     };
-    if features.task_poller {
-        // validate_features 已保证 summaries == true;unwrap 只是让类型
-        // 收窄,不再 panic。
-        crate::task_poller::spawn(
+    let poller = if features.task_poller {
+        Some(crate::task_poller::spawn_after_ready(
             todos.clone(),
             categories.clone(),
             session_summaries.clone(),
             transcripts.clone(),
             projects.clone(),
+            executions.clone(),
             in_flight.clone(),
-            summary_service
-                .clone()
-                .expect("validate_features 已校验:task_poller 开启时 summaries 必须为 true"),
-        );
-    }
-    let serve = server::serve(
+            summary_service.clone().expect("validated summary feature"),
+            Some(startup_wait.clone()),
+        ))
+    } else {
+        None
+    };
+    let stores = Stores {
+        registry,
+        projects,
+        bookmarks,
+        code_health,
+        transcripts,
+        session_summaries,
+        summary_jobs,
+        backfill_registry,
+        todos,
+        executions,
+        categories,
+        memories,
+        file_edit_history,
+        groups,
+        apps: apps.clone(),
+        locale,
+    };
+    // SIGINT/SIGTERM 与 Shutdown RPC 共用同一份会话收尾/应用停止逻辑。
+    let shutdown_stores = stores.clone();
+    let serve = server::serve_with_startup(
         socket,
         crate::ide_bridge::lock_dir(),
-        Stores {
-            registry,
-            projects,
-            bookmarks,
-            code_health,
-            transcripts,
-            session_summaries,
-            summary_jobs,
-            backfill_registry,
-            todos,
-            categories,
-            memories,
-            file_edit_history,
-            groups,
-            apps: apps.clone(),
-            locale,
-        },
+        stores,
         in_flight,
         features.ide_bridge,
+        Some(startup_ready),
     );
-    tokio::select! {
+    let serve_result = tokio::select! {
         r = serve => {
             if let Some(flag) = &summary_shutdown {
                 flag.store(true, std::sync::atomic::Ordering::Relaxed);
             }
-            r?
+            r
         }
         _ = shutdown_signal() => {
-            apps.shutdown().await;
+            server::shutdown_stores(&shutdown_stores).await;
             if let Some(flag) = &summary_shutdown {
                 flag.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             let _ = std::fs::remove_file(socket);
+            Ok(())
+        }
+    };
+    if serve_result.is_err() {
+        server::shutdown_stores(&shutdown_stores).await;
+    }
+    shutdown_stores_after_serve(&shutdown_stores).await;
+    let deadline = tokio::time::Instant::from_std(shutdown_stores.registry.shutdown_deadline());
+    if let Some(mut worker) = poller {
+        if tokio::time::timeout_at(deadline, &mut worker)
+            .await
+            .is_err()
+        {
+            worker.abort();
+            dozer_core::log_warn!(LOG, "task poller shutdown exceeded total budget");
         }
     }
-    if let Some(worker) = summary_worker {
-        let _ = worker.await;
+    if let Some(mut worker) = backfill_worker {
+        if tokio::time::timeout_at(deadline, &mut worker)
+            .await
+            .is_err()
+        {
+            dozer_core::log_warn!(
+                LOG,
+                "backfill shutdown timed out; committed offsets retained"
+            );
+            worker.abort();
+        }
     }
-    Ok(())
+    if let Some(mut worker) = summary_worker {
+        if tokio::time::timeout_at(deadline, &mut worker)
+            .await
+            .is_err()
+        {
+            dozer_core::log_warn!(
+                LOG,
+                "summary shutdown timed out; unfinished jobs recover on restart"
+            );
+            worker.abort();
+        }
+    }
+    serve_result
 }
 
 /// 等到 Ctrl-C(SIGINT)或 SIGTERM(与原 main 相同)。
@@ -328,5 +451,25 @@ mod tests {
             root.path().join("state").join("digger.db")
         );
         assert_eq!(cfg.features, DaemonFeatures::default());
+    }
+}
+
+async fn shutdown_stores_after_serve(stores: &server::Stores) {
+    stores.registry.begin_draining();
+    stores.executions.stop();
+    stores.summary_jobs.stop();
+    if let Some(worker) = stores.transcripts.ingestion.get() {
+        worker.stop();
+    }
+}
+
+pub(crate) async fn wait_for_startup(ready: &mut tokio::sync::watch::Receiver<bool>) -> bool {
+    loop {
+        if *ready.borrow() {
+            return true;
+        }
+        if ready.changed().await.is_err() {
+            return false;
+        }
     }
 }

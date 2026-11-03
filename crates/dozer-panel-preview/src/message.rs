@@ -121,6 +121,6 @@ pub enum Message {
     SaveFinished {
         tab_id: usize,
         revision: u64,
-        result: Result<(), String>,
+        result: Result<crate::SaveOutcome, String>,
     },
 }

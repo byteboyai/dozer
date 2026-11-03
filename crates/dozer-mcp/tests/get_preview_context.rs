@@ -30,6 +30,7 @@ async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
     let summary_jobs = Arc::new(dozerd::summary_jobs::SummaryJobStore::open(&db).unwrap());
     let backfill_registry = Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new());
     let todos = Arc::new(dozerd::todo::TodoStore::new(&db).unwrap());
+    let executions = Arc::new(dozerd::task_execution::TaskExecutionStore::open(&db).unwrap());
     let categories = Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap());
     let memories = Arc::new(dozerd::memory::MemoryStore::new(&db).unwrap());
     let file_edit_history =
@@ -51,6 +52,7 @@ async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
                 summary_jobs,
                 backfill_registry,
                 todos,
+                executions,
                 categories,
                 memories,
                 file_edit_history,

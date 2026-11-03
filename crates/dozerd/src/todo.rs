@@ -140,7 +140,14 @@ impl TodoStore {
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([project_id], row_to_todo)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        Ok(dozer_services::query_budget::collect(
+            rows,
+            |row: &TodoInfo| {
+                row.text.len()
+                    + row.plan_date.as_ref().map_or(0, String::len)
+                    + row.dispatch_session_id.as_ref().map_or(0, String::len)
+            },
+        )?)
     }
 
     /// 查单条任务(`SetTodoCategory` 校验分类归属用)。`id` 不存在返回
@@ -300,7 +307,14 @@ impl TodoStore {
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([category_id], row_to_todo)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        Ok(dozer_services::query_budget::collect(
+            rows,
+            |row: &TodoInfo| {
+                row.text.len()
+                    + row.plan_date.as_ref().map_or(0, String::len)
+                    + row.dispatch_session_id.as_ref().map_or(0, String::len)
+            },
+        )?)
     }
 
     /// 分页拉某项目"需要推进"的活动派发任务:进行中(`done=0,paused=0`)里
@@ -317,7 +331,14 @@ impl TodoStore {
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params![project_id, limit], row_to_todo)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        Ok(dozer_services::query_budget::collect(
+            rows,
+            |row: &TodoInfo| {
+                row.text.len()
+                    + row.plan_date.as_ref().map_or(0, String::len)
+                    + row.dispatch_session_id.as_ref().map_or(0, String::len)
+            },
+        )?)
     }
 
     /// `[dispatch_session_id] = ?` 为空的都行的稳定备用 id 源不用加索引。
@@ -333,7 +354,14 @@ impl TodoStore {
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([project_id], row_to_todo)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        Ok(dozer_services::query_budget::collect(
+            rows,
+            |row: &TodoInfo| {
+                row.text.len()
+                    + row.plan_date.as_ref().map_or(0, String::len)
+                    + row.dispatch_session_id.as_ref().map_or(0, String::len)
+            },
+        )?)
     }
 
     /// 挂/摘任务的分类。`category_id: None` 摘掉分类(变回未分类)。

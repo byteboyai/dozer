@@ -45,5 +45,11 @@
   "weekday.3": "We",
   "weekday.4": "Th",
   "weekday.5": "Fr",
-  "weekday.6": "Sa"
+  "weekday.6": "Sa",
+  "detail.retry": "Retry execution",
+  "detail.execution.queued": "Queued",
+  "detail.execution.running": "Running",
+  "detail.execution.succeeded": "Succeeded",
+  "detail.execution.failed": "Execution failed",
+  "detail.execution.interrupted": "Interrupted; check side effects before retrying"
 }

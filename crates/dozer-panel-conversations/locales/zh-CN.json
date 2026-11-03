@@ -26,5 +26,7 @@
   "pane_title": "对话",
   "generating": "生成中…",
   "generate_summary": "生成总结",
-  "no_review_content": "暂无审阅内容——点击左侧对话列表中的对话开始审阅"
+  "no_review_content": "暂无审阅内容——点击左侧对话列表中的对话开始审阅",
+  "backfill.loading": "正在导入历史，当前结果尚不完整",
+  "backfill.failed": "历史导入未完成，当前结果可能不完整"
 }

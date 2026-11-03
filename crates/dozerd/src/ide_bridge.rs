@@ -465,8 +465,14 @@ mod rpc_tests {
 
 struct ProjectBridgeHandle {
     active_sessions: usize,
-    shutdown_tx: oneshot::Sender<()>,
+    shutdown_tx: Option<oneshot::Sender<()>>,
     lock_path: PathBuf,
+}
+
+impl Drop for ProjectBridgeHandle {
+    fn drop(&mut self) {
+        remove_lock_file(&self.lock_path);
+    }
 }
 
 /// 每个连接最多等待这么久完成 WS 握手,超时直接丢弃连接——本地
@@ -479,6 +485,7 @@ const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5)
 const MAX_CONCURRENT_CONNECTIONS: usize = 4;
 
 pub(crate) struct IdeBridgeRegistry {
+    stopping: std::sync::atomic::AtomicBool,
     lock_dir: PathBuf,
     preview_contexts: Arc<PreviewContextStore>,
     // 外层只锁"project_id -> 该项目专属锁"这张索引,查一次就放手;真正的
@@ -495,11 +502,31 @@ impl IdeBridgeRegistry {
     pub(crate) fn new(lock_dir: PathBuf, preview_contexts: Arc<PreviewContextStore>) -> Arc<Self> {
         Arc::new(Self {
             lock_dir,
+            stopping: std::sync::atomic::AtomicBool::new(false),
             preview_contexts,
             projects: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
+    pub(crate) async fn shutdown(&self) {
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let slots: Vec<_> = self
+            .projects
+            .lock()
+            .expect("bridge index")
+            .values()
+            .cloned()
+            .collect();
+        for slot in slots {
+            if let Some(mut handle) = slot.lock().await.take() {
+                if let Some(tx) = handle.shutdown_tx.take() {
+                    let _ = tx.send(());
+                }
+                remove_lock_file(&handle.lock_path);
+            }
+        }
+    }
     /// 拿到(必要时创建)某个项目专属的锁——这一步本身只锁索引表,不持锁
     /// 跨 `.await`,拿到手的 `Arc<AsyncMutex<..>>` 之后再各自独立加锁。
     fn project_lock(&self, project_id: i64) -> Arc<AsyncMutex<Option<ProjectBridgeHandle>>> {
@@ -575,6 +602,10 @@ impl IdeBridgeRegistry {
             }
         };
 
+        if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            remove_lock_file(&lock_path);
+            return false;
+        }
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         tokio::spawn(run_bridge_listener(
             listener,
@@ -585,7 +616,7 @@ impl IdeBridgeRegistry {
         ));
         *slot = Some(ProjectBridgeHandle {
             active_sessions: 1,
-            shutdown_tx,
+            shutdown_tx: Some(shutdown_tx),
             lock_path,
         });
         true
@@ -610,9 +641,11 @@ impl IdeBridgeRegistry {
             None => return,
         };
         if remaining == 0
-            && let Some(handle) = slot.take()
+            && let Some(mut handle) = slot.take()
         {
-            let _ = handle.shutdown_tx.send(());
+            if let Some(tx) = handle.shutdown_tx.take() {
+                let _ = tx.send(());
+            }
             remove_lock_file(&handle.lock_path);
         }
     }

@@ -8,6 +8,7 @@ publish = false
 # 依赖闭包刻意**不含** iced / wry / dozer-app / dozer-client / dozer-core:Dozer 与 Digger
 # 共用同一份决策逻辑,产品专属的全局单例、硬件探测、webview 池都留在各自的产品里。
 [dependencies]
+dozer-file-io = { path = "../dozer-file-io" }
 dozer-i18n = { path = "../dozer-i18n" }
 dozer-model = { path = "../dozer-model" }
 serde.workspace = true

@@ -24,6 +24,54 @@ pub fn terminal_pane<'a, M: Clone + 'static>(
     let region = host.pane_style(AgentPane::Terminal);
     let mut content = column![tab_bar(state, host)].spacing(region.gap);
 
+    if let Some(tab) = state.tabs.get(state.active) {
+        if let Some(status) = state.stream_status.get(&tab.tab_id) {
+            use crate::stream::Status;
+            let message = match status {
+                Status::Ready => None,
+                Status::Recovering => Some(i18n::text(
+                    "stream.recovering",
+                    "Reconnecting terminal…",
+                    host.locale(),
+                )),
+                Status::Failed => {
+                    let label = i18n::text("stream.failed", "Terminal disconnected", host.locale());
+                    Some(
+                        state
+                            .stream_errors
+                            .get(&tab.tab_id)
+                            .map(|error| format!("{label}: {error}"))
+                            .unwrap_or(label),
+                    )
+                }
+                Status::Degraded => Some(i18n::text(
+                    "stream.degraded",
+                    "Legacy daemon: terminal recovery is limited",
+                    host.locale(),
+                )),
+                Status::HistoryIncomplete => Some(i18n::text(
+                    "stream.reset",
+                    "Terminal restored; older output is unavailable",
+                    host.locale(),
+                )),
+            };
+            if let Some(message) = message {
+                let mut status_row = row![text(message).size(byteui::theme::font::label())];
+                if *status == Status::Failed {
+                    status_row = status_row.push(
+                        iced_widget::button(text(i18n::text(
+                            "stream.retry",
+                            "Retry",
+                            host.locale(),
+                        )))
+                        .on_press(host.wrap(Message::RetryStream { tab_id: tab.tab_id })),
+                    );
+                }
+                content = content.push(status_row.spacing(region.gap));
+            }
+        }
+    }
+
     if let Some(code) = state.tabs.get(state.active).and_then(|t| t.last_exit)
         && code != 0
     {

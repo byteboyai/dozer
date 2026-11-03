@@ -210,6 +210,25 @@ pub fn conversations_list<'a, M: Clone + 'a>(
         }))),
     ));
 
+    if let Some(state) = &ws_state.backfill {
+        use dozer_model::BackfillPhase::*;
+        let hint = match state.phase {
+            Discovering | Ingesting => Some(t(
+                "backfill.loading",
+                "Importing history; results are incomplete",
+                locale,
+            )),
+            Failed | Cancelled => Some(t(
+                "backfill.failed",
+                "History import did not finish; results may be incomplete",
+                locale,
+            )),
+            _ => None,
+        };
+        if let Some(hint) = hint {
+            content = content.push(text(hint).size(byteui::theme::font::caption()));
+        }
+    }
     let Some(rows) = ws_state.sessions.as_ref() else {
         content = content.push(
             loading_hint_localized(
@@ -234,7 +253,17 @@ pub fn conversations_list<'a, M: Clone + 'a>(
 
     let agents_present = conversation_agents_present(rows);
     let filtered = filter_sessions(rows, &ws_state.search, ws_state.agent_filter);
-    if rows.is_empty() {
+    if rows.is_empty()
+        && !ws_state.backfill.as_ref().is_some_and(|s| {
+            matches!(
+                s.phase,
+                dozer_model::BackfillPhase::Discovering
+                    | dozer_model::BackfillPhase::Ingesting
+                    | dozer_model::BackfillPhase::Failed
+                    | dozer_model::BackfillPhase::Cancelled
+            )
+        })
+    {
         content = content.push(lh(
             region.line_height,
             text(t("empty.no_sessions", "No conversations yet", locale))

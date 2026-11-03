@@ -58,6 +58,7 @@ async fn start_test_daemon() -> PathBuf {
                 summary_jobs: test_summary_jobs(),
                 backfill_registry: test_backfill_registry(),
                 todos: test_todos(),
+                executions: test_executions(),
                 categories: test_categories(),
                 memories: test_memories(),
                 file_edit_history: test_file_edit_history(),
@@ -230,6 +231,11 @@ fn test_summary_jobs() -> std::sync::Arc<dozerd::summary_jobs::SummaryJobStore> 
 fn test_todos() -> std::sync::Arc<dozerd::todo::TodoStore> {
     let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
     std::sync::Arc::new(dozerd::todo::TodoStore::new(&db).unwrap())
+}
+
+fn test_executions() -> std::sync::Arc<dozerd::task_execution::TaskExecutionStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-exec-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::task_execution::TaskExecutionStore::open(&db).unwrap())
 }
 
 fn test_categories() -> std::sync::Arc<dozerd::todo_category::CategoryStore> {

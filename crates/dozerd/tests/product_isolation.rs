@@ -275,3 +275,70 @@ async fn app_host_is_unavailable_when_the_feature_is_off() {
     let _ = d.kill();
     let _ = d.wait();
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sigterm_and_sigint_reap_sessions_and_release_socket_lock() {
+    for signal in [libc::SIGTERM, libc::SIGINT] {
+        let root = tempfile::Builder::new()
+            .prefix("dz-signal-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let mut daemon = spawn_daemon("signal-test", root.path());
+        let sock = root.path().join("state/testd.sock");
+        wait_for_socket(&sock, &mut daemon);
+        let pidfile = root.path().join("session.pid");
+        let reply = rpc(
+            &sock,
+            Request::CreateSession {
+                name: "signal".into(),
+                command: "/bin/sh".into(),
+                args: vec![
+                    "-c".into(),
+                    "printf '%s' \"$$\" > \"$1\"; exec sleep 30".into(),
+                    "fixture".into(),
+                    pidfile.to_string_lossy().into_owned(),
+                ],
+                cwd: root.path().to_string_lossy().into_owned(),
+                cols: 80,
+                rows: 24,
+                project_id: 1,
+                agent: dozer_core::protocol::AgentKind::Unknown,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(reply, Reply::Created { .. }));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while !pidfile.exists() {
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let pid: i32 = std::fs::read_to_string(pidfile).unwrap().parse().unwrap();
+        assert_eq!(unsafe { libc::kill(daemon.id() as i32, signal) }, 0);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = daemon.try_wait().unwrap() {
+                break status;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "daemon stop deadline"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert!(status.success(), "{status}");
+        assert!(!sock.exists());
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            -1,
+            "session process survived daemon stop"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+        let _lock =
+            dozerd::process_lock::ProcessLock::acquire(&sock.with_extension("lock")).unwrap();
+    }
+}

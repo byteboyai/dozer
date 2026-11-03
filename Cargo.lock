@@ -2132,6 +2132,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dozer-file-io"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "dozer-git-runtime"
 version = "0.1.0"
 dependencies = [
@@ -2384,6 +2392,7 @@ dependencies = [
 name = "dozer-preview-core"
 version = "0.1.0"
 dependencies = [
+ "dozer-file-io",
  "dozer-i18n",
  "dozer-model",
  "memchr",
@@ -2423,7 +2432,9 @@ dependencies = [
  "bytehost-client",
  "dozer-client",
  "dozer-core",
+ "dozer-file-io",
  "dozer-i18n",
+ "dozer-services",
  "dozer-store-project",
  "futures-util",
  "libc",

@@ -81,6 +81,8 @@ pub enum Effect {
         tab_id: usize,
         path: PathBuf,
         text: String,
+        /// 发起写盘时页签所属项目根;保存必须从真实根校验,不能拿目标父目录重推。
+        project_root: Option<PathBuf>,
         /// 发起写盘时页签的 revision;回执时比对,期间的编辑不能被旧写盘清掉。
         revision: u64,
     },
@@ -357,10 +359,13 @@ pub fn run_effect(
             tab_id,
             path,
             text,
+            project_root,
             revision,
         } => {
             handle.spawn_blocking(move || {
-                let result = crate::save_text_atomic(&path, &text).map_err(|e| e.to_string());
+                let result =
+                    crate::save_text_with_context(&path, &text, project_root.as_deref(), None)
+                        .map_err(|e| e.to_string());
                 emit(Message::SaveFinished {
                     tab_id,
                     revision,

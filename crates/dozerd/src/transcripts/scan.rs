@@ -40,6 +40,157 @@ fn jsonl_files_recursive(dir: &std::path::Path) -> Vec<PathBuf> {
     out
 }
 
+/// Discovery failures are counts, never paths or unbounded diagnostics.
+#[derive(Default, Debug)]
+pub struct DiscoveryReport {
+    pub failed: u64,
+}
+impl DiscoveryReport {
+    fn entries(&mut self, dir: &std::path::Path) -> Option<std::fs::ReadDir> {
+        match std::fs::read_dir(dir) {
+            Ok(entries) => Some(entries),
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    self.failed = self.failed.saturating_add(1);
+                }
+                None
+            }
+        }
+    }
+    fn entry(
+        &mut self,
+        entry: std::io::Result<std::fs::DirEntry>,
+    ) -> Option<(PathBuf, std::fs::FileType)> {
+        match entry.and_then(|entry| Ok((entry.path(), entry.file_type()?))) {
+            Ok(value) => Some(value),
+            Err(_) => {
+                self.failed = self.failed.saturating_add(1);
+                None
+            }
+        }
+    }
+}
+
+/// Depth and iterator memory are bounded; symlink directories are never followed.
+fn visit_tree(
+    dir: &std::path::Path,
+    agent: AgentKind,
+    depth: usize,
+    keep: &mut impl FnMut() -> bool,
+    visit: &mut impl FnMut(AgentKind, PathBuf) -> bool,
+    report: &mut DiscoveryReport,
+) -> bool {
+    if !keep() {
+        return false;
+    }
+    if depth > 32 {
+        report.failed = report.failed.saturating_add(1);
+        return true;
+    }
+    let Some(entries) = report.entries(dir) else {
+        return true;
+    };
+    for entry in entries {
+        if !keep() {
+            return false;
+        }
+        let Some((path, kind)) = report.entry(entry) else {
+            continue;
+        };
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            if !visit_tree(&path, agent, depth + 1, keep, visit, report) {
+                return false;
+            }
+        } else if kind.is_file()
+            && path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+            && !visit(agent, path)
+        {
+            return false;
+        }
+    }
+    true
+}
+pub fn visit_all_transcript_files_in(
+    home: &std::path::Path,
+    visit: impl FnMut(AgentKind, PathBuf) -> bool,
+) {
+    let _ = visit_all_cancellable(home, || true, visit);
+}
+pub fn visit_all_cancellable(
+    home: &std::path::Path,
+    mut keep: impl FnMut() -> bool,
+    mut visit: impl FnMut(AgentKind, PathBuf) -> bool,
+) -> DiscoveryReport {
+    let mut report = DiscoveryReport::default();
+    for agent in AgentKind::known() {
+        if let Some(root) = projects_root_in(agent, home) {
+            if !visit_tree(&root, agent, 0, &mut keep, &mut visit, &mut report) {
+                return report;
+            }
+        }
+    }
+    visit_tree(
+        &codex_sessions_dir_in(home),
+        AgentKind::Codex,
+        0,
+        &mut keep,
+        &mut visit,
+        &mut report,
+    );
+    report
+}
+pub fn visit_project_cancellable(
+    home: &std::path::Path,
+    cwd: &std::path::Path,
+    mut keep: impl FnMut() -> bool,
+    mut visit: impl FnMut(AgentKind, PathBuf) -> bool,
+) -> DiscoveryReport {
+    let mut report = DiscoveryReport::default();
+    for agent in AgentKind::known() {
+        if !keep() {
+            return report;
+        }
+        let Some(dir) = project_session_dir_in(agent, home, cwd) else {
+            continue;
+        };
+        let Some(entries) = report.entries(&dir) else {
+            continue;
+        };
+        for entry in entries {
+            if !keep() {
+                return report;
+            }
+            let Some((path, kind)) = report.entry(entry) else {
+                continue;
+            };
+            if kind.is_file()
+                && path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+                && !visit(agent, path)
+            {
+                return report;
+            }
+        }
+    }
+    visit_tree(
+        &codex_sessions_dir_in(home),
+        AgentKind::Codex,
+        0,
+        &mut keep,
+        &mut |agent, path| {
+            if super::codex_session_cwd(&path).as_deref() == Some(cwd.to_string_lossy().as_ref()) {
+                visit(agent, path)
+            } else {
+                true
+            }
+        },
+        &mut report,
+    );
+    report
+}
+
 pub fn discover_all_transcript_files() -> Vec<(AgentKind, PathBuf)> {
     discover_all_transcript_files_in(&home_dir())
 }
@@ -113,6 +264,21 @@ pub fn discover_project_transcript_files_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_failure_is_distinct_from_absent_history() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(
+            visit_all_cancellable(home.path(), || true, |_, _| true).failed,
+            0
+        );
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+        std::fs::write(home.path().join(".claude/projects"), "not a directory").unwrap();
+        assert_eq!(
+            visit_all_cancellable(home.path(), || true, |_, _| true).failed,
+            1
+        );
+    }
 
     #[test]
     fn discovers_jsonl_files_across_three_agent_roots() {

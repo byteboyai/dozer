@@ -145,7 +145,10 @@ impl FileEditHistoryStore {
              ORDER BY created_ms ASC, id ASC",
         )?;
         let rows = stmt.query_map(params![project_id], row_to_item)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        Ok(dozer_services::query_budget::collect(
+            rows,
+            |row: &ContextItemInfo| row.entity_kind.len() + row.entity_ref.len(),
+        )?)
     }
 
     /// 项目内 agent 修改历史,时间倒序。`path_filter` 命中 `target_path == 值`
@@ -192,7 +195,17 @@ impl FileEditHistoryStore {
                 created_ms: r.get::<_, i64>(12)? as u64,
             })
         })?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        Ok(dozer_services::query_budget::collect(
+            rows,
+            |row: &FileEditHistoryInfo| {
+                row.target_path.len()
+                    + row.actor.len()
+                    + row.session_id.len()
+                    + row.old_text.len()
+                    + row.new_text.len()
+                    + row.summary.len()
+            },
+        )?)
     }
 }
 

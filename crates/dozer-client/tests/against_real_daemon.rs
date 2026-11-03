@@ -25,6 +25,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
     let summary_jobs = Arc::new(dozerd::summary_jobs::SummaryJobStore::open(&db).unwrap());
     let backfill_registry = Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new());
     let todos = Arc::new(dozerd::todo::TodoStore::new(&db).unwrap());
+    let executions = Arc::new(dozerd::task_execution::TaskExecutionStore::open(&db).unwrap());
     let categories = Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap());
     let memories = Arc::new(dozerd::memory::MemoryStore::new(&db).unwrap());
     let file_edit_history =
@@ -45,6 +46,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
                 summary_jobs,
                 backfill_registry,
                 todos,
+                executions,
                 categories,
                 memories,
                 file_edit_history,
@@ -166,10 +168,10 @@ async fn reader_task_exits_when_receiver_dropped() {
         )
         .await
         .unwrap();
-    // `CreateSession` 为 IDE bridge 与自然退出总结分别持有一个订阅。
+    // bridge 与自然退出总结观察持久 lifecycle，不占用输出 broadcast。
     let session = registry.get(&info.id).expect("session just created");
     let baseline = session.subscriber_count();
-    assert_eq!(baseline, 2, "CreateSession 应持有两个退出监听订阅");
+    assert_eq!(baseline, 0, "生命周期观察者不应占用输出订阅");
 
     for round in 0..20 {
         let (_snap, _next, rx) = c.attach(&info.id, 0).await.unwrap();

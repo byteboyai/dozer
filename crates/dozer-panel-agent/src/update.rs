@@ -22,6 +22,25 @@ use tokio::sync::mpsc;
 /// 面板自有消息。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
+    Stream {
+        tab_id: usize,
+        owner: u64,
+        item: dozer_services::StreamItem,
+    },
+    StreamAttached {
+        tab_id: usize,
+        owner: u64,
+        info: SessionInfo,
+        picked_agent: Option<AgentKind>,
+    },
+    StreamFailed {
+        tab_id: usize,
+        owner: u64,
+        error: String,
+    },
+    RetryStream {
+        tab_id: usize,
+    },
     /// 键盘/IME 字节(已翻译)。
     Input(Vec<u8>),
     /// 粘贴文本(按 bracketed paste 模式包裹)。
@@ -129,6 +148,77 @@ pub fn update(
     emit: impl Fn(Message) + Clone + Send + 'static,
 ) {
     match msg {
+        Message::Stream {
+            tab_id,
+            owner,
+            item,
+        } => crate::stream::apply(state, ctx, tab_id, owner, item),
+        Message::StreamAttached {
+            tab_id,
+            owner,
+            info,
+            picked_agent,
+        } => {
+            update(
+                state,
+                Message::Attached {
+                    tab_id,
+                    info,
+                    snapshot: Vec::new(),
+                    picked_agent,
+                },
+                ctx,
+                emit,
+            );
+            if state.tab_by_id_mut(tab_id).is_some() {
+                state.stream_owners.insert(tab_id, owner);
+            }
+        }
+        Message::StreamFailed {
+            tab_id,
+            owner,
+            error,
+        } => {
+            if state.stream_owners.get(&tab_id) == Some(&owner) {
+                state.stream_errors.insert(tab_id, error.clone());
+                state
+                    .stream_status
+                    .insert(tab_id, crate::stream::Status::Failed);
+                update(
+                    state,
+                    Message::Failed {
+                        key: KEY_ATTACH_SESSION,
+                        error,
+                    },
+                    ctx,
+                    emit,
+                );
+            }
+        }
+        Message::RetryStream { tab_id } => {
+            let owner = crate::stream::next_owner();
+            state.stream_owners.insert(tab_id, owner);
+            state
+                .stream_status
+                .insert(tab_id, crate::stream::Status::Recovering);
+            if let Some(tab) = state.tab_by_id_mut(tab_id) {
+                tab.forwarder.abort();
+                let id = tab.info.id.clone();
+                let svc = ctx.svc.clone();
+                tab.forwarder = ctx.handle.spawn(async move {
+                    match crate::stream::connect(svc.as_ref(), id).await {
+                        Ok(connection) => {
+                            crate::stream::forward(tab_id, owner, connection, emit).await
+                        }
+                        Err(error) => emit(Message::StreamFailed {
+                            tab_id,
+                            owner,
+                            error: error.to_string(),
+                        }),
+                    }
+                });
+            }
+        }
         Message::Input(bytes) => {
             let Some(tab) = state.tabs.get(state.active) else {
                 return;
@@ -391,6 +481,11 @@ pub fn close_tab(state: &mut AgentPanelState, ctx: &UpdateCtx<'_>, idx: usize) {
         return;
     }
     let tab = state.tabs.remove(idx);
+    state.stream_owners.remove(&tab.tab_id);
+    state.stream_epochs.remove(&tab.tab_id);
+    state.stream_versions.remove(&tab.tab_id);
+    state.stream_status.remove(&tab.tab_id);
+    state.stream_errors.remove(&tab.tab_id);
     tab.forwarder.abort();
     let summarize =
         ctx.caps.summary_on_close && should_summarize_on_close(tab.agent, tab.alive, &tab.backend);
@@ -485,15 +580,26 @@ pub fn spawn_new_tab(
                 return;
             }
         };
-        match svc.attach(info.id.clone(), 0).await {
-            Ok((snapshot, _next_offset, rx)) => {
+        match crate::stream::connect(svc.as_ref(), info.id.clone()).await {
+            Ok(connection) => {
+                let snapshot = connection.snapshot();
+                let owner = crate::stream::next_owner();
                 let session_id = info.id.clone();
-                emit(Message::Attached {
-                    tab_id,
-                    info,
-                    snapshot,
-                    picked_agent: hook_agent,
-                });
+                if matches!(&connection, crate::stream::Connection::Stream(_)) {
+                    emit(Message::StreamAttached {
+                        tab_id,
+                        owner,
+                        info,
+                        picked_agent: hook_agent,
+                    });
+                } else {
+                    emit(Message::Attached {
+                        tab_id,
+                        info,
+                        snapshot,
+                        picked_agent: hook_agent,
+                    });
+                }
                 if let Some(cmd) = picker_launch_command(launch, &hooks.hook_exe()) {
                     let bytes = format!("{cmd}\n").into_bytes();
                     if let Err(e) = svc.write(session_id.clone(), bytes).await {
@@ -512,7 +618,7 @@ pub fn spawn_new_tab(
                         });
                     }
                 }
-                forward_events(tab_id, rx, emit).await;
+                crate::stream::forward(tab_id, owner, connection, emit).await;
             }
             Err(e) => {
                 // create 已在守护进程里建好会话,但没有 `Attached`,产品拿不到会话 id,
@@ -1738,5 +1844,100 @@ mod tests {
             crate::codex_config::default_model()
         );
         assert_eq!(state.tab_by_id(2).unwrap().llm_model, None);
+    }
+    #[tokio::test]
+    async fn stream_reset_clears_parser_selection_and_old_owner_cannot_apply() {
+        use dozer_model::{StreamMode, TerminalEvent, TerminalState};
+        use dozer_services::{StreamAck, StreamItem};
+        let handle = tokio::runtime::Handle::current();
+        let harness = Harness::new();
+        let svc = harness.svc();
+        let tracked = |_| {};
+        let ctx = harness.ctx(&svc, &handle, &tracked);
+        let mut state = AgentPanelState::new();
+        let mut tab = make_tab(&handle, 0, AgentKind::Unknown);
+        let _ = tab.model.feed(b"obsolete");
+        tab.model.selection_start(0, 0, false);
+        tab.model.selection_update(3, 0, false);
+        state.tabs.push(tab);
+        state.stream_owners.insert(0, 7);
+        state.stream_epochs.insert(0, 1);
+        let snapshot = TerminalState {
+            lifecycle_revision: 1,
+            agent_revision: 1,
+            alive: true,
+            exit_code: None,
+            output_complete: false,
+            output_truncated: false,
+            agent: AgentKind::Unknown,
+            agent_state: AgentState::Idle,
+            transcript_path: None,
+        };
+        let ack = StreamAck::new();
+        let item = StreamItem::new(
+            TerminalEvent::Snapshot {
+                epoch: 2,
+                mode: StreamMode::Reset,
+                start_offset: 100,
+                next_offset: 103,
+                data: b"new".to_vec(),
+                state: snapshot,
+                degraded: false,
+            },
+            vec![],
+            ack.clone(),
+        );
+        update(
+            &mut state,
+            Message::Stream {
+                tab_id: 0,
+                owner: 7,
+                item,
+            },
+            &ctx,
+            |_| {},
+        );
+        assert!(ack.applied.load(std::sync::atomic::Ordering::Acquire));
+        assert!(state.tabs[0].model.selection_text().is_none());
+        let screen: String = state.tabs[0]
+            .model
+            .visible_lines()
+            .iter()
+            .flatten()
+            .map(|c| c.ch)
+            .collect();
+        assert!(screen.starts_with("new"));
+        assert!(!screen.contains("obsolete"));
+        let ack = StreamAck::new();
+        let stale = StreamItem::new(
+            TerminalEvent::Output {
+                replay: false,
+                epoch: 3,
+                start_offset: 103,
+                end_offset: 106,
+                data: b"bad".to_vec(),
+            },
+            vec![],
+            ack.clone(),
+        );
+        update(
+            &mut state,
+            Message::Stream {
+                tab_id: 0,
+                owner: 6,
+                item: stale,
+            },
+            &ctx,
+            |_| {},
+        );
+        assert!(!ack.applied.load(std::sync::atomic::Ordering::Acquire));
+        let screen: String = state.tabs[0]
+            .model
+            .visible_lines()
+            .iter()
+            .flatten()
+            .map(|c| c.ch)
+            .collect();
+        assert!(!screen.contains("bad"));
     }
 }

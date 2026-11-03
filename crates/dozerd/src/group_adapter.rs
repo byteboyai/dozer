@@ -8,6 +8,7 @@
 //!   `--dangerously-skip-permissions`/`-y`(Todo 任务处理里有,群聊不能抄)。
 
 use crate::headless_agent::{bare_program_name, resolve_binary_path};
+use crate::process_runner::{ExecutionFailure, ExecutionSpec};
 use dozer_core::protocol::AgentKind;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -187,61 +188,40 @@ pub(crate) struct ChildOutput {
 }
 
 /// `cancel` 的发送端被丢弃时**永不**触发取消(挂起),避免误杀。
-async fn wait_cancelled(rx: &mut watch::Receiver<bool>) {
-    loop {
-        if *rx.borrow() {
-            return;
-        }
-        if rx.changed().await.is_err() {
-            std::future::pending::<()>().await;
-        }
-    }
-}
-
-/// 跑一个已构造好的子进程。`kill_on_drop(true)`:超时/取消时直接 return,
-/// 持有 `Child` 的 future 被丢弃即杀进程,不留孤儿。
+/// 跑一个已构造好的子进程。统一走 `process_runner`:deadline 覆盖 stdin/
+/// stdout/stderr,超时/取消按进程组 TERM→KILL 并显式 wait/reap。
 pub(crate) async fn run_child(
-    mut cmd: tokio::process::Command,
+    cmd: tokio::process::Command,
     stdin_bytes: Option<Vec<u8>>,
     timeout: Duration,
-    mut cancel: watch::Receiver<bool>,
+    cancel: watch::Receiver<bool>,
 ) -> Result<ChildOutput, TurnError> {
-    use std::process::Stdio;
-    cmd.stdin(if stdin_bytes.is_some() {
-        Stdio::piped()
-    } else {
-        Stdio::null()
-    })
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .kill_on_drop(true);
-    let mut child = cmd.spawn().map_err(|e| TurnError::Spawn(e.to_string()))?;
-    if let Some(bytes) = stdin_bytes
-        && let Some(mut stdin) = child.stdin.take()
-    {
-        tokio::spawn(async move {
-            use tokio::io::AsyncWriteExt;
-            let _ = stdin.write_all(&bytes).await; // 写完丢弃 = EOF
-        });
-    }
-    let wait = child.wait_with_output();
-    tokio::pin!(wait);
-    let out = tokio::select! {
-        r = &mut wait => r.map_err(|e| TurnError::Spawn(e.to_string()))?,
-        _ = tokio::time::sleep(timeout) => return Err(TurnError::Timeout),
-        _ = wait_cancelled(&mut cancel) => return Err(TurnError::Cancelled),
-    };
-    let stderr_full = String::from_utf8_lossy(&out.stderr).into_owned();
+    let outcome = crate::process_runner::run(
+        ExecutionSpec::new(cmd, timeout)
+            .stdin(stdin_bytes)
+            .cancel(cancel),
+    )
+    .await
+    .map_err(map_execution_failure)?;
+    let stderr_full = outcome.stderr.text;
     let skip = stderr_full
         .chars()
         .count()
         .saturating_sub(STDERR_TAIL_CHARS);
     Ok(ChildOutput {
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stdout: outcome.stdout.text,
         stderr: stderr_full.chars().skip(skip).collect(),
-        code: out.status.code(),
-        success: out.status.success(),
+        code: outcome.status.code(),
+        success: outcome.status.success(),
     })
+}
+
+fn map_execution_failure(failure: ExecutionFailure) -> TurnError {
+    match failure {
+        ExecutionFailure::Cancelled => TurnError::Cancelled,
+        ExecutionFailure::Timeout | ExecutionFailure::CleanupFailed(_) => TurnError::Timeout,
+        other => TurnError::Spawn(other.to_string()),
+    }
 }
 
 /// 去首尾空白;空 → `Empty`;超 `MAX_REPLY_CHARS` 截断加省略号。

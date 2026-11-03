@@ -1,0 +1,13 @@
+[package]
+name = "dozer-file-io"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# 纯同步文件 IO 基础层:目录句柄路径约束、文件身份、跨进程写锁、原子替换与
+# 元数据保持。刻意不依赖 tokio / UI / dozer-model,方便 daemon 与 app 共用。
+[dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -115,7 +115,10 @@ impl BookmarkStore {
              ORDER BY created_ms ASC",
         )?;
         let rows = stmt.query_map([project_id], row_to_bookmark)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        Ok(dozer_services::query_budget::collect(
+            rows,
+            |row: &BookmarkInfo| row.url.len() + row.title.len(),
+        )?)
     }
 }
 

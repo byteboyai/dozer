@@ -204,7 +204,9 @@ impl ProjectStore {
                 "SELECT id, path, name, last_active_ms, created_ms FROM projects ORDER BY last_active_ms DESC",
             )?;
             let rows = stmt.query_map([], row_to_raw)?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
+            dozer_services::query_budget::collect(rows, |row: &RawProjectRow| {
+                row.path.len() + row.name.len()
+            })?
         };
         let mut cache = GitTimeCache::default();
         Ok(rows

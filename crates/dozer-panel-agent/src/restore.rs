@@ -43,6 +43,28 @@ pub fn fetch_restored(
     })
 }
 
+/// 新宿主用有界流恢复；旧恢复 API 保持可编译。
+pub fn fetch_connections(
+    svc: &dyn SessionService,
+    project_id: i64,
+) -> BoxFuture<'_, Vec<(SessionInfo, crate::stream::Connection)>> {
+    Box::pin(async move {
+        let mut sessions = Vec::new();
+        for info in svc
+            .list_sessions()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| s.alive && s.project_id == Some(project_id))
+        {
+            if let Ok(connection) = crate::stream::connect(svc, info.id.clone()).await {
+                sessions.push((info, connection));
+            }
+        }
+        sessions
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

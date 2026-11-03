@@ -1,7 +1,6 @@
 //! 进程内服务实现:把 SQLite 存储包成 `dozer-services` 的 trait,供不经 `dozerd` 的产品(Digger)直接使用。
 //!
-//! SQLite 调用是同步且很快的;future 在构造时就已算完(`Box::pin(async move { r })`),与 `dozer-app` 的
-//! 服务假实现同型,因此在任何执行器上都不会阻塞调度。
+//! 同步存储经共享有界执行池运行；future 构造时不做文件/Git/SQLite IO。
 
 use crate::{MemoryStore, ProjectStore};
 use dozer_model::{MemoryDetail, MemoryInfo, ProjectInfo};
@@ -31,45 +30,57 @@ impl ProjectService for LocalProjectService {
         id: i64,
         name: String,
     ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>> {
-        let trimmed = name.trim();
-        // 与 dozerd 的 RenameProject 同规则:空名字不是合法名字。
-        let r = if trimmed.is_empty() {
-            Err(ServiceError::new(
-                ServiceErrorKind::Rejected,
-                "名称不能为空",
-            ))
-        } else {
-            self.store.rename(id, trimmed).map(Some).map_err(rejected)
-        };
-        Box::pin(async move { r })
+        let store = self.store.clone();
+        dozer_services::blocking::run(move || {
+            let trimmed = name.trim();
+            // 与 dozerd 的 RenameProject 同规则:空名字不是合法名字。
+            let r = if trimmed.is_empty() {
+                Err(ServiceError::new(
+                    ServiceErrorKind::Rejected,
+                    "名称不能为空",
+                ))
+            } else {
+                store.rename(id, trimmed).map(Some).map_err(rejected)
+            };
+            r
+        })
     }
 
     fn remove_project(&self, id: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
-        let r = self.store.remove(id).map_err(rejected);
-        Box::pin(async move { r })
+        let store = self.store.clone();
+        dozer_services::blocking::run(move || {
+            let r = store.remove(id).map_err(rejected);
+            r
+        })
     }
 
     fn open_project(
         &self,
         path: String,
     ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>> {
-        // 契约允许"路径不存在"返回 `Ok(None)`:不是目录就不登记。
-        // 末尾分隔符与 `.` 段不应造出第二个项目:`projects.path` 是 UNIQUE 的原样文本,先规整成同一种写法。
-        let normalized: PathBuf = Path::new(&path).components().collect();
-        let r = if normalized.is_dir() {
-            self.store
-                .open(&normalized.to_string_lossy())
-                .map(Some)
-                .map_err(rejected)
-        } else {
-            Ok(None)
-        };
-        Box::pin(async move { r })
+        let store = self.store.clone();
+        dozer_services::blocking::run(move || {
+            // 契约允许"路径不存在"返回 `Ok(None)`:不是目录就不登记。
+            // 末尾分隔符与 `.` 段不应造出第二个项目:`projects.path` 是 UNIQUE 的原样文本,先规整成同一种写法。
+            let normalized: PathBuf = Path::new(&path).components().collect();
+            let r = if normalized.is_dir() {
+                store
+                    .open(&normalized.to_string_lossy())
+                    .map(Some)
+                    .map_err(rejected)
+            } else {
+                Ok(None)
+            };
+            r
+        })
     }
 
     fn list_projects(&self) -> BoxFuture<'_, Result<Vec<ProjectInfo>, ServiceError>> {
-        let r = self.store.list().map_err(rejected);
-        Box::pin(async move { r })
+        let store = self.store.clone();
+        dozer_services::blocking::run(move || {
+            let r = store.list().map_err(rejected);
+            r
+        })
     }
 }
 
@@ -90,8 +101,11 @@ impl MemoryService for LocalMemoryService {
         &self,
         project_id: i64,
     ) -> BoxFuture<'_, Result<Vec<MemoryInfo>, ServiceError>> {
-        let r = self.store.list(project_id).map_err(rejected);
-        Box::pin(async move { r })
+        let store = self.store.clone();
+        dozer_services::blocking::run(move || {
+            let r = store.list(project_id).map_err(rejected);
+            r
+        })
     }
 
     fn get_memory(
@@ -99,8 +113,11 @@ impl MemoryService for LocalMemoryService {
         project_id: i64,
         id: i64,
     ) -> BoxFuture<'_, Result<MemoryDetail, ServiceError>> {
-        let r = self.store.get(project_id, id).map_err(rejected);
-        Box::pin(async move { r })
+        let store = self.store.clone();
+        dozer_services::blocking::run(move || {
+            let r = store.get(project_id, id).map_err(rejected);
+            r
+        })
     }
 
     fn write_memory(
@@ -112,11 +129,13 @@ impl MemoryService for LocalMemoryService {
         body: String,
         actor: String,
     ) -> BoxFuture<'_, Result<MemoryDetail, ServiceError>> {
-        let r = self
-            .store
-            .write(project_id, &title, &kind, &description, &body, &actor)
-            .map_err(rejected);
-        Box::pin(async move { r })
+        let store = self.store.clone();
+        dozer_services::blocking::run(move || {
+            let r = store
+                .write(project_id, &title, &kind, &description, &body, &actor)
+                .map_err(rejected);
+            r
+        })
     }
 
     fn delete_memory(
@@ -125,8 +144,11 @@ impl MemoryService for LocalMemoryService {
         id: i64,
         actor: String,
     ) -> BoxFuture<'_, Result<(), ServiceError>> {
-        let r = self.store.delete(project_id, id, &actor).map_err(rejected);
-        Box::pin(async move { r })
+        let store = self.store.clone();
+        dozer_services::blocking::run(move || {
+            let r = store.delete(project_id, id, &actor).map_err(rejected);
+            r
+        })
     }
 }
 

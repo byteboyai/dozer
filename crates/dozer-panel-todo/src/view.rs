@@ -711,6 +711,14 @@ pub fn todo_detail_card<'a>(
     .width(Length::Fill);
     let submit_label = if todo.detail_processing() {
         crate::i18n::t("detail.processing", "Processing...", locale)
+    } else if todo.detail_execution.as_ref().is_some_and(|i| {
+        matches!(
+            i.status,
+            dozer_model::TaskExecutionStatus::Failed
+                | dozer_model::TaskExecutionStatus::Interrupted
+        )
+    }) {
+        crate::i18n::t("detail.retry", "Retry execution", locale)
     } else {
         crate::i18n::t("detail.submit", "Send", locale)
     };
@@ -721,10 +729,31 @@ pub fn todo_detail_card<'a>(
             byteui::theme::color::current().cream,
         ));
 
-    let card = column![header, turns_scroll, row![reply_box, submit].spacing(8)]
-        .spacing(12)
-        .padding(16)
-        .width(Length::Fill);
+    let status = if let Some(error) = &todo.detail_execution_error {
+        error.clone()
+    } else if let Some(info) = &todo.detail_execution {
+        let key = format!("detail.execution.{}", info.status.as_str());
+        let label = crate::i18n::t(&key, info.status.as_str(), locale);
+        format!(
+            "{}{}",
+            label,
+            info.error_message
+                .as_ref()
+                .map(|m| format!(": {m}"))
+                .unwrap_or_default()
+        )
+    } else {
+        String::new()
+    };
+    let card = column![
+        header,
+        text(status).size(byteui::theme::font::caption()),
+        turns_scroll,
+        row![reply_box, submit].spacing(8)
+    ]
+    .spacing(12)
+    .padding(16)
+    .width(Length::Fill);
     let card = container(card).style(byteui::feedback::dialog::card_style);
 
     container(card)

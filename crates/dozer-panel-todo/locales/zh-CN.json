@@ -45,5 +45,11 @@
   "weekday.3": "三",
   "weekday.4": "四",
   "weekday.5": "五",
-  "weekday.6": "六"
+  "weekday.6": "六",
+  "detail.retry": "重试执行",
+  "detail.execution.queued": "排队中",
+  "detail.execution.running": "执行中",
+  "detail.execution.succeeded": "执行成功",
+  "detail.execution.failed": "执行失败",
+  "detail.execution.interrupted": "执行已中断，请确认外部操作后重试"
 }

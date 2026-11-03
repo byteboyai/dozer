@@ -50,6 +50,60 @@ pub struct TodoInfo {
     pub assigned_agent: Option<AgentKind>,
 }
 
+/// 一次任务执行 attempt 的状态(独立于 `TodoInfo.done/paused`,后者是人工
+/// 完成/搁置状态)。`Failed`/`Interrupted` 不会被自动轮询重放,需要用户显式
+/// 重试或提交新的输入。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskExecutionStatus {
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    Interrupted,
+}
+
+impl TaskExecutionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskExecutionStatus::Queued => "queued",
+            TaskExecutionStatus::Running => "running",
+            TaskExecutionStatus::Succeeded => "succeeded",
+            TaskExecutionStatus::Failed => "failed",
+            TaskExecutionStatus::Interrupted => "interrupted",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "queued" => Some(Self::Queued),
+            "running" => Some(Self::Running),
+            "succeeded" => Some(Self::Succeeded),
+            "failed" => Some(Self::Failed),
+            "interrupted" => Some(Self::Interrupted),
+            _ => None,
+        }
+    }
+}
+
+/// 一条任务执行 attempt。独立 DTO,不向 `TodoInfo` 增加必填字段;旧客户端
+/// 可以继续只读 Todo。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskExecutionInfo {
+    pub attempt_id: String,
+    pub todo_id: i64,
+    /// 准入时的最新人类回合索引;用于判断失败后是否真的有“新输入”。
+    pub input_generation: i64,
+    pub idempotency_key: Option<String>,
+    pub status: TaskExecutionStatus,
+    pub error_kind: Option<String>,
+    pub error_message: Option<String>,
+    pub started_ms: Option<u64>,
+    pub finished_ms: Option<u64>,
+    pub conversation_id: Option<String>,
+    pub created_ms: u64,
+}
+
 /// 一个分类树节点(`dozerd` 的 `todo_categories` 表一行)。`parent_id ==
 /// None` 表示顶层节点。作用域按 `project_id` 隔离,不跨项目共享
 /// (2026-09-01 分类树设计)。

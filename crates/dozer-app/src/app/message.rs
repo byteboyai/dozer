@@ -34,10 +34,14 @@ pub enum Message {
     TermOutput(ProjectId, usize, Vec<u8>),
     /// 对应 tab 的会话已退出（PTY 子进程退出或 daemon 断连）。
     SessionExited(ProjectId, usize),
-    /// `GetTodoDetail` 异步结果:`usize` 是打开弹窗时记录的卡片下标(用来
-    /// 校验弹窗还开着同一个任务,不是用 id 找——`items()` 下标和渲染时
-    /// 用的下标必须一致,同 `todo::Message` 全线用下标寻址任务的既有约定)。
-    TodoDetailLoaded(usize, Vec<dozer_core::protocol::TurnRecord>),
+    /// Details are scoped to project, task id and detail revision; stale results are discarded.
+    TodoDetailLoaded(i64, i64, u64, Vec<dozer_core::protocol::TurnRecord>),
+    TodoExecutionLoaded(
+        i64,
+        i64,
+        u64,
+        Result<Option<dozer_model::TaskExecutionInfo>, String>,
+    ),
     /// Usage 面板的全部消息,内核只转发不解读——见 `extensions::usage::Message`。
     Usage(usage::Message),
     /// 代码健康度面板的全部消息,内核只转发不解读——见 `extensions::codehealth::Message`。

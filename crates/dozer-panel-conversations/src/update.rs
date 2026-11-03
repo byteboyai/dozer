@@ -31,6 +31,7 @@ pub struct UpdateCtx<'a> {
 #[derive(Debug, Clone)]
 pub enum Message {
     AsyncResult(bytehost_core::request::RequestToken, Box<Message>),
+    BackfillState(i64, dozer_model::BackfillState),
     SessionsRefreshed(i64, Result<Vec<SessionRow>, ServiceError>),
     SessionOpen(String, AgentKind),
     DetailLoadMore(String, i64),
@@ -70,6 +71,7 @@ pub fn update(
     }
     match msg {
         Message::AsyncResult(..) => unreachable!("nested async result"),
+        Message::BackfillState(_, state) => ws_state.backfill = Some(state),
         Message::SessionsRefreshed(_, result) => match result {
             Ok(rows) => {
                 ws_state.sessions = Some(rows);
@@ -255,19 +257,46 @@ pub fn spawn_refresh(
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
-    let emit = requests
-        .begin(Some(project_id), "sessions")
-        .wrap(emit, Message::AsyncResult);
+    let token = requests.begin(Some(project_id), "sessions");
+    let trackers = requests.clone();
+    let emit = token.clone().wrap(emit, Message::AsyncResult);
     handle.spawn(async move {
-        let result = service
-            .list_conversations_with_summaries(cwd.to_string_lossy().into_owned(), None, 500, 0)
-            .await
-            .map(|rows| {
-                rows.iter()
-                    .map(|(c, s)| SessionRow::from_row(c, s.as_ref()))
-                    .collect()
+        loop {
+            if !trackers.accepts(&token) {
+                break;
+            }
+            let state = match service.backfill_state().await {
+                Ok(state) => state,
+                Err(_) => Some(dozer_model::BackfillState {
+                    phase: dozer_model::BackfillPhase::Failed,
+                    failed: 1,
+                    last_error: Some("Backfill state query failed".into()),
+                    ..Default::default()
+                }),
+            };
+            let active = state.as_ref().is_some_and(|s| {
+                matches!(
+                    s.phase,
+                    dozer_model::BackfillPhase::Discovering | dozer_model::BackfillPhase::Ingesting
+                )
             });
-        emit(Message::SessionsRefreshed(project_id, result));
+            if let Some(state) = state {
+                emit(Message::BackfillState(project_id, state));
+            }
+            let result = service
+                .list_conversations_with_summaries(cwd.to_string_lossy().into_owned(), None, 500, 0)
+                .await
+                .map(|rows| {
+                    rows.iter()
+                        .map(|(c, s)| SessionRow::from_row(c, s.as_ref()))
+                        .collect()
+                });
+            emit(Message::SessionsRefreshed(project_id, result));
+            if !active {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
     });
 }
 
@@ -289,9 +318,9 @@ impl Message {
     pub fn result_project(&self) -> Option<i64> {
         match self {
             Self::AsyncResult(token, _) => dozer_panel_host::project_of(token.scope()),
-            Message::SessionsRefreshed(id, _) | Message::SummaryGenerateFinished(id, ..) => {
-                Some(*id)
-            }
+            Message::BackfillState(id, _)
+            | Message::SessionsRefreshed(id, _)
+            | Message::SummaryGenerateFinished(id, ..) => Some(*id),
             _ => None,
         }
     }

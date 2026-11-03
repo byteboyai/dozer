@@ -43,3 +43,52 @@ jobs:
 
       - name: 面板边界棘轮
         run: python3 scripts/audit/check_panel_boundary.py
+
+  runtime-tests:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout dozer
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-tests-${{ hashFiles('**/Cargo.lock') }}
+
+      # 不依赖 agent 登录、网络模型或 GUI 的核心行为测试。文件边界/元数据/
+      # 原子提交、受管进程、locate 与现有 dozerd 单元测试都在这里跑。
+      - name: 文件 IO 与预览核心
+        run: cargo test --locked -p dozer-file-io -p dozer-preview-core
+
+      - name: dozerd 核心单元测试与 UDS 回归
+        run: cargo test --locked -p dozerd --lib --test runtime_regressions
+
+      - name: client 与会话恢复单元测试
+        run: cargo test --locked -p dozer-client -p dozer-core --lib
+
+      - name: 面板预览、Todo 与 Agent 面板
+        run: cargo test --locked -p dozer-panel-preview -p dozer-panel-todo -p dozer-panel-agent -p dozer-panel-conversations -p dozer-services -p dozer-store-project --lib
+
+      - name: 构建产品隔离 helper
+        id: daemon_helper
+        shell: bash
+        run: |
+          cargo build --locked -p dozerd --example product_daemon --message-format=json > /tmp/dozer-helper-build.jsonl
+          daemon_fixture="$(python3 -c 'import json; rows=[json.loads(line) for line in open("/tmp/dozer-helper-build.jsonl")]; print(next(row["executable"] for row in rows if row.get("reason")=="compiler-artifact" and row.get("target",{}).get("name")=="product_daemon" and row.get("executable")))')"
+          test -x "$daemon_fixture"
+          echo "path=$daemon_fixture" >> "$GITHUB_OUTPUT"
+
+      - name: 产品隔离与实际 SIGTERM/SIGINT
+        env:
+          CARGO_BIN_EXE_product_daemon: ${{ steps.daemon_helper.outputs.path }}
+        run: cargo test --locked -p dozerd --test product_isolation
+
+      - name: 日志边界
+        run: bash scripts/check-log-scope.sh

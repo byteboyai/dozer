@@ -1,14 +1,17 @@
 //! agent 对话/用量摄取管线(spec 2026-08-20)。
 
+mod bounded;
+pub mod metrics;
 pub mod parse;
 pub mod scan;
 
 use anyhow::{Context, Result};
 use dozer_core::protocol::AgentKind;
 use rusqlite::{Connection, OptionalExtension, params};
+use std::collections::HashMap;
 use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Weak};
 
 dozer_core::scope!(LOG, module, "transcripts");
 
@@ -35,7 +38,10 @@ pub fn conversation_id_for_path(file_path: &Path) -> Option<String> {
 pub(crate) fn codex_session_cwd(file_path: &Path) -> Option<String> {
     const MAX_HEAD_LINES: usize = 8;
     let file = std::fs::File::open(file_path).ok()?;
-    for line in std::io::BufReader::new(file).lines().take(MAX_HEAD_LINES) {
+    for line in std::io::BufReader::new(file.take((8 * 1024 * 1024) as u64))
+        .lines()
+        .take(MAX_HEAD_LINES)
+    {
         let Ok(line) = line else {
             return None;
         };
@@ -72,6 +78,70 @@ fn agent_from_str(s: &str) -> AgentKind {
     AgentKind::from_label(s).unwrap_or(AgentKind::Unknown)
 }
 
+/// 在调用方的事务里追加一条任务回合(conversations upsert + turn + 计数)。
+/// `record_task_turns` 与 attempt 成功/失败落库共用,保证“回合 + attempt
+/// 状态”可以在同一个 SQLite 事务里提交。
+pub(crate) fn append_task_turn_tx(
+    tx: &rusqlite::Transaction<'_>,
+    conversation_id: &str,
+    agent: AgentKind,
+    project_dir: &str,
+    task_title: &str,
+    role: &str,
+    content: &str,
+    is_error: bool,
+) -> anyhow::Result<()> {
+    let now = now_ms() as i64;
+    tx.execute(
+        "INSERT INTO conversations
+         (conversation_id, agent_kind, dir, file_path, title, first_ts, last_ts,
+          turn_count, parsed_offset, file_size_at_parse, cwd)
+         VALUES (?1,?2,?3,'',?4,?5,?5,0,0,0,?3)
+         ON CONFLICT(conversation_id) DO NOTHING",
+        params![
+            conversation_id,
+            agent_to_str(agent),
+            project_dir,
+            task_title,
+            now
+        ],
+    )?;
+    let turn_index: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(turn_index), -1) + 1 FROM conversation_turns
+         WHERE conversation_id = ?1",
+        [conversation_id],
+        |row| row.get(0),
+    )?;
+    let message_key = format!("{conversation_id}:{turn_index}");
+    tx.execute(
+        "INSERT INTO conversation_turns
+         (conversation_id, turn_index, message_key, role, content, tools_summary,
+          thinking, ts, tool_calls, mutating_tool_calls, files_touched,
+          tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, raw_json,
+          is_error)
+         VALUES (?1,?2,?3,?4,?5,'[]',0,?6,0,0,'[]',0,0,0,0,'{}',?7)",
+        params![
+            conversation_id,
+            turn_index,
+            message_key,
+            role,
+            content,
+            now,
+            i64::from(is_error)
+        ],
+    )?;
+    let turn_count: u32 = tx.query_row(
+        "SELECT COUNT(*) FROM conversation_turns WHERE conversation_id = ?1",
+        [conversation_id],
+        |row| row.get(0),
+    )?;
+    tx.execute(
+        "UPDATE conversations SET last_ts = ?1, turn_count = ?2 WHERE conversation_id = ?3",
+        params![now, turn_count, conversation_id],
+    )?;
+    Ok(())
+}
+
 /// `list_conversations_in` 两个查询分支(按 `dir` 的四家 / 按 `cwd` 的 Codex)
 /// 共用的 SELECT 列表与行映射——列顺序两边必须一致,合成一份常量避免漂移。
 const CONVERSATION_SUMMARY_COLUMNS: &str =
@@ -93,10 +163,24 @@ fn conversation_summary_from_row(
 }
 
 pub struct TranscriptStore {
+    pub ingestion: std::sync::OnceLock<crate::ingestion::Ingestion>,
+    #[cfg(test)]
+    parse_observer: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     conn: Mutex<Connection>,
+    metrics: metrics::Metrics,
+    ingest_locks: Mutex<HashMap<String, Weak<Mutex<()>>>>,
 }
 
 impl TranscriptStore {
+    pub fn metrics(&self) -> metrics::Snapshot {
+        self.metrics.snapshot()
+    }
+
+    pub fn ingestion(self: &std::sync::Arc<Self>) -> &crate::ingestion::Ingestion {
+        self.ingestion
+            .get_or_init(|| crate::ingestion::Ingestion::start(std::sync::Arc::downgrade(self)))
+    }
+
     /// Import conversations from Codex's paginated SQLite history (Codex 0.16x+).
     ///
     /// Recent Codex builds keep `~/.codex/sessions` empty and store thread metadata
@@ -168,18 +252,19 @@ impl TranscriptStore {
                 row.get::<_, u64>(7)?,
             ))
         };
-        let threads: Vec<_> = if let Some(cwd) = cwd {
+        let threads = if let Some(cwd) = cwd {
             stmt.query_map([cwd], map_thread)?
-                .collect::<rusqlite::Result<_>>()?
         } else {
             stmt.query_map([], map_thread)?
-                .collect::<rusqlite::Result<_>>()?
         };
 
         let mut imported = 0u32;
-        for (id, thread_cwd, title, created, updated, tokens_used, rollout_path, archived) in
-            threads
-        {
+        for thread in threads {
+            if self.ingestion.get().is_some_and(|w| w.stopped()) {
+                anyhow::bail!("Codex import cancelled");
+            }
+            let (id, thread_cwd, title, created, updated, tokens_used, rollout_path, archived) =
+                thread?;
             // Codex(2026-10 实测,rollout JSONL 与 state_N.sqlite 并存写入)
             // 把逐次 API 用量的**精确拆分**(`token_usage_record` 行:
             // input/cache_read/cache_write/output 互不重叠)写进 rollout,
@@ -227,6 +312,11 @@ impl TranscriptStore {
             if archived != 0 {
                 continue;
             }
+            let (item_count,item_bytes):(u64,u64)=history.query_row("SELECT COUNT(*),COALESCE(SUM(length(CAST(item_json AS BLOB))),0) FROM thread_items WHERE thread_id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+            anyhow::ensure!(
+                item_count <= 100_000 && item_bytes <= 8 * 1024 * 1024,
+                "Limit: Codex SQLite thread exceeds import budget"
+            );
             let mut item_stmt = history.prepare(
                 "SELECT item_id, created_at_ms, item_type, item_json
                  FROM thread_items WHERE thread_id = ?1 ORDER BY rollout_ordinal",
@@ -456,8 +546,27 @@ impl TranscriptStore {
             conn.execute_batch("PRAGMA user_version = 1")
                 .context("写 user_version")?;
         }
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS transcript_sources (
+            conversation_id TEXT PRIMARY KEY, source_key TEXT NOT NULL,
+            identity TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 1, parse_index INTEGER NOT NULL DEFAULT -1
+        )",
+        )?;
+        if !conn
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('transcript_sources') WHERE name='parse_index'",
+            )?
+            .exists([])?
+        {
+            conn.execute_batch("ALTER TABLE transcript_sources ADD COLUMN parse_index INTEGER NOT NULL DEFAULT -1;")?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
+            metrics: metrics::Metrics::default(),
+            ingest_locks: Mutex::new(HashMap::new()),
+            ingestion: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            parse_observer: Mutex::new(None),
         })
     }
 
@@ -466,76 +575,181 @@ impl TranscriptStore {
     /// dozerd 自己的 PTY session id(两者是不同的 id 空间:后者只在
     /// agent 活着时存在,回填历史文件时根本没有)。
     pub fn ingest_session(&self, agent: AgentKind, file_path: &Path) -> Result<()> {
-        // Qodercn 的 transcript 是 Claude 同款 JSONL(见 `transcripts::parse`
-        // 的分派),现在正常摄取,不再提前返回。
-        let conversation_id = conversation_id_for_path(file_path).ok_or_else(|| {
-            anyhow::anyhow!("无法从文件名派生 conversation_id: {}", file_path.display())
-        })?;
+        self.ingest_session_inner(agent, file_path, false, false)
+            .map(|_| ())
+    }
+    pub(crate) fn ingest_final(&self, agent: AgentKind, file_path: &Path) -> Result<()> {
+        self.ingest_session_inner(agent, file_path, true, false)
+            .map(|_| ())
+    }
+    pub(crate) fn ingest_batch(&self, agent: AgentKind, path: &Path) -> Result<bool> {
+        self.ingest_session_inner(agent, path, false, true)
+    }
+    fn ingest_session_inner(
+        &self,
+        agent: AgentKind,
+        file_path: &Path,
+        finalizing: bool,
+        once: bool,
+    ) -> Result<bool> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let conversation_id = conversation_id_for_path(file_path)
+            .ok_or_else(|| anyhow::anyhow!("无法从文件名派生 conversation_id"))?;
+        // 同会话的来源串行化，弱引用表不永久保留所有历史路径。
+        let gate = {
+            let mut locks = self.ingest_locks.lock().expect("source locks");
+            locks.retain(|_, entry| entry.strong_count() > 0);
+            match locks.get(&conversation_id).and_then(Weak::upgrade) {
+                Some(gate) => gate,
+                None => {
+                    let gate = Arc::new(Mutex::new(()));
+                    locks.insert(conversation_id.clone(), Arc::downgrade(&gate));
+                    gate
+                }
+            }
+        };
+        let _source = gate.lock().expect("source lock");
+        let canonical = file_path.canonicalize()?;
+        let file_path_str = file_path.to_string_lossy().into_owned();
+        let source_key = format!("{}:{}", agent_to_str(agent), canonical.display());
         let dir = file_path
             .parent()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let file_path_str = file_path.to_string_lossy().into_owned();
-        // Codex 的项目归属只写在文件头 `session_meta.payload.cwd` 里,单独存一
-        // 列供按项目查询;其余四家的 `dir` 本身就是项目存储目录,留 NULL。
-        // 放在取 DB 锁之前做——这是一次文件 IO,不该占着锁。
-        let cwd = match agent {
-            AgentKind::Codex => codex_session_cwd(file_path),
-            _ => None,
+        let cwd = if agent == AgentKind::Codex {
+            codex_session_cwd(&canonical)
+        } else {
+            None
         };
-
-        let file_size = std::fs::metadata(file_path)
-            .with_context(|| format!("读取文件元信息失败: {}", file_path.display()))?
-            .len();
-
-        let mut conn = self.conn.lock().expect("db lock");
-        let existing: Option<(u64, Option<u64>, Option<String>)> = conn
-            .query_row(
-                "SELECT parsed_offset, first_ts, title FROM conversations WHERE conversation_id = ?1",
-                [&conversation_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()?;
-        let (mut parsed_offset, existing_first_ts, existing_title) =
-            existing.unwrap_or((0, None, None));
-        if file_size < parsed_offset {
-            // 文件被截断/重写:只回退读取位置,不删除已入库的行(spec
-            // "不做孤儿行清理")。
-            parsed_offset = 0;
-        }
-
-        let mut raw = std::fs::File::open(file_path)
-            .with_context(|| format!("打开文件失败: {}", file_path.display()))?;
-        raw.seek(SeekFrom::Start(parsed_offset))?;
-        let mut buf = String::new();
-        raw.read_to_string(&mut buf)
-            .with_context(|| format!("读取增量内容失败: {}", file_path.display()))?;
-        let consumable = parse::last_complete_line_boundary(&buf);
-        if consumable == 0 {
-            // 没有新的完整行(半行未写完/没有新增内容),什么都不做。
-            return Ok(());
-        }
-        let chunk = &buf[..consumable];
-
-        let starting_turn_index: i64 = conn
-            .query_row(
-                "SELECT COALESCE(MAX(turn_index), -1) + 1 FROM conversation_turns
-                 WHERE conversation_id = ?1",
-                [&conversation_id],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-
-        let turns = parse::parse_chunk(agent, chunk, &conversation_id, starting_turn_index);
-
-        let tx = conn.transaction()?;
-        let mut first_human_content: Option<String> = None;
-        for (turn_index, t) in (starting_turn_index..).zip(&turns) {
-            if first_human_content.is_none() && t.role == "human" {
-                first_human_content = Some(t.content.clone());
+        loop {
+            if std::time::Instant::now() >= deadline {
+                anyhow::bail!("Timeout: ingestion budget exhausted; resume from committed offset");
             }
-            tx.execute(
-                "INSERT INTO conversation_turns
+            if !finalizing && self.ingestion.get().is_some_and(|worker| worker.stopped()) {
+                anyhow::bail!("ingestion cancelled; resume from committed offset");
+            }
+            let mut raw = std::fs::File::open(&canonical)?;
+            let meta = raw.metadata()?;
+            let file_size = meta.len();
+            #[cfg(unix)]
+            let identity = {
+                use std::os::unix::fs::MetadataExt;
+                format!("{}:{}", meta.dev(), meta.ino())
+            };
+            #[cfg(not(unix))]
+            let identity = format!("{:?}", meta.created().ok());
+            let (existing, captured_source, starting_turn_index) = {
+                let conn = self.conn.lock().expect("db lock");
+                let existing: Option<(u64, Option<u64>, Option<String>)> = conn.query_row(
+                    "SELECT parsed_offset,first_ts,title FROM conversations WHERE conversation_id=?1",
+                    [&conversation_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))
+                ).optional()?;
+                let source: Option<(String,String,i64,i64)> = conn.query_row(
+                    "SELECT source_key,identity,parse_index,generation FROM transcript_sources WHERE conversation_id=?1",
+                    [&conversation_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))
+                ).optional()?;
+                let index: i64 = conn.query_row(
+                    "SELECT COALESCE(MAX(turn_index),-1)+1 FROM conversation_turns WHERE conversation_id=?1",
+                    [&conversation_id], |r| r.get(0))?;
+                (existing, source, index)
+            };
+            if captured_source
+                .as_ref()
+                .is_some_and(|(key, ..)| key != &source_key)
+            {
+                anyhow::bail!(
+                    "transcript identity collision: conversation id already belongs to another source"
+                );
+            }
+            let captured_offset = existing.as_ref().map(|e| e.0);
+            let (mut parsed_offset, existing_first_ts, existing_title) =
+                existing.unwrap_or((0, None, None));
+            let reset = file_size < parsed_offset
+                || captured_source
+                    .as_ref()
+                    .is_some_and(|(key, id, ..)| key != &source_key || id != &identity);
+            if reset {
+                parsed_offset = 0;
+            }
+            raw.seek(SeekFrom::Start(parsed_offset))?;
+            // 文件读取和 JSON 解析不持 DB 锁；每批只有完整记录。
+            let chunk = bounded::read_batch(&mut raw, file_size.saturating_sub(parsed_offset))?;
+            if chunk.is_empty() {
+                return Ok(false);
+            }
+            let consumable = chunk.len();
+            self.metrics
+                .bytes
+                .fetch_add(consumable as u64, std::sync::atomic::Ordering::Relaxed);
+            self.metrics
+                .max_batch
+                .fetch_max(consumable as u64, std::sync::atomic::Ordering::Relaxed);
+            let parse_index = if reset {
+                0
+            } else {
+                captured_source
+                    .as_ref()
+                    .map(|source| source.2)
+                    .filter(|index| *index >= 0)
+                    .unwrap_or(starting_turn_index)
+            };
+            #[cfg(test)]
+            if let Some(observe) = self.parse_observer.lock().unwrap().clone() {
+                observe();
+            }
+            let turns = parse::parse_chunk(agent, &chunk, &conversation_id, parse_index);
+            let current_meta = std::fs::metadata(&canonical)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if current_meta.dev() != meta.dev()
+                    || current_meta.ino() != meta.ino()
+                    || current_meta.len() < parsed_offset + consumable as u64
+                {
+                    continue;
+                }
+            }
+            let mut conn = self.conn.lock().expect("db lock");
+            let lock_started = std::time::Instant::now();
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let current_offset: Option<u64> = tx
+                .query_row(
+                    "SELECT parsed_offset FROM conversations WHERE conversation_id=?1",
+                    [&conversation_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let current_index: i64 = tx.query_row(
+                "SELECT COALESCE(MAX(turn_index),-1)+1 FROM conversation_turns WHERE conversation_id=?1", [&conversation_id], |r| r.get(0))?;
+            let current_generation: Option<i64> = tx
+                .query_row(
+                    "SELECT generation FROM transcript_sources WHERE conversation_id=?1",
+                    [&conversation_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if current_offset != captured_offset
+                || current_index != starting_turn_index
+                || current_generation != captured_source.as_ref().map(|source| source.3)
+            {
+                drop(tx);
+                drop(conn);
+                continue;
+            }
+            let mut first_human_content: Option<String> = None;
+            let mut next_index = starting_turn_index;
+            for t in &turns {
+                let existing_index:Option<i64>=tx.query_row("SELECT turn_index FROM conversation_turns WHERE conversation_id=?1 AND message_key=?2",params![conversation_id,t.message_key],|r|r.get(0)).optional()?;
+                let turn_index = existing_index.unwrap_or_else(|| {
+                    let index = next_index;
+                    next_index += 1;
+                    index
+                });
+                if first_human_content.is_none() && t.role == "human" {
+                    first_human_content = Some(t.content.clone());
+                }
+                tx.execute(
+                    "INSERT INTO conversation_turns
                  (conversation_id, turn_index, message_key, role, content, tools_summary,
                   thinking, ts, tool_calls, mutating_tool_calls, files_touched,
                   tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, raw_json,
@@ -552,40 +766,41 @@ impl TranscriptStore {
                     tokens_cache_read=excluded.tokens_cache_read,
                     tokens_cache_write=excluded.tokens_cache_write,
                     raw_json=excluded.raw_json, is_error=excluded.is_error",
-                params![
-                    conversation_id,
-                    turn_index,
-                    t.message_key,
-                    t.role,
-                    t.content,
-                    serde_json::to_string(&t.tools_summary).unwrap_or_else(|_| "[]".into()),
-                    t.thinking as i64,
-                    t.ts,
-                    t.tool_calls,
-                    t.mutating_tool_calls,
-                    serde_json::to_string(&t.files_touched).unwrap_or_else(|_| "[]".into()),
-                    t.tokens_in,
-                    t.tokens_out,
-                    t.tokens_cache_read,
-                    t.tokens_cache_write,
-                    t.raw_json,
-                    t.is_error as i64,
-                ],
-            )?;
-        }
+                    params![
+                        conversation_id,
+                        turn_index,
+                        t.message_key,
+                        t.role,
+                        t.content,
+                        serde_json::to_string(&t.tools_summary).unwrap_or_else(|_| "[]".into()),
+                        t.thinking as i64,
+                        t.ts,
+                        t.tool_calls,
+                        t.mutating_tool_calls,
+                        serde_json::to_string(&t.files_touched).unwrap_or_else(|_| "[]".into()),
+                        t.tokens_in,
+                        t.tokens_out,
+                        t.tokens_cache_read,
+                        t.tokens_cache_write,
+                        t.raw_json,
+                        t.is_error as i64,
+                    ],
+                )?;
+            }
 
-        let turn_count: u32 = tx.query_row(
-            "SELECT COUNT(*) FROM conversation_turns WHERE conversation_id = ?1",
-            [&conversation_id],
-            |row| row.get(0),
-        )?;
-        let last_ts_from_turns: Option<u64> = turns.iter().filter_map(|t| t.ts).max();
-        let now = now_ms();
-        let new_parsed_offset = parsed_offset + consumable as u64;
-        let title = existing_title.or(first_human_content.map(|c| c.chars().take(80).collect()));
-        let first_ts = existing_first_ts.unwrap_or(now);
-        tx.execute(
-            "INSERT INTO conversations
+            let turn_count: u32 = tx.query_row(
+                "SELECT COUNT(*) FROM conversation_turns WHERE conversation_id = ?1",
+                [&conversation_id],
+                |row| row.get(0),
+            )?;
+            let last_ts_from_turns: Option<u64> = turns.iter().filter_map(|t| t.ts).max();
+            let now = now_ms();
+            let new_parsed_offset = parsed_offset + consumable as u64;
+            let title =
+                existing_title.or(first_human_content.map(|c| c.chars().take(80).collect()));
+            let first_ts = existing_first_ts.unwrap_or(now);
+            tx.execute(
+                "INSERT INTO conversations
              (conversation_id, agent_kind, dir, file_path, title, first_ts, last_ts,
               turn_count, parsed_offset, file_size_at_parse, cwd)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
@@ -596,22 +811,38 @@ impl TranscriptStore {
                 parsed_offset=excluded.parsed_offset,
                 file_size_at_parse=excluded.file_size_at_parse,
                 cwd=COALESCE(excluded.cwd, conversations.cwd)",
-            params![
-                conversation_id,
-                agent_to_str(agent),
-                dir,
-                file_path_str,
-                title,
-                first_ts,
-                last_ts_from_turns.unwrap_or(now),
-                turn_count,
-                new_parsed_offset,
-                file_size,
-                cwd,
-            ],
-        )?;
-        tx.commit()?;
-        Ok(())
+                params![
+                    conversation_id,
+                    agent_to_str(agent),
+                    dir,
+                    file_path_str,
+                    title,
+                    first_ts,
+                    last_ts_from_turns.unwrap_or(now),
+                    turn_count,
+                    new_parsed_offset,
+                    file_size,
+                    cwd,
+                ],
+            )?;
+            tx.execute("INSERT INTO transcript_sources(conversation_id,source_key,identity,parse_index) VALUES(?1,?2,?3,?4)
+            ON CONFLICT(conversation_id) DO UPDATE SET source_key=excluded.source_key,identity=excluded.identity,
+            parse_index=excluded.parse_index,generation=transcript_sources.generation+1",
+            params![conversation_id,source_key,identity,parse_index+turns.len() as i64])?;
+            tx.commit()?;
+            self.metrics
+                .batches
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.metrics.max_lock_us.fetch_max(
+                lock_started.elapsed().as_micros() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            drop(conn);
+            if once {
+                return Ok(true);
+            }
+            // 已提交 offset 是唯一续读位置；下一批重新采样文件身份/长度。
+        }
     }
 
     /// headless 任务处理专用:确保 `conversation_id` 对应的 `conversations`
@@ -620,6 +851,8 @@ impl TranscriptStore {
     /// 一条 AI 回合。`turn_index` 从该 `conversation_id` 现有最大值 + 1 起
     /// 连续分配,`message_key` 用 `"{conversation_id}:{turn_index}"` 保证
     /// 主键不冲突。
+    /// 把一次任务处理的 human+AI 回合追加到同一会话。保留旧行为(两条一起
+    /// 写),新执行路径改用“先写 human,成功/失败时再原子写 AI + attempt”。
     pub fn record_task_turns(
         &self,
         conversation_id: &str,
@@ -631,54 +864,78 @@ impl TranscriptStore {
     ) -> Result<()> {
         let mut conn = self.conn.lock().expect("db lock");
         let tx = conn.transaction()?;
-        let now = now_ms() as i64;
-        tx.execute(
-            "INSERT INTO conversations
-             (conversation_id, agent_kind, dir, file_path, title, first_ts, last_ts,
-              turn_count, parsed_offset, file_size_at_parse, cwd)
-             VALUES (?1,?2,?3,'',?4,?5,?5,0,0,0,?3)
-             ON CONFLICT(conversation_id) DO NOTHING",
-            params![
-                conversation_id,
-                agent_to_str(agent),
-                project_dir,
-                task_title,
-                now
-            ],
+        append_task_turn_tx(
+            &tx,
+            conversation_id,
+            agent,
+            project_dir,
+            task_title,
+            "human",
+            human_content,
+            false,
         )?;
-        let starting_turn_index: i64 = tx.query_row(
-            "SELECT COALESCE(MAX(turn_index), -1) + 1 FROM conversation_turns
-             WHERE conversation_id = ?1",
-            [conversation_id],
-            |row| row.get(0),
-        )?;
-        for (offset, (role, content)) in [("human", human_content), ("ai", ai_content)]
-            .into_iter()
-            .enumerate()
-        {
-            let turn_index = starting_turn_index + offset as i64;
-            let message_key = format!("{conversation_id}:{turn_index}");
-            tx.execute(
-                "INSERT INTO conversation_turns
-                 (conversation_id, turn_index, message_key, role, content, tools_summary,
-                  thinking, ts, tool_calls, mutating_tool_calls, files_touched,
-                  tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, raw_json,
-                  is_error)
-                 VALUES (?1,?2,?3,?4,?5,'[]',0,?6,0,0,'[]',0,0,0,0,'{}',0)",
-                params![conversation_id, turn_index, message_key, role, content, now],
-            )?;
-        }
-        let turn_count: u32 = tx.query_row(
-            "SELECT COUNT(*) FROM conversation_turns WHERE conversation_id = ?1",
-            [conversation_id],
-            |row| row.get(0),
-        )?;
-        tx.execute(
-            "UPDATE conversations SET last_ts = ?1, turn_count = ?2 WHERE conversation_id = ?3",
-            params![now, turn_count, conversation_id],
+        append_task_turn_tx(
+            &tx,
+            conversation_id,
+            agent,
+            project_dir,
+            task_title,
+            "ai",
+            ai_content,
+            false,
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// 执行前只持久化人类输入;即使进程随后崩溃,用户也能看到本次输入。
+    pub fn record_task_human_turn(
+        &self,
+        conversation_id: &str,
+        agent: AgentKind,
+        project_dir: &str,
+        task_title: &str,
+        human_content: &str,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock().expect("db lock");
+        let tx = conn.transaction()?;
+        append_task_turn_tx(
+            &tx,
+            conversation_id,
+            agent,
+            project_dir,
+            task_title,
+            "human",
+            human_content,
+            false,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 最新人类回合索引;没有会话/回合时返回 `-1`。用于 attempt 的
+    /// `input_generation` 与“失败后是否有新输入”的判断。
+    pub fn latest_human_turn_index(&self, conversation_id: &str) -> Result<i64> {
+        let conn = self.conn.lock().expect("db lock");
+        Ok(conn.query_row(
+            "SELECT COALESCE(MAX(turn_index), -1) FROM conversation_turns
+             WHERE conversation_id = ?1 AND role = 'human'",
+            [conversation_id],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// 只查最新一条回合的 role,供轮询器做待处理判定,避免拉取完整轨迹。
+    pub fn latest_turn_role(&self, conversation_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().expect("db lock");
+        Ok(conn
+            .query_row(
+                "SELECT role FROM conversation_turns
+                 WHERE conversation_id = ?1 ORDER BY turn_index DESC LIMIT 1",
+                [conversation_id],
+                |row| row.get(0),
+            )
+            .optional()?)
     }
 
     /// keyset 分页:返回 `turn_index > after_turn_index` 的前 `limit` 条。
@@ -696,37 +953,95 @@ impl TranscriptStore {
         after_turn_index: i64,
         limit: u32,
     ) -> Result<Vec<dozer_core::protocol::TurnRecord>> {
-        let conn = self.conn.lock().expect("db lock");
-        let mut stmt = conn.prepare(
-            "SELECT t.turn_index, t.role, t.content, t.thinking, t.ts, t.is_error,
+        let raw = {
+            let conn = self.conn.lock().expect("db lock");
+            let mut stmt = conn.prepare(
+                "SELECT t.turn_index, t.role, t.content, t.thinking, t.ts, t.is_error,
                     t.raw_json, c.agent_kind, t.tokens_in, t.tokens_out,
                     t.tokens_cache_read, t.tokens_cache_write
              FROM conversation_turns t
              JOIN conversations c ON c.conversation_id = t.conversation_id
              WHERE t.conversation_id = ?1 AND t.turn_index > ?2
              ORDER BY t.turn_index ASC LIMIT ?3",
-        )?;
-        let rows = stmt.query_map(params![conversation_id, after_turn_index, limit], |row| {
-            let raw_json: String = row.get(6)?;
-            let agent_kind: String = row.get(7)?;
-            let detail = parse::extract_turn_trace_detail(&raw_json, agent_from_str(&agent_kind));
-            Ok(dozer_core::protocol::TurnRecord {
-                turn_index: row.get(0)?,
-                role: row.get(1)?,
-                content: row.get(2)?,
-                tool_calls: detail.tool_calls,
-                thinking: row.get::<_, i64>(3)? != 0,
-                thinking_text: detail.thinking_text,
-                ts: row.get(4)?,
-                is_error: row.get::<_, i64>(5)? != 0,
-                tool_result_call_id: detail.tool_result_call_id,
-                tokens_in: row.get(8)?,
-                tokens_out: row.get(9)?,
-                tokens_cache_read: row.get(10)?,
-                tokens_cache_write: row.get(11)?,
+            )?;
+            let rows =
+                stmt.query_map(params![conversation_id, after_turn_index, limit], |row| {
+                    let raw_json: String = row.get(6)?;
+                    let agent_kind: String = row.get(7)?;
+                    Ok((
+                        raw_json,
+                        agent_kind,
+                        dozer_core::protocol::TurnRecord {
+                            turn_index: row.get(0)?,
+                            role: row.get(1)?,
+                            content: row.get(2)?,
+                            tool_calls: Vec::new(),
+                            thinking: row.get::<_, i64>(3)? != 0,
+                            thinking_text: None,
+                            ts: row.get(4)?,
+                            is_error: row.get::<_, i64>(5)? != 0,
+                            tool_result_call_id: None,
+                            tokens_in: row.get(8)?,
+                            tokens_out: row.get(9)?,
+                            tokens_cache_read: row.get(10)?,
+                            tokens_cache_write: row.get(11)?,
+                        },
+                    ))
+                })?;
+            dozer_services::query_budget::collect_with_limits(
+                rows,
+                |row: &(String, String, dozer_core::protocol::TurnRecord)| {
+                    row.0.len() + row.1.len() + row.2.content.len()
+                },
+                10_000,
+                24 * 1024 * 1024,
+            )?
+        };
+        Ok(raw
+            .into_iter()
+            .map(|(json, agent, mut turn)| {
+                let detail = parse::extract_turn_trace_detail(&json, agent_from_str(&agent));
+                turn.tool_calls = detail.tool_calls;
+                turn.thinking_text = detail.thinking_text;
+                turn.tool_result_call_id = detail.tool_result_call_id;
+                turn
             })
-        })?;
-        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+            .collect())
+    }
+
+    /// 任务 prompt 只取最近完整回合，不加载 raw_json/轨迹；超预算明确标注省略。
+    pub fn task_context(&self, conversation_id: &str, budget: usize) -> Result<String> {
+        let conn = self.conn.lock().expect("db lock");
+        let mut stmt = conn.prepare(
+            "SELECT role,content FROM conversation_turns
+            WHERE conversation_id=?1 ORDER BY turn_index DESC LIMIT 513",
+        )?;
+        let mut rows = stmt.query([conversation_id])?;
+        let mut parts = Vec::new();
+        let mut bytes = 0usize;
+        let mut omitted = false;
+        while let Some(row) = rows.next()? {
+            let role: String = row.get(0)?;
+            let content: String = row.get(1)?;
+            let text = format!(
+                "{}: {}",
+                if role == "human" { "人类" } else { "AI" },
+                content
+            );
+            if parts.len() == 512
+                || bytes.saturating_add(text.len() + 1) > budget.saturating_sub(64)
+            {
+                omitted = true;
+                break;
+            }
+            bytes += text.len() + 1;
+            parts.push(text);
+        }
+        if omitted && budget >= 64 {
+            parts.push("[较早或超预算的历史回合已省略]".into());
+        }
+        parts.reverse();
+        Ok(parts.join("\n"))
     }
 
     /// 分页循环读取一个 conversation 的完整 transcript 快照(spec 2026-09-26
@@ -786,9 +1101,38 @@ impl TranscriptStore {
 
     /// 与 [`Self::backfill_project`] 同一流程,多带回失败明细(含 Codex SQLite 来源)。
     pub fn backfill_project_report(&self, cwd: &str) -> dozer_core::protocol::BackfillReport {
-        let files =
-            crate::transcripts::scan::discover_project_transcript_files(std::path::Path::new(cwd));
-        let mut report = crate::backfill::ingest_files_report(self, files);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let keep = || {
+            std::time::Instant::now() < deadline
+                && !self.ingestion.get().is_some_and(|worker| worker.stopped())
+        };
+        let mut report = dozer_core::protocol::BackfillReport::default();
+        let discovery = scan::visit_project_cancellable(
+            &dozer_core::agent_paths::home_dir(),
+            Path::new(cwd),
+            keep,
+            |agent, path| {
+                match self.ingest_session(agent, &path) {
+                    Ok(()) => report.imported_files += 1,
+                    Err(error) => report
+                        .record_failure(path.to_string_lossy().into_owned(), error.to_string()),
+                };
+                keep()
+            },
+        );
+        if discovery.failed > 0 {
+            report.record_failure(
+                "Transcript discovery".into(),
+                format!("{} directory discovery operations failed", discovery.failed),
+            );
+        }
+        if !keep() {
+            report.record_failure(
+                cwd.into(),
+                "Timeout or cancellation: project backfill incomplete; retry to resume".into(),
+            );
+            return report;
+        }
         match self.ingest_codex_sqlite(Some(cwd)) {
             Ok(count) => report.imported_files = report.imported_files.saturating_add(count),
             Err(e) => {
@@ -2245,5 +2589,163 @@ mod tests {
         assert_eq!(turns.len(), 4);
         assert_eq!(turns[2].turn_index, 2);
         assert_eq!(turns[3].content, "第二次回复");
+    }
+    #[test]
+    fn blocked_parse_does_not_hold_database_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(TranscriptStore::open(&dir.path().join("t.db")).unwrap());
+        let file = fixture(
+            dir.path(),
+            "barrier.jsonl",
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n",
+        );
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let resume = Arc::new(std::sync::Barrier::new(2));
+        let a = entered.clone();
+        let b = resume.clone();
+        *store.parse_observer.lock().unwrap() = Some(Arc::new(move || {
+            a.wait();
+            b.wait();
+        }));
+        let copy = store.clone();
+        let thread = std::thread::spawn(move || copy.ingest_session(AgentKind::Claude, &file));
+        entered.wait();
+        assert!(store.conn.try_lock().is_ok());
+        assert!(
+            store
+                .get_conversation_turns("other", -1, 1)
+                .unwrap()
+                .is_empty()
+        );
+        resume.wait();
+        thread.join().unwrap().unwrap();
+    }
+    #[test]
+    fn different_sources_cannot_silently_share_conversation_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&dir.path().join("t.db")).unwrap();
+        std::fs::create_dir(dir.path().join("other")).unwrap();
+        let a = fixture(dir.path(), "same.jsonl", "{}\n");
+        let b = fixture(&dir.path().join("other"), "same.jsonl", "{}\n");
+        store.ingest_session(AgentKind::Claude, &a).unwrap();
+        assert!(
+            store
+                .ingest_session(AgentKind::Claude, &b)
+                .unwrap_err()
+                .to_string()
+                .contains("identity collision")
+        );
+    }
+    #[test]
+    fn large_source_commits_at_most_500_records_per_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&dir.path().join("t.db")).unwrap();
+        let text=(0..1200).map(|i|format!("{{\"type\":\"user\",\"uuid\":\"u{i}\",\"message\":{{\"role\":\"user\",\"content\":\"record {i}\"}}}}\n")).collect::<String>();
+        let file = fixture(dir.path(), "batch.jsonl", &text);
+        store.ingest_session(AgentKind::Claude, &file).unwrap();
+        assert_eq!(
+            store
+                .get_conversation_turns("batch", -1, 2000)
+                .unwrap()
+                .len(),
+            1200
+        );
+        let metrics = store.metrics();
+        assert_eq!(metrics.committed_batches, 3);
+        assert_eq!(metrics.read_bytes, text.len() as u64);
+        assert!(metrics.max_batch_bytes <= 8 * 1024 * 1024);
+    }
+    fn json_line(id: &str, text: &str) -> String {
+        format!(
+            "{{\"type\":\"user\",\"uuid\":\"{id}\",\"message\":{{\"role\":\"user\",\"content\":\"{text}\"}}}}\n"
+        )
+    }
+    #[test]
+    fn replacement_preserves_distinct_indices_for_keyset_pagination() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&dir.path().join("t.db")).unwrap();
+        let file = fixture(dir.path(), "replace.jsonl", &json_line("old", "old"));
+        store.ingest_session(AgentKind::Claude, &file).unwrap();
+        let replacement = fixture(dir.path(), "new.tmp", &json_line("new", "new"));
+        std::fs::rename(replacement, &file).unwrap();
+        store.ingest_session(AgentKind::Claude, &file).unwrap();
+        let first = store.get_conversation_turns("replace", -1, 1).unwrap();
+        let second = store
+            .get_conversation_turns("replace", first[0].turn_index, 1)
+            .unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].content, "new");
+        assert!(second[0].turn_index > first[0].turn_index);
+    }
+    #[test]
+    fn append_during_parse_is_consumed_once_without_holding_database_lock() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(TranscriptStore::open(&dir.path().join("t.db")).unwrap());
+        let file = fixture(dir.path(), "append.jsonl", &json_line("a", "first"));
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let resume = Arc::new(std::sync::Barrier::new(2));
+        let a = entered.clone();
+        let b = resume.clone();
+        let first = std::sync::atomic::AtomicBool::new(true);
+        *store.parse_observer.lock().unwrap() = Some(Arc::new(move || {
+            if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                a.wait();
+                b.wait();
+            }
+        }));
+        let copy = store.clone();
+        let path = file.clone();
+        let work = std::thread::spawn(move || copy.ingest_session(AgentKind::Claude, &path));
+        entered.wait();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap()
+            .write_all(json_line("b", "second").as_bytes())
+            .unwrap();
+        assert!(store.conn.try_lock().is_ok());
+        resume.wait();
+        work.join().unwrap().unwrap();
+        store.ingest_session(AgentKind::Claude, &file).unwrap();
+        assert_eq!(
+            store
+                .get_conversation_turns("append", -1, 10)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+    #[test]
+    fn replacing_source_during_parse_does_not_commit_the_stale_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(TranscriptStore::open(&dir.path().join("t.db")).unwrap());
+        let file = fixture(dir.path(), "race.jsonl", &json_line("old", "stale"));
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let resume = Arc::new(std::sync::Barrier::new(2));
+        let a = entered.clone();
+        let b = resume.clone();
+        let first = std::sync::atomic::AtomicBool::new(true);
+        *store.parse_observer.lock().unwrap() = Some(Arc::new(move || {
+            if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                a.wait();
+                b.wait();
+            }
+        }));
+        let copy = store.clone();
+        let path = file.clone();
+        let work = std::thread::spawn(move || copy.ingest_session(AgentKind::Claude, &path));
+        entered.wait();
+        let replacement = fixture(
+            dir.path(),
+            "replacement.tmp",
+            &json_line("new", "replacement"),
+        );
+        std::fs::rename(replacement, &file).unwrap();
+        resume.wait();
+        work.join().unwrap().unwrap();
+        let turns = store.get_conversation_turns("race", -1, 10).unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].content, "replacement");
     }
 }

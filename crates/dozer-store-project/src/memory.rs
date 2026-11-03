@@ -86,7 +86,12 @@ impl MemoryStore {
                 updated_by: r.get(6)?,
             })
         })?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        Ok(dozer_services::query_budget::collect(
+            rows,
+            |row: &MemoryInfo| {
+                row.title.len() + row.kind.len() + row.description.len() + row.updated_by.len()
+            },
+        )?)
     }
 
     pub fn get(&self, project_id: i64, id: i64) -> Result<MemoryDetail> {
@@ -253,7 +258,17 @@ fn history_query(
             body: r.get(8)?,
         })
     })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    Ok(dozer_services::query_budget::collect(
+        rows,
+        |row: &MemoryHistoryEntry| {
+            row.title.len()
+                + row.kind.len()
+                + row.description.len()
+                + row.body.len()
+                + row.changed_by.len()
+                + row.change_kind.len()
+        },
+    )?)
 }
 
 #[cfg(test)]

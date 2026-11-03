@@ -102,6 +102,7 @@ async fn generated_summary_is_visible_through_panel_query_and_shared_batches_fin
         summary_jobs: jobs,
         backfill_registry: Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new()),
         todos: Arc::new(dozerd::todo::TodoStore::new(&db).unwrap()),
+        executions: Arc::new(dozerd::task_execution::TaskExecutionStore::open(&db).unwrap()),
         categories: Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap()),
         memories: Arc::new(dozerd::memory::MemoryStore::new(&db).unwrap()),
         file_edit_history: Arc::new(

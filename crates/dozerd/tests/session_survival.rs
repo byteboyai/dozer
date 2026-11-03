@@ -72,6 +72,7 @@ async fn session_survives_client_disconnect() {
                     summary_jobs: test_summary_jobs(),
                     backfill_registry: test_backfill_registry(),
                     todos: test_todos(),
+                    executions: test_executions(),
                     categories: test_categories(),
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
@@ -230,6 +231,7 @@ async fn unknown_session_returns_error_reply() {
                     summary_jobs: test_summary_jobs(),
                     backfill_registry: test_backfill_registry(),
                     todos: test_todos(),
+                    executions: test_executions(),
                     categories: test_categories(),
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
@@ -292,6 +294,7 @@ async fn attach_delivers_marker_exactly_once() {
                     summary_jobs: test_summary_jobs(),
                     backfill_registry: test_backfill_registry(),
                     todos: test_todos(),
+                    executions: test_executions(),
                     categories: test_categories(),
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
@@ -391,6 +394,7 @@ async fn attach_from_offset_resumes_within_window() {
                     summary_jobs: test_summary_jobs(),
                     backfill_registry: test_backfill_registry(),
                     todos: test_todos(),
+                    executions: test_executions(),
                     categories: test_categories(),
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
@@ -519,6 +523,7 @@ async fn attach_stream_offset_invariant_under_load() {
                     summary_jobs: test_summary_jobs(),
                     backfill_registry: test_backfill_registry(),
                     todos: test_todos(),
+                    executions: test_executions(),
                     categories: test_categories(),
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
@@ -634,6 +639,7 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
                     summary_jobs: test_summary_jobs(),
                     backfill_registry: test_backfill_registry(),
                     todos: test_todos(),
+                    executions: test_executions(),
                     categories: test_categories(),
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
@@ -752,6 +758,11 @@ fn test_summary_jobs() -> std::sync::Arc<dozerd::summary_jobs::SummaryJobStore> 
 fn test_todos() -> std::sync::Arc<dozerd::todo::TodoStore> {
     let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
     std::sync::Arc::new(dozerd::todo::TodoStore::new(&db).unwrap())
+}
+
+fn test_executions() -> std::sync::Arc<dozerd::task_execution::TaskExecutionStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-exec-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::task_execution::TaskExecutionStore::open(&db).unwrap())
 }
 
 /// 每次调用建独立临时库的分类存储（测试用；serve 需要）。

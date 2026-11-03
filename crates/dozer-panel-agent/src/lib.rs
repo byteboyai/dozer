@@ -16,6 +16,7 @@ pub mod launch;
 pub mod picker;
 pub mod restore;
 pub mod state;
+pub mod stream;
 pub mod style;
 pub mod tabs;
 pub mod transcript_tail;

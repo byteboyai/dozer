@@ -102,6 +102,86 @@ pub struct SubmitSpec {
 }
 
 impl SummaryService {
+    /// Record the close intent before touching an external transcript. Failed ingestion
+    /// remains restartable; an existing final job is reused even if its status is Failed.
+    pub fn finalize_session(
+        &self,
+        spec: &crate::summary_jobs::SessionFinalization,
+    ) -> anyhow::Result<Option<i64>> {
+        let gate = self.jobs.finalization_gate(&spec.session_id);
+        let _lease = gate.lock().expect("finalization lease");
+        self.jobs.record_finalization(spec)?;
+        if *self.jobs.cancellation().borrow() {
+            return Ok(None);
+        }
+        if let Some(job) = self
+            .jobs
+            .list_jobs_by_conversation(&spec.conversation_id)?
+            .into_iter()
+            .find(|job| {
+                job.source_session_id.as_deref() == Some(&spec.session_id)
+                    && matches!(
+                        job.trigger,
+                        SummaryTrigger::Close
+                            | SummaryTrigger::Shutdown
+                            | SummaryTrigger::NaturalExit
+                    )
+            })
+        {
+            self.jobs
+                .complete_finalization(&spec.session_id, job.job_id)?;
+            return Ok(Some(job.job_id));
+        }
+        self.transcripts
+            .ingest_final(spec.agent, std::path::Path::new(&spec.transcript_path))?;
+        let cfg = crate::summary_config::resolve_provider(None, None);
+        let (provider, model) = match &cfg {
+            SummaryProviderResolution::Configured(config, _) => {
+                (config.provider, config.model.clone())
+            }
+            _ => (AgentKind::Unknown, None),
+        };
+        let job_id = self.submit_single(&SubmitSpec {
+            conversation_id: spec.conversation_id.clone(),
+            source_session_id: Some(spec.session_id.clone()),
+            trigger: spec.trigger,
+            provider,
+            requested_model: model,
+            force: false,
+        })?;
+        if matches!(cfg, SummaryProviderResolution::Required) {
+            self.jobs.update_job_status(
+                job_id,
+                SummaryJobStatus::Failed,
+                Some(SummaryErrorKind::ConfigurationRequired),
+                Some("未配置总结器，请设置 config.toml 的 [summary].provider 后重试"),
+                None,
+            )?;
+        }
+        self.jobs.complete_finalization(&spec.session_id, job_id)?;
+        Ok(Some(job_id))
+    }
+    pub fn resume_finalizations(&self) -> anyhow::Result<()> {
+        let mut after = String::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while !*self.jobs.cancellation().borrow() && std::time::Instant::now() < deadline {
+            let page = self.jobs.pending_finalizations_after(&after)?;
+            if page.is_empty() {
+                break;
+            }
+            for pending in page {
+                after = pending.session_id.clone();
+                if *self.jobs.cancellation().borrow() || std::time::Instant::now() >= deadline {
+                    return Ok(());
+                }
+                if let Err(error) = self.finalize_session(&pending) {
+                    let _ = self.jobs.defer_finalization(&pending.session_id);
+                    dozer_core::log_warn!(LOG,session_id=%pending.session_id,error=%error,"session finalization remains pending");
+                }
+            }
+        }
+        Ok(())
+    }
     /// 提交单条总结任务。返回 job_id(新建或复用活动任务)。
     pub fn submit_single(&self, spec: &SubmitSpec) -> anyhow::Result<i64> {
         static SUBMIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -397,6 +477,9 @@ impl SummaryService {
             if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
+            if let Err(error) = self.resume_finalizations() {
+                dozer_core::log_warn!(LOG,error=%error,"pending finalization recovery failed");
+            }
             match self.jobs.claim_next_queued() {
                 Ok(Some(job_id)) => {
                     if let Some(job) = self.jobs.get_job(job_id).unwrap_or(None) {
@@ -653,6 +736,99 @@ mod tests {
         assert_eq!(
             pipeline_error_kind(&summary_pipeline::PipelineError::BudgetExceeded),
             SummaryErrorKind::BudgetExceeded
+        );
+    }
+}
+
+#[cfg(test)]
+mod finalization_recovery_tests {
+    use super::*;
+    fn service(root: &std::path::Path) -> SummaryService {
+        let db = root.join("t.db");
+        SummaryService {
+            jobs: Arc::new(SummaryJobStore::open(&db).unwrap()),
+            transcripts: Arc::new(crate::transcripts::TranscriptStore::open(&db).unwrap()),
+            session_summaries: Arc::new(
+                crate::session_summary::SessionSummaryStore::open(&db).unwrap(),
+            ),
+            scratch_root: root.join("scratch"),
+        }
+    }
+    fn spec(root: &std::path::Path) -> crate::summary_jobs::SessionFinalization {
+        crate::summary_jobs::SessionFinalization {
+            session_id: "pty-s".into(),
+            conversation_id: "c".into(),
+            agent: AgentKind::Claude,
+            transcript_path: root.join("c.jsonl").to_string_lossy().into_owned(),
+            trigger: SummaryTrigger::Shutdown,
+        }
+    }
+    fn write_source(root: &std::path::Path) {
+        std::fs::write(root.join("c.jsonl"),"{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"fixture\"}}\n").unwrap();
+    }
+    #[test]
+    fn shutdown_finalization_survives_store_reopen_and_is_not_replayed_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = service(dir.path());
+        first.jobs.stop();
+        assert_eq!(first.finalize_session(&spec(dir.path())).unwrap(), None);
+        assert_eq!(first.jobs.pending_finalization_count().unwrap(), 1);
+        drop(first);
+        write_source(dir.path());
+        let restarted = service(dir.path());
+        restarted.resume_finalizations().unwrap();
+        assert_eq!(restarted.jobs.pending_finalization_count().unwrap(), 0);
+        assert_eq!(
+            restarted.jobs.list_jobs_by_conversation("c").unwrap().len(),
+            1
+        );
+        restarted.resume_finalizations().unwrap();
+        assert_eq!(
+            restarted.jobs.list_jobs_by_conversation("c").unwrap().len(),
+            1
+        );
+    }
+    #[test]
+    fn failed_final_ingestion_keeps_the_intent_for_later_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = service(dir.path());
+        assert!(service.finalize_session(&spec(dir.path())).is_err());
+        assert_eq!(service.jobs.pending_finalization_count().unwrap(), 1);
+        write_source(dir.path());
+        service.resume_finalizations().unwrap();
+        assert_eq!(service.jobs.pending_finalization_count().unwrap(), 0);
+    }
+    #[test]
+    fn job_commit_before_marker_commit_reuses_even_a_failed_job() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(dir.path());
+        let service = service(dir.path());
+        let pending = spec(dir.path());
+        service.jobs.record_finalization(&pending).unwrap();
+        service
+            .transcripts
+            .ingest_session(AgentKind::Claude, &dir.path().join("c.jsonl"))
+            .unwrap();
+        let job = service
+            .submit_single(&SubmitSpec {
+                conversation_id: "c".into(),
+                source_session_id: Some("pty-s".into()),
+                trigger: SummaryTrigger::Shutdown,
+                provider: AgentKind::Unknown,
+                requested_model: None,
+                force: false,
+            })
+            .unwrap();
+        service
+            .jobs
+            .update_job_status(job, SummaryJobStatus::Failed, None, None, None)
+            .unwrap();
+        std::fs::remove_file(dir.path().join("c.jsonl")).unwrap();
+        service.resume_finalizations().unwrap();
+        assert_eq!(service.jobs.pending_finalization_count().unwrap(), 0);
+        assert_eq!(
+            service.jobs.list_jobs_by_conversation("c").unwrap().len(),
+            1
         );
     }
 }

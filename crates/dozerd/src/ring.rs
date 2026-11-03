@@ -49,6 +49,16 @@ impl RingBuffer {
         self.total
     }
 
+    pub fn buffered_len(&self) -> usize {
+        self.len
+    }
+
+    /// 丢弃全部正文,保留 `total` 坐标(后续 snapshot 返回空、next 仍是历史总写入量)。
+    pub fn clear(&mut self) {
+        self.buf.clear();
+        self.len = 0;
+    }
+
     /// 窗口起点的 offset（第一个仍在缓冲内的字节的历史坐标）
     fn window_start(&self) -> u64 {
         self.total - self.len as u64

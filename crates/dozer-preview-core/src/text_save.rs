@@ -5,8 +5,19 @@
 //! 丢掉 UTF-8 BOM。保存时按**磁盘原件**的约定复原:原文件有 BOM 就补回,
 //! 原来以 CRLF 为主就转回 CRLF。
 
-use std::io::Write;
 use std::path::Path;
+
+use dozer_file_io::{
+    AtomicWriteError, AtomicWriteOutcome, ProjectRoot, Revision, WriteOptions, write_atomic,
+};
+
+/// 预览保存的提交结果。`CommittedDurabilityUnknown` 表示内容已经替换,只是
+/// 目录同步失败;UI 可以标记为已保存,但需要提示持久性未确认。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SaveOutcome {
+    Committed,
+    CommittedDurabilityUnknown(String),
+}
 
 /// 从原文件字节采样出的文本约定。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -56,69 +67,87 @@ pub fn encode_for_save(text: &str, fmt: FileTextFormat) -> Vec<u8> {
     out
 }
 
-/// 原子保存:读取原文件约定 → 编码 → 写同目录临时文件 → flush → rename 覆盖。
-/// 任何一步失败原文件保持不变。
+/// 兼容包装:没有项目根上下文,只能把目标父目录当作根。生产预览保存必须
+/// 使用 [`save_text_with_context`] 并传真实项目根,否则父目录符号链接会把
+/// 外部目录变成新的授权根。
 pub fn save_text_atomic(path: &Path, text: &str) -> std::io::Result<()> {
-    let fmt = std::fs::read(path)
-        .map(|bytes| detect_format(&bytes))
-        .unwrap_or_default();
-    let bytes = encode_for_save(text, fmt);
+    save_text_with_context(path, text, None, None).map(|_| ())
+}
 
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "dozer-save".to_string());
-    let mut tmp = None;
-    // 内部 IO 错误文案:稳定英文(spec §6;不随 locale 变,落 `en.json`)。
-    let mut write_result = Err(std::io::Error::other(crate::i18n::panel_text(
-        crate::PREVIEW_OWNER,
-        "text_save.temp_create_failed",
-        "Cannot create temporary save file",
-        "en",
-    )));
-    for attempt in 0..16u32 {
-        let candidate = dir.join(format!(
-            ".{file_name}.dozer-tmp-{}-{attempt}",
-            std::process::id()
-        ));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(mut file) => {
-                tmp = Some(candidate);
-                write_result = (|| -> std::io::Result<()> {
-                    file.write_all(&bytes)?;
-                    file.flush()?;
-                    file.sync_all()?;
-                    Ok(())
-                })();
-                break;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                write_result = Err(error);
-                break;
-            }
+/// 带项目根/锁根/提交结果的新保存入口。`project_root` 存在时,目标必须
+/// 是它的词法相对路径,并由 `ProjectRoot` 逐级拒绝符号链接;`lock_root`
+/// 为 `None` 时使用用户隔离的临时锁根。
+pub fn save_text_with_context(
+    path: &Path,
+    text: &str,
+    project_root: Option<&Path>,
+    lock_root: Option<&Path>,
+) -> std::io::Result<SaveOutcome> {
+    let (root, relative) = match project_root {
+        Some(project_root) => {
+            let root = ProjectRoot::open(project_root).map_err(file_error_to_io)?;
+            let relative = path.strip_prefix(project_root).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, "目标文件不在项目根内")
+            })?;
+            let relative = relative.to_str().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "目标路径不是 UTF-8")
+            })?;
+            (root, relative.to_string())
+        }
+        None => {
+            let parent = path.parent().unwrap_or_else(|| Path::new("."));
+            let root = ProjectRoot::open(parent).map_err(file_error_to_io)?;
+            let file_name = path.file_name().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "目标路径缺少文件名")
+            })?;
+            let file_name = file_name.to_str().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "目标文件名不是 UTF-8")
+            })?;
+            (root, file_name.to_string())
+        }
+    };
+
+    // 只采样前 64KiB;大文件不因为探测格式而整读一遍。NotFound 与权限/IO
+    // 错误区别处理:后者不能回落成新文件默认格式。
+    let (format, expected_revision) = match root.open_file(&relative) {
+        Ok(opened) => {
+            let revision = Revision::of(&opened.metadata);
+            let sample = opened.read_prefix(64 * 1024).map_err(file_error_to_io)?;
+            (detect_format(&sample), Some(revision))
+        }
+        Err(dozer_file_io::FileError::NotFound) => (FileTextFormat::default(), None),
+        Err(error) => return Err(file_error_to_io(error)),
+    };
+    let bytes = encode_for_save(text, format);
+    let options = WriteOptions {
+        lock_root,
+        expected_revision,
+        create: true,
+        ..WriteOptions::default()
+    };
+    match write_atomic(&root, &relative, &bytes, &options) {
+        Ok(AtomicWriteOutcome::Committed { .. }) => Ok(SaveOutcome::Committed),
+        Ok(AtomicWriteOutcome::CommittedDurabilityUnknown { warning, .. }) => {
+            Ok(SaveOutcome::CommittedDurabilityUnknown(warning))
+        }
+        Err(AtomicWriteError::NotCommitted(error)) => Err(file_error_to_io(error)),
+        Err(AtomicWriteError::CommittedDurabilityUnknown { warning, .. }) => {
+            Ok(SaveOutcome::CommittedDurabilityUnknown(warning))
         }
     }
-    let tmp = tmp.unwrap_or_else(|| {
-        dir.join(format!(
-            ".{file_name}.dozer-tmp-{}-exhausted",
-            std::process::id()
-        ))
-    });
-    if let Err(e) = write_result {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
+}
+
+fn file_error_to_io(error: dozer_file_io::FileError) -> std::io::Error {
+    match error {
+        dozer_file_io::FileError::NotFound => {
+            std::io::Error::new(std::io::ErrorKind::NotFound, error.to_string())
+        }
+        dozer_file_io::FileError::Conflict => {
+            std::io::Error::new(std::io::ErrorKind::AlreadyExists, error.to_string())
+        }
+        dozer_file_io::FileError::Io(io) => io,
+        other => std::io::Error::other(other.to_string()),
     }
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -230,5 +259,109 @@ mod tests {
         assert!(save_text_atomic(&path, "x").is_err());
         assert!(!path.exists());
         assert!(!dir.path().join("no-such-dir").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_save_preserves_executable_and_private_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        for mode in [0o755, 0o600] {
+            let path = dir.path().join(format!("m{mode}.sh"));
+            std::fs::write(&path, b"old").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            save_text_atomic(&path, "new").unwrap();
+            let saved_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(saved_mode, mode, "保存必须保持原访问/执行位");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_rejects_symlink_target_without_touching_outside_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("outside.txt");
+        std::fs::write(&outside_file, "outside").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&outside_file, &link).unwrap();
+        assert!(save_text_atomic(&link, "changed").is_err());
+        assert_eq!(std::fs::read_to_string(&outside_file).unwrap(), "outside");
+    }
+
+    #[test]
+    fn save_with_context_reports_committed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, b"old\n").unwrap();
+        let outcome = save_text_with_context(&path, "new\n", Some(dir.path()), None).unwrap();
+        assert_eq!(outcome, SaveOutcome::Committed);
+        assert_eq!(std::fs::read(&path).unwrap(), b"new\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_with_project_root_rejects_parent_symlink_escape() {
+        use std::os::unix::fs::symlink;
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("a.txt"), b"outside\n").unwrap();
+        symlink(outside.path(), project.path().join("link")).unwrap();
+        let result = save_text_with_context(
+            &project.path().join("link/a.txt"),
+            "changed\n",
+            Some(project.path()),
+            None,
+        );
+        assert!(result.is_err(), "父目录符号链接必须被拒绝");
+        assert_eq!(
+            std::fs::read(outside.path().join("a.txt")).unwrap(),
+            b"outside\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_with_context_does_not_create_lock_files_in_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, b"old\n").unwrap();
+        save_text_with_context(&path, "new\n", Some(dir.path()), None).unwrap();
+        let lock_files: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".dozer-write-")
+            })
+            .collect();
+        assert!(lock_files.is_empty(), "锁文件不应落在用户项目里");
+    }
+
+    #[test]
+    fn save_conflicts_when_another_writer_changed_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, b"old\n").unwrap();
+        let opened = dozer_file_io::ProjectRoot::open(dir.path())
+            .unwrap()
+            .open_file("a.txt")
+            .unwrap();
+        let expected = dozer_file_io::Revision::of(&opened.metadata);
+        std::fs::write(&path, b"external\n").unwrap();
+        let result = dozer_file_io::write_atomic(
+            &dozer_file_io::ProjectRoot::open(dir.path()).unwrap(),
+            "a.txt",
+            b"new\n",
+            &dozer_file_io::WriteOptions {
+                expected_revision: Some(expected),
+                ..dozer_file_io::WriteOptions::default()
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"external\n");
     }
 }

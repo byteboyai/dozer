@@ -17,7 +17,7 @@
   },
   {
     "name": "apply_precise_edit",
-    "description": "精确替换项目内某文本文件 [start_line,start_col]~[end_line,end_col] 区间(1-based,含端点)的内容。expected_text 必须是这段区间当前的原样内容(用 locate_in_file 拿到坐标后紧跟着读到的那段文字),不一致会返回 conflict 并附带磁盘上的真实内容,不会写入;整篇重写就把区间设成整个文件。summary 必填,一句话说明这次改了什么。",
+    "description": "精确替换项目内某文本文件 [start_line,start_col]~[end_line,end_col] 区间(1-based,半开区间 [start,end),end 是最后一个替换字符之后的位置)的内容。expected_text 必须是这段区间当前的原样内容(用 locate_in_file 拿到坐标后紧跟着读到的那段文字),不一致会返回 conflict 并附带磁盘上的真实内容,不会写入;整篇重写就把区间设成整个文件。summary 必填,一句话说明这次改了什么。",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {

@@ -6,13 +6,18 @@ use dozer_model::{
     CodeHealthReportInfo, ContextItemInfo, ConversationSummary, FileEditHistoryInfo,
     GroupCancelScope, GroupInfo, GroupMessageInfo, LocalePreference, LocaleSnapshot,
     LocaleWriteOutcome, MemoryDetail, MemoryInfo, MutationOutcome, ProjectInfo, SessionEvent,
-    SessionInfo, SessionSummaryPayload, SummaryBatchInfo, SummaryJobInfo, TodoInfo,
-    TodoStoredStatus, TurnRecord, UsagePayload,
+    SessionInfo, SessionSummaryPayload, SummaryBatchInfo, SummaryJobInfo, TaskExecutionInfo,
+    TodoInfo, TodoStoredStatus, TurnRecord, UsagePayload,
 };
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+
+pub mod blocking;
+pub mod query_budget;
+mod session_stream;
+pub use session_stream::{SessionStream, StreamAck, StreamItem};
 
 /// trait 方法返回的装箱 future(`async fn in trait` 不能做 trait object)。`Send` 以便在
 /// `tokio::spawn`/`Handle::spawn` 里使用。
@@ -28,6 +33,14 @@ pub enum ServiceErrorKind {
     Protocol,
 }
 
+/// Optional runtime classification without extending the closed ServiceErrorKind enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeFailureKind {
+    Busy,
+    Limit,
+    Timeout,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceError {
     pub kind: ServiceErrorKind,
@@ -35,6 +48,22 @@ pub struct ServiceError {
 }
 
 impl ServiceError {
+    pub fn runtime_failure(&self) -> Option<RuntimeFailureKind> {
+        let message = self
+            .message
+            .strip_prefix("daemon 错误: ")
+            .unwrap_or(&self.message);
+        if message.starts_with("Busy:") {
+            Some(RuntimeFailureKind::Busy)
+        } else if message.starts_with("Limit:") {
+            Some(RuntimeFailureKind::Limit)
+        } else if message.starts_with("Timeout:") {
+            Some(RuntimeFailureKind::Timeout)
+        } else {
+            None
+        }
+    }
+
     pub fn new(kind: ServiceErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
@@ -67,6 +96,28 @@ pub trait UsageService: Send + Sync {
 /// 面板要用新分类的 id 立刻进入重命名。
 pub trait TodoService: Send + Sync {
     fn list_todos(&self, project_id: i64) -> BoxFuture<'_, Result<Vec<TodoInfo>, ServiceError>>;
+    /// 新能力:异步启动一次任务执行。旧实现没有该能力时明确返回不支持,不能
+    /// 用同步 `ProcessTodoNow` 冒充。默认实现保持旧消费方编译。
+    fn start_todo_execution(
+        &self,
+        _id: i64,
+        _human_reply: Option<String>,
+        _idempotency_key: Option<String>,
+    ) -> BoxFuture<'_, Result<TaskExecutionInfo, ServiceError>> {
+        Box::pin(async {
+            Err(ServiceError::new(
+                ServiceErrorKind::Rejected,
+                "该服务不支持任务执行 attempt 接口",
+            ))
+        })
+    }
+    /// 查询最近一次 attempt;不支持时返回 `None`(旧行为没有执行状态)。
+    fn get_todo_execution(
+        &self,
+        _id: i64,
+    ) -> BoxFuture<'_, Result<Option<TaskExecutionInfo>, ServiceError>> {
+        Box::pin(async { Ok(None) })
+    }
     fn list_categories(
         &self,
         project_id: i64,
@@ -251,6 +302,12 @@ pub type ConversationRows = Vec<(ConversationSummary, Option<SessionSummaryPaylo
 
 /// 会话列表与审阅详情的读取。参数按值传。
 pub trait ConversationService: Send + Sync {
+    fn backfill_state(
+        &self,
+    ) -> BoxFuture<'_, Result<Option<dozer_model::BackfillState>, ServiceError>> {
+        Box::pin(async { Ok(None) })
+    }
+
     /// Keyset 分页:`turn_index > after_turn_index`,按索引升序,最多 `limit` 条。
     /// `after_turn_index = -1` 从第一条开始。
     fn get_conversation_turns(
@@ -406,6 +463,18 @@ pub type SessionAttach = (
 );
 
 pub trait SessionService: Send + Sync {
+    fn attach_stream(
+        &self,
+        _id: String,
+        _from_offset: u64,
+    ) -> BoxFuture<'_, Result<SessionStream, ServiceError>> {
+        Box::pin(async {
+            Err(ServiceError::new(
+                ServiceErrorKind::Rejected,
+                "terminal stream unsupported",
+            ))
+        })
+    }
     fn list_sessions(&self) -> BoxFuture<'_, Result<Vec<SessionInfo>, ServiceError>>;
     fn create(&self, spec: SessionSpec) -> BoxFuture<'_, Result<SessionInfo, ServiceError>>;
     fn attach(
@@ -1431,6 +1500,28 @@ mod tests {
         assert_eq!(
             rt.block_on(down.list_sessions()).unwrap_err().kind,
             ServiceErrorKind::Unavailable
+        );
+    }
+}
+
+#[cfg(test)]
+mod runtime_failure_tests {
+    use super::*;
+    #[test]
+    fn runtime_classification_preserves_the_existing_service_error_shape() {
+        for (message, kind) in [
+            ("daemon 错误: Busy: full", RuntimeFailureKind::Busy),
+            ("Limit: too large", RuntimeFailureKind::Limit),
+            ("Timeout: result unknown", RuntimeFailureKind::Timeout),
+        ] {
+            assert_eq!(
+                ServiceError::new(ServiceErrorKind::Rejected, message).runtime_failure(),
+                Some(kind)
+            );
+        }
+        assert_eq!(
+            ServiceError::new(ServiceErrorKind::Rejected, "unrelated rejection").runtime_failure(),
+            None
         );
     }
 }

@@ -482,11 +482,27 @@ impl DozerMcpServer {
             .resolve_project_and_agent()
             .await
             .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
-        let matches = self
+        let (matches, complete, limit_reason, revision) = match self
             .client
-            .locate_in_file(project_id, &path, &query)
+            .locate_in_file_v2(project_id, &path, &query)
             .await
-            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        {
+            Ok(report) => (
+                report.matches,
+                report.complete,
+                report.limit_reason,
+                report.revision,
+            ),
+            Err(_) => {
+                // 旧 daemon 不认识 V2:退回旧接口,并明确按“完整列表”处理。
+                let matches = self
+                    .client
+                    .locate_in_file(project_id, &path, &query)
+                    .await
+                    .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+                (matches, true, None, None)
+            }
+        };
         let value = json!(
             matches
                 .into_iter()
@@ -499,11 +515,16 @@ impl DozerMcpServer {
                 }))
                 .collect::<Vec<_>>()
         );
-        Ok(CallToolResult::structured(json!({ "matches": value })))
+        Ok(CallToolResult::structured(json!({
+            "matches": value,
+            "complete": complete,
+            "limit_reason": limit_reason,
+            "revision": revision,
+        })))
     }
 
     #[tool(
-        description = "精确替换项目内某文本文件 [start_line,start_col]~[end_line,end_col] 区间(1-based,含端点)的内容。expected_text 必须是这段区间当前的原样内容(用 locate_in_file 拿到坐标后紧跟着读到的那段文字),不一致会返回 conflict 并附带磁盘上的真实内容,不会写入;整篇重写就把区间设成整个文件。summary 必填,一句话说明这次改了什么。"
+        description = "精确替换项目内某文本文件 [start_line,start_col]~[end_line,end_col] 区间(1-based,半开区间 [start,end),end 是最后一个替换字符之后的位置)的内容。expected_text 必须是这段区间当前的原样内容(用 locate_in_file 拿到坐标后紧跟着读到的那段文字),不一致会返回 conflict 并附带磁盘上的真实内容,不会写入;整篇重写就把区间设成整个文件。summary 必填,一句话说明这次改了什么。"
     )]
     pub async fn apply_precise_edit(
         &self,

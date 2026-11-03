@@ -918,8 +918,8 @@ fn parse_aider_chunk(
 }
 
 /// 按 agent 分派解析一段(必为完整行)transcript 文本。`starting_turn_index`
-/// 是这段文本第一条产出的 `ParsedTurn` 应该编到的 `turn_index`(调用方从
-/// `conversations`/`conversation_turns` 已有数据算出,续接编号,不重置)。
+/// 是源解析编号，用于无原生 ID 时的消息键。它独立于数据库分页用的
+/// `turn_index`；源重置后从零解析，已有消息保留原来的数据库索引。
 pub fn parse_chunk(
     agent: AgentKind,
     text: &str,

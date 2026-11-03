@@ -12,5 +12,10 @@
   "trace.failed_prefix": "⚠ Failed · ",
   "trace.load_failed": "Load failed: {error}",
   "trace.tool_calls": "{count} tool calls",
-  "trace.tool_calls_with_failures": "{count} tool calls ({failed} failed)"
+  "trace.tool_calls_with_failures": "{count} tool calls ({failed} failed)",
+  "stream.recovering": "Reconnecting terminal…",
+  "stream.failed": "Terminal disconnected",
+  "stream.degraded": "Legacy daemon: terminal recovery is limited",
+  "stream.reset": "Terminal restored; older output is unavailable",
+  "stream.retry": "Retry"
 }

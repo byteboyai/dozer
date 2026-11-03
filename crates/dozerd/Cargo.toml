@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 dozer-core = { path = "../dozer-core", features = ["logging"] }
+dozer-file-io = { path = "../dozer-file-io" }
+dozer-services = { path = "../dozer-services" }
 dozer-i18n = { path = "../dozer-i18n" }
 dozer-store-project = { path = "../dozer-store-project" }
 # 应用宿主:`server` feature = gateway + AppManager(只有 dozerd 打开)

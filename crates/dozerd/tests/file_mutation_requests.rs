@@ -36,6 +36,7 @@ async fn start_daemon() -> (
         summary_jobs: Arc::new(dozerd::summary_jobs::SummaryJobStore::open(&db).unwrap()),
         backfill_registry: Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new()),
         todos: Arc::new(dozerd::todo::TodoStore::new(&db).unwrap()),
+        executions: Arc::new(dozerd::task_execution::TaskExecutionStore::open(&db).unwrap()),
         categories: Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap()),
         memories: Arc::new(dozerd::memory::MemoryStore::new(&db).unwrap()),
         file_edit_history: Arc::new(

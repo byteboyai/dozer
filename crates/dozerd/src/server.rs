@@ -15,6 +15,244 @@ use tokio::sync::{Notify, broadcast};
 
 dozer_core::scope!(LOG, module, "server");
 
+/// client→server 单帧上限(编码后的 JSON 字节,包含换行前正文)。
+const MAX_CLIENT_FRAME_BYTES: usize = 12 * 1024 * 1024;
+/// server→client 单帧上限;发出前校验,避免半个 JSON 帧。
+const MAX_SERVER_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
+/// 有状态的有界帧读取器。未完成帧保存在 `pending`,即使包在 select 里被
+/// 取消,下一次读取也从原来的半帧继续,不会丢字节或从帧中间重开。
+struct FrameReader<R> {
+    reader: R,
+    pending: Vec<u8>,
+}
+
+impl<R: tokio::io::AsyncBufRead + Unpin> FrameReader<R> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader,
+            pending: Vec::new(),
+        }
+    }
+
+    async fn next_frame(&mut self, max: usize) -> std::io::Result<Option<String>> {
+        loop {
+            // We append only through the first newline in fill_buf, so a
+            // complete frame always ends at pending.last(). Avoid quadratic
+            // rescanning when a large frame arrives one byte at a time.
+            if self.pending.last() == Some(&b'\n') {
+                let mut line = std::mem::take(&mut self.pending);
+                line.pop();
+                return String::from_utf8(line)
+                    .map(Some)
+                    .map_err(|_| protocol_frame_error());
+            }
+            let available = self.reader.fill_buf().await?;
+            if available.is_empty() {
+                if self.pending.is_empty() {
+                    return Ok(None);
+                }
+                let line = std::mem::take(&mut self.pending);
+                return String::from_utf8(line)
+                    .map(Some)
+                    .map_err(|_| protocol_frame_error());
+            }
+            let consumed = if let Some(newline) = available.iter().position(|byte| *byte == b'\n') {
+                if self.pending.len() + newline > max {
+                    return Err(protocol_frame_error());
+                }
+                self.pending.extend_from_slice(&available[..=newline]);
+                newline + 1
+            } else {
+                if self.pending.len() + available.len() > max {
+                    return Err(protocol_frame_error());
+                }
+                self.pending.extend_from_slice(available);
+                available.len()
+            };
+            self.reader.consume(consumed);
+        }
+    }
+}
+
+async fn write_frame(
+    writer: &mut (impl tokio::io::AsyncWrite + Unpin),
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    write_frame_with_budget(writer, bytes, std::time::Duration::from_secs(3)).await
+}
+async fn write_frame_with_budget(
+    writer: &mut (impl tokio::io::AsyncWrite + Unpin),
+    bytes: &[u8],
+    budget: std::time::Duration,
+) -> std::io::Result<()> {
+    tokio::time::timeout(budget, writer.write_all(bytes))
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Timeout: peer did not read reply",
+            )
+        })?
+}
+
+fn protocol_frame_error() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "协议帧超过上限或不是 UTF-8",
+    )
+}
+
+fn encode_reply_checked(reply: &Reply) -> Result<String, Reply> {
+    dozer_core::protocol::encode_line_bounded(reply, MAX_SERVER_FRAME_BYTES).map_err(|_| {
+        Reply::Error {
+            message: format!(
+                "Limit: 应答超过 {} 字节帧上限，拒绝发送不完整结果",
+                MAX_SERVER_FRAME_BYTES
+            ),
+        }
+    })
+}
+
+/// 连接/普通工作/控制预留准入。终端长期订阅占连接名额,但不占普通请求
+/// 执行名额;Shutdown 走独立控制名额,普通过载时仍能停止 daemon。
+const MAX_CONNECTIONS: usize = 120;
+const MAX_CONTROL_CONNECTIONS: usize = 8;
+const MAX_WORKERS: usize = 16;
+const MAX_WAITERS: usize = 64;
+const MAX_CONTROL: usize = 4;
+const ADMISSION_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// 新连接首帧期限:防止只占连接不发请求。
+const FIRST_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+struct WaitingRequest<'a>(&'a std::sync::atomic::AtomicUsize);
+impl Drop for WaitingRequest<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+struct RuntimeLimiter {
+    connections: Arc<tokio::sync::Semaphore>,
+    control_connections: Arc<tokio::sync::Semaphore>,
+    work: Arc<tokio::sync::Semaphore>,
+    control: Arc<tokio::sync::Semaphore>,
+    waiting: std::sync::atomic::AtomicUsize,
+}
+
+impl RuntimeLimiter {
+    /// 返回 `(permit, control_only)`。普通名额满时使用控制连接预留;这类
+    /// 连接第一条请求必须是 Shutdown,否则回 Busy 并关闭。
+    fn try_connection(&self) -> Option<(tokio::sync::OwnedSemaphorePermit, bool)> {
+        if let Ok(permit) = self.connections.clone().try_acquire_owned() {
+            return Some((permit, false));
+        }
+        self.control_connections
+            .clone()
+            .try_acquire_owned()
+            .ok()
+            .map(|permit| (permit, true))
+    }
+
+    async fn acquire_work(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        let waiting = self.waiting.fetch_add(1, Ordering::SeqCst);
+        if waiting >= MAX_WAITERS {
+            self.waiting.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        let _waiting = WaitingRequest(&self.waiting);
+        let acquired =
+            tokio::time::timeout(ADMISSION_WAIT, self.work.clone().acquire_owned()).await;
+        acquired.ok()?.ok()
+    }
+
+    async fn acquire_control(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        tokio::time::timeout(ADMISSION_WAIT, self.control.clone().acquire_owned())
+            .await
+            .ok()?
+            .ok()
+    }
+}
+
+fn limiter() -> &'static RuntimeLimiter {
+    static LIMITER: std::sync::OnceLock<RuntimeLimiter> = std::sync::OnceLock::new();
+    LIMITER.get_or_init(|| RuntimeLimiter {
+        connections: Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS)),
+        control_connections: Arc::new(tokio::sync::Semaphore::new(MAX_CONTROL_CONNECTIONS)),
+        work: Arc::new(tokio::sync::Semaphore::new(MAX_WORKERS)),
+        control: Arc::new(tokio::sync::Semaphore::new(MAX_CONTROL)),
+        waiting: std::sync::atomic::AtomicUsize::new(0),
+    })
+}
+
+async fn admit_request(
+    request: &Request,
+) -> Result<Option<tokio::sync::OwnedSemaphorePermit>, String> {
+    match request {
+        Request::Hello { .. } => Ok(None),
+        Request::Shutdown => limiter()
+            .acquire_control()
+            .await
+            .map(Some)
+            .ok_or_else(busy_message),
+        _ => limiter()
+            .acquire_work()
+            .await
+            .map(Some)
+            .ok_or_else(busy_message),
+    }
+}
+
+fn request_limit(request: &Request) -> Option<&'static str> {
+    match request {
+        Request::Write { data_b64, .. } if data_b64.len() > ((64 * 1024 + 2) / 3) * 4 => {
+            Some("PTY input exceeds 64KiB")
+        }
+        Request::HookEvent { data, event, .. }
+            if event.len() > 256
+                || extract_transcript_path(data).is_some_and(|s| s.len() > 4096) =>
+        {
+            Some("terminal control fields exceed event/path budget (256B/4KiB)")
+        }
+        Request::StartTodoExecution {
+            human_reply: Some(text),
+            ..
+        }
+        | Request::ProcessTodoNow {
+            human_reply: Some(text),
+            ..
+        } if text.len() > 64 * 1024 => Some("task input exceeds 64KiB"),
+        Request::CreateSession {
+            name,
+            command,
+            args,
+            cwd,
+            ..
+        } if name.len() > 4096
+            || cwd.len() > 4096
+            || command.len() + args.iter().map(|s| s.len() + 1).sum::<usize>() > 128 * 1024 =>
+        {
+            Some("session fields exceed budget")
+        }
+        _ => None,
+    }
+}
+
+async fn await_rpc<T>(
+    deadline: tokio::time::Instant,
+    work: impl std::future::Future<Output = Result<T, dozer_services::ServiceError>>,
+) -> Result<T, dozer_services::ServiceError> {
+    tokio::time::timeout_at(deadline, work).await.map_err(|_| {
+        dozer_services::ServiceError::new(
+            dozer_services::ServiceErrorKind::Unavailable,
+            "Timeout: 请求可能已执行，结果未知，请查询状态",
+        )
+    })?
+}
+
+fn busy_message() -> String {
+    "Busy: 服务繁忙，请稍后重试".to_string()
+}
+
 /// `ProcessTodoNow` handler 的实际执行:查任务 → 加入 in_flight → 调
 /// `task_processor::process_task` → 移出 in_flight → 回最新任务或错误。
 /// 拆成独立 async 函数是为了把"多条可能中途返回不同 Reply 的路径"收敛成
@@ -23,6 +261,7 @@ dozer_core::scope!(LOG, module, "server");
 #[allow(clippy::too_many_arguments)]
 async fn process_todo_now(
     in_flight: &crate::task_poller::InFlight,
+    executions: &Arc<crate::task_execution::TaskExecutionStore>,
     todos: &Arc<crate::todo::TodoStore>,
     session_summaries: &Arc<crate::session_summary::SessionSummaryStore>,
     transcripts: &Arc<crate::transcripts::TranscriptStore>,
@@ -39,27 +278,25 @@ async fn process_todo_now(
             };
         }
     };
-    {
-        let mut guard = in_flight.lock().expect("in_flight lock");
-        if !guard.insert(id) {
-            return Reply::Error {
-                message: "该任务正在处理中".into(),
-            };
-        }
-    }
+    let Some(_guard) = crate::task_poller::try_enter(in_flight, id) else {
+        return Reply::Error {
+            message: "该任务正在处理中".into(),
+        };
+    };
     let result = crate::task_processor::process_task(
+        executions,
         todos,
         session_summaries,
         transcripts,
         projects,
         &todo,
         human_reply.as_deref(),
+        None,
         Some(summary_service),
     )
     .await;
-    in_flight.lock().expect("in_flight lock").remove(&id);
     match result {
-        Ok(()) => match todos.get(id) {
+        Ok(_) => match todos.get(id) {
             Ok(todo) => Reply::Todo { todo },
             Err(e) => Reply::Error {
                 message: e.to_string(),
@@ -67,6 +304,87 @@ async fn process_todo_now(
         },
         Err(e) => Reply::Error {
             message: format!("处理任务失败: {e}"),
+        },
+    }
+}
+
+/// 异步启动一次 attempt:准入成功立刻回 attempt,后台执行;重复
+/// idempotency_key 返回原 attempt,不重复跑。
+#[allow(clippy::too_many_arguments)]
+async fn start_todo_execution(
+    in_flight: &crate::task_poller::InFlight,
+    executions: &Arc<crate::task_execution::TaskExecutionStore>,
+    todos: &Arc<crate::todo::TodoStore>,
+    session_summaries: &Arc<crate::session_summary::SessionSummaryStore>,
+    transcripts: &Arc<crate::transcripts::TranscriptStore>,
+    projects: &Arc<crate::projects::ProjectStore>,
+    id: i64,
+    human_reply: Option<String>,
+    idempotency_key: Option<String>,
+    summary_service: &Arc<crate::summary_service::SummaryService>,
+) -> Reply {
+    let _ = session_summaries;
+    let todo = match todos.get(id) {
+        Ok(todo) => todo,
+        Err(e) => {
+            return Reply::Error {
+                message: format!("任务不存在: id={id}: {e}"),
+            };
+        }
+    };
+    let guard = crate::task_poller::try_enter(in_flight, id);
+    let admission = crate::task_processor::start_task(
+        executions,
+        todos,
+        projects,
+        &todo,
+        human_reply.as_deref(),
+        idempotency_key.as_deref(),
+    );
+    match admission {
+        Ok(crate::task_execution::Admission::Existing(execution)) => Reply::TodoExecution {
+            execution: Some(execution),
+        },
+        Ok(crate::task_execution::Admission::Started(attempt)) => {
+            let Some(guard) = guard else {
+                // 内存 in_flight 与 attempts 表出现竞争(例如旧同步路径刚占位):
+                // 让 attempt Drop 标 Interrupted,不启动第二条执行。
+                drop(attempt);
+                return Reply::Error {
+                    message: "该任务正在处理中".into(),
+                };
+            };
+            let execution = attempt.info().clone();
+            let transcripts = transcripts.clone();
+            let summary_service = summary_service.clone();
+            let task_owner = executions.clone();
+            let runtime = tokio::runtime::Handle::current();
+            tokio::spawn(async move {
+                let _ = task_owner
+                    .run_blocking(move || {
+                        runtime.block_on(async move {
+                            let _guard = guard;
+                            let _ = crate::task_processor::run_attempt(
+                                &transcripts,
+                                &todo,
+                                human_reply.as_deref(),
+                                attempt,
+                                Some(&summary_service),
+                            )
+                            .await;
+                        })
+                    })
+                    .await;
+            });
+            Reply::TodoExecution {
+                execution: Some(execution),
+            }
+        }
+        Err(crate::task_execution::AdmissionError::InFlight) => Reply::Error {
+            message: "该任务正在处理中".into(),
+        },
+        Err(error) => Reply::Error {
+            message: error.to_string(),
         },
     }
 }
@@ -87,12 +405,47 @@ pub struct Stores {
     pub summary_jobs: std::sync::Arc<crate::summary_jobs::SummaryJobStore>,
     pub backfill_registry: std::sync::Arc<crate::session_summary_backfill::BackfillRegistry>,
     pub todos: std::sync::Arc<crate::todo::TodoStore>,
+    pub executions: std::sync::Arc<crate::task_execution::TaskExecutionStore>,
     pub categories: std::sync::Arc<crate::todo_category::CategoryStore>,
     pub memories: std::sync::Arc<crate::memory::MemoryStore>,
     pub file_edit_history: std::sync::Arc<crate::file_edit_history::FileEditHistoryStore>,
     pub groups: std::sync::Arc<crate::group_service::GroupService>,
     pub apps: std::sync::Arc<bytehost_apps::service::AppService>,
     pub locale: std::sync::Arc<crate::locale_settings::LocaleSettingsStore>,
+}
+
+#[derive(Clone)]
+struct ConnectionContext {
+    stores: Stores,
+    preview_contexts: Arc<PreviewContextStore>,
+    preview_commands: Arc<crate::preview_commands::PreviewCommandBus>,
+    ide_bridge: Arc<IdeBridgeRegistry>,
+    in_flight: crate::task_poller::InFlight,
+    draining: Arc<AtomicBool>,
+    shutdown_signal: Arc<Notify>,
+}
+async fn spawn_connection(
+    mut stream: UnixStream,
+    context: ConnectionContext,
+    connections: &mut tokio::task::JoinSet<()>,
+) {
+    let Some((permit, control_only)) = limiter().try_connection() else {
+        let _ = write_frame(
+            &mut stream,
+            encode_line(&Reply::Error {
+                message: busy_message(),
+            })
+            .as_bytes(),
+        )
+        .await;
+        return;
+    };
+    connections.spawn(async move {
+        let _permit = permit;
+        if let Err(error) = handle_conn(stream, context, control_only).await {
+            dozer_core::log_debug!(LOG,error=%error,"连接结束");
+        }
+    });
 }
 
 /// 单实例检查:`socket` 背后已经有活着的监听者就报错。**启动期要尽早调用**(在做任何有副作用的启动工作——
@@ -134,6 +487,25 @@ pub async fn serve(
     in_flight: crate::task_poller::InFlight,
     ide_bridge_enabled: bool,
 ) -> Result<()> {
+    serve_with_startup(
+        socket,
+        ide_lock_dir,
+        stores,
+        in_flight,
+        ide_bridge_enabled,
+        None,
+    )
+    .await
+}
+
+pub async fn serve_with_startup(
+    socket: &Path,
+    ide_lock_dir: PathBuf,
+    stores: Stores,
+    in_flight: crate::task_poller::InFlight,
+    ide_bridge_enabled: bool,
+    startup: Option<tokio::sync::watch::Sender<bool>>,
+) -> Result<()> {
     let Stores {
         registry,
         projects,
@@ -144,6 +516,7 @@ pub async fn serve(
         summary_jobs,
         backfill_registry,
         todos,
+        executions,
         categories,
         memories,
         file_edit_history,
@@ -176,6 +549,9 @@ pub async fn serve(
         std::fs::create_dir_all(parent)?;
     }
     let listener = UnixListener::bind(socket)?;
+    if let Some(ready) = startup {
+        ready.send_replace(true);
+    }
     dozer_core::log_info!(LOG, socket = %socket.display(), "dozerd 监听中");
     let draining = Arc::new(AtomicBool::new(false));
     let shutdown_signal = Arc::new(Notify::new());
@@ -189,6 +565,7 @@ pub async fn serve(
         summary_jobs,
         backfill_registry,
         todos,
+        executions,
         categories,
         memories,
         file_edit_history,
@@ -196,8 +573,19 @@ pub async fn serve(
         apps,
         locale,
     };
+    let context = ConnectionContext {
+        stores: stores.clone(),
+        preview_contexts,
+        preview_commands,
+        ide_bridge: ide_bridge.clone(),
+        in_flight,
+        draining,
+        shutdown_signal: shutdown_signal.clone(),
+    };
+    let mut connections = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
+            Some(_) = connections.join_next(), if !connections.is_empty() => {},
             accepted = listener.accept() => {
                 let (stream, _) = match accepted {
                     Ok(pair) => pair,
@@ -206,31 +594,20 @@ pub async fn serve(
                         continue;
                     }
                 };
-                let stores = stores.clone();
-                let preview_contexts = preview_contexts.clone();
-                let preview_commands = preview_commands.clone();
-                let ide_bridge = ide_bridge.clone();
-                let in_flight = in_flight.clone();
-                let draining = draining.clone();
-                let shutdown_signal = shutdown_signal.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = handle_conn(
-                        stream,
-                        stores,
-                        preview_contexts,
-                        preview_commands,
-                        ide_bridge,
-                        in_flight,
-                        draining,
-                        shutdown_signal,
-                    )
-                    .await
-                    {
-                        dozer_core::log_debug!(LOG, error = %e, "连接结束");
-                    }
-                });
+                spawn_connection(stream,context.clone(),&mut connections).await;
             }
             _ = shutdown_signal.notified() => {
+                let _=tokio::time::timeout(std::time::Duration::from_secs(1),ide_bridge.shutdown()).await;
+                // Brief bounded grace lets already connected clients receive Draining,
+                // including a duplicate Shutdown, before all transports are closed.
+                let grace=std::cmp::min(tokio::time::Instant::now()+std::time::Duration::from_millis(100),tokio::time::Instant::from_std(context.stores.registry.shutdown_deadline()));
+                loop {tokio::select! {
+                    _=tokio::time::sleep_until(grace)=>break,
+                    Some(_)=connections.join_next(),if !connections.is_empty()=>{},
+                    accepted=listener.accept()=>if let Ok((stream,_))=accepted{spawn_connection(stream,context.clone(),&mut connections).await;},
+                }}
+                connections.abort_all();
+                while connections.join_next().await.is_some() {}
                 dozer_core::log_info!(LOG, "收到 Shutdown 请求收尾完成，dozerd 退出");
                 let _ = std::fs::remove_file(socket);
                 return Ok(());
@@ -258,6 +635,7 @@ pub fn extract_transcript_path(data: &serde_json::Value) -> Option<&str> {
 /// 单会话单文件量级下是毫秒级操作,没必要为它另起异步任务增加复杂度;
 /// 摄取失败只记 warn,不影响本次 hook 事件其余处理(设置 agent/状态仍然
 /// 照常进行)。
+#[cfg(test)]
 fn maybe_ingest_from_hook_data(
     transcripts: &crate::transcripts::TranscriptStore,
     agent: dozer_core::protocol::AgentKind,
@@ -274,6 +652,7 @@ fn maybe_ingest_from_hook_data(
 /// 会话状态转入 `Idle`/`AwaitingInput` 时的兜底摄取——替代定时轮询,
 /// 复用现有状态机,只在"这一刻状态真的变了"才触发,同态重复事件不重复
 /// 摄取(避免每次 hook 事件都无谓地读一次文件)。
+#[cfg(test)]
 fn maybe_ingest_on_state_transition(
     transcripts: &crate::transcripts::TranscriptStore,
     agent: dozer_core::protocol::AgentKind,
@@ -297,7 +676,7 @@ fn maybe_ingest_on_state_transition(
 /// 从一个存活/已死 `Session` 的 `transcript_path` 解析出 `conversation_id`
 /// (同 `TranscriptStore::ingest_session` 的派生逻辑)。没有 `transcript_path`
 /// (会话从没收到过 hook 事件)时返回 `None`(2026-08-27 修正)。
-fn conversation_id_for_session(s: &crate::session::Session) -> Option<String> {
+pub(crate) fn conversation_id_for_session(s: &crate::session::Session) -> Option<String> {
     s.info()
         .transcript_path
         .as_deref()
@@ -307,7 +686,7 @@ fn conversation_id_for_session(s: &crate::session::Session) -> Option<String> {
 /// `Request::Shutdown` 收尾:对 `registry` 里当前存活的每个会话,把"可总结"
 /// 的持久化成 summary job(不注入 prompt、不等 LLM),再统一 kill。下次启动
 /// 由 worker 恢复执行。纯 shell/无 transcript 会话不提交(无内容可总结)。
-fn enqueue_session_summary(
+pub(crate) fn enqueue_session_summary(
     session: &crate::session::Session,
     service: &crate::summary_service::SummaryService,
     trigger: dozer_core::protocol::SummaryTrigger,
@@ -316,38 +695,20 @@ fn enqueue_session_summary(
     let Some(cid) = conversation_id_for_session(session) else {
         return Ok(());
     };
-    if let Some(path) = &info.transcript_path {
-        service
-            .transcripts
-            .ingest_session(info.agent, Path::new(path))?;
-    }
-    let cfg = crate::summary_config::resolve_provider(None, None);
-    let (provider, model) = match &cfg {
-        crate::summary_config::SummaryProviderResolution::Configured(c, _) => {
-            (c.provider, c.model.clone())
-        }
-        _ => (dozer_core::protocol::AgentKind::Unknown, None),
+    let Some(claim) = session.claim_summary() else {
+        return Ok(());
     };
-    let job_id = service.submit_single(&crate::summary_service::SubmitSpec {
+    let Some(path) = info.transcript_path else {
+        return Ok(());
+    };
+    service.finalize_session(&crate::summary_jobs::SessionFinalization {
+        session_id: info.id,
         conversation_id: cid,
-        source_session_id: Some(info.id),
+        agent: info.agent,
+        transcript_path: path,
         trigger,
-        provider,
-        requested_model: model,
-        force: false,
     })?;
-    if matches!(
-        cfg,
-        crate::summary_config::SummaryProviderResolution::Required
-    ) {
-        service.jobs.update_job_status(
-            job_id,
-            dozer_core::protocol::SummaryJobStatus::Failed,
-            Some(dozer_core::protocol::SummaryErrorKind::ConfigurationRequired),
-            Some("未配置总结器，请设置 config.toml 的 [summary].provider 后重试"),
-            None,
-        )?;
-    }
+    claim.commit();
     Ok(())
 }
 
@@ -355,6 +716,7 @@ fn drain_all_sessions(
     registry: Arc<SessionRegistry>,
     summary_service: std::sync::Arc<crate::summary_service::SummaryService>,
 ) {
+    registry.begin_draining();
     // 只收存活会话(spec 2026-09-19 §「实现要点」step 1)。`SessionRegistry`
     // 从不摘除已退出的会话,`list()` 里混着 `alive=false` 的死会话——死会话
     // 没有可总结的 transcript,直接跳过。
@@ -375,6 +737,66 @@ fn drain_all_sessions(
         }
     }
     kill_remaining_live_sessions(&registry);
+}
+
+/// 三种停止入口(Shutdown RPC / SIGINT / SIGTERM)共用的收尾:
+/// 提交会话总结、kill 存活会话、停止 apps。调用方负责 summary worker 标志
+/// 与 socket/进程锁清理。
+pub async fn shutdown_stores(stores: &Stores) {
+    stores.registry.begin_draining();
+    stores.executions.stop();
+    stores.summary_jobs.stop();
+    stores.groups.shutdown();
+    if let Some(worker) = stores.transcripts.ingestion.get() {
+        worker.stop();
+    }
+    let summary_service = std::sync::Arc::new(crate::summary_service::SummaryService {
+        jobs: stores.summary_jobs.clone(),
+        transcripts: stores.transcripts.clone(),
+        session_summaries: stores.session_summaries.clone(),
+        scratch_root: dozer_core::paths::state_dir().join("summary-scratch"),
+    });
+    let registry = stores.registry.clone();
+    let drain = tokio::task::spawn_blocking(move || drain_all_sessions(registry, summary_service));
+    if tokio::time::timeout(std::time::Duration::from_secs(6), drain)
+        .await
+        .is_err()
+    {
+        dozer_core::log_warn!(
+            LOG,
+            "shutdown summary drain timed out; pending jobs recover on restart"
+        );
+    }
+    kill_remaining_live_sessions(&stores.registry);
+    let deadline = tokio::time::Instant::from_std(stores.registry.shutdown_deadline());
+    loop {
+        let pending = stores.registry.pending_creates();
+        let live = stores
+            .registry
+            .list()
+            .into_iter()
+            .filter(|s| s.alive)
+            .count();
+        if pending == 0 && live == 0 {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            dozer_core::log_warn!(
+                LOG,
+                pending_creates = pending,
+                live_sessions = live,
+                "shutdown budget expired; resources still pending"
+            );
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    if tokio::time::timeout_at(deadline, stores.apps.shutdown())
+        .await
+        .is_err()
+    {
+        dozer_core::log_warn!(LOG, "apps shutdown exceeded total budget");
+    }
 }
 
 /// Shutdown 收尾的最后兜底:把 registry 里仍然存活的会话全部 kill 掉。
@@ -419,30 +841,36 @@ pub fn agent_state_for(event: &str) -> Option<dozer_core::protocol::AgentState> 
 #[allow(clippy::too_many_arguments)]
 async fn handle_conn(
     stream: UnixStream,
-    stores: Stores,
-    preview_contexts: Arc<PreviewContextStore>,
-    preview_commands: Arc<crate::preview_commands::PreviewCommandBus>,
-    ide_bridge: Arc<IdeBridgeRegistry>,
-    in_flight: crate::task_poller::InFlight,
-    draining: Arc<AtomicBool>,
-    shutdown_signal: Arc<Notify>,
+    context: ConnectionContext,
+    control_only: bool,
 ) -> Result<()> {
+    let ConnectionContext {
+        stores,
+        preview_contexts,
+        preview_commands,
+        ide_bridge,
+        in_flight,
+        draining,
+        shutdown_signal,
+    } = context;
+    let request_stores = stores.clone();
     let Stores {
         registry,
-        projects,
-        bookmarks,
-        code_health,
+        projects: _,
+        bookmarks: _,
+        code_health: _,
         transcripts,
         session_summaries,
         summary_jobs,
         backfill_registry,
-        todos,
-        categories,
-        memories,
-        file_edit_history,
-        groups,
+        todos: _,
+        executions,
+        categories: _,
+        memories: _,
+        file_edit_history: _,
+        groups: _,
         apps,
-        locale,
+        locale: _,
     } = stores;
     // 总结调度服务:提交/查询走持久化表,状态在 SQLite 里,跨连接可见。每个
     // 连接构造一份轻量句柄(只是 Arc 引用 + 一个 scratch 根路径)。
@@ -453,7 +881,7 @@ async fn handle_conn(
         scratch_root: dozer_core::paths::state_dir().join("summary-scratch"),
     });
     let (r, mut w) = stream.into_split();
-    let mut lines = BufReader::new(r).lines();
+    let mut reader = FrameReader::new(BufReader::new(r));
     // attach 状态：订阅 + 会话 id
     let mut sub: Option<(String, broadcast::Receiver<SessionEvent>)> = None;
     // 应用变更订阅：`Subscribe` 之后把事件写成 `Changed`/`Resync` 推给本连接。
@@ -461,15 +889,63 @@ async fn handle_conn(
     let mut app_sub: Option<broadcast::Receiver<bytehost_apps::event::AppEvent>> = None;
     // 已向本连接投递到的 offset 水位：过滤 snapshot 与 broadcast 之间重叠的字节
     let mut sent_until: u64 = 0;
+    // 迟到 attach 到已退出会话时，广播已经错过；在 Attached 之后补发一次 Exited。
+    let mut late_exit: Option<Option<i32>> = None;
+    let mut first_frame = true;
+    let mut stream_epoch: Option<u64> = None;
 
     loop {
+        let read_first = first_frame;
+        let subscribed = sub.is_some() || app_sub.is_some();
         tokio::select! {
-            line = lines.next_line() => {
+            line = async {
+                if read_first {
+                    tokio::time::timeout(
+                        FIRST_FRAME_TIMEOUT,
+                        reader.next_frame(MAX_CLIENT_FRAME_BYTES),
+                    )
+                    .await
+                    .map_err(|_| std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "首帧读取超时",
+                    ))?
+                } else if subscribed {
+                    reader.next_frame(MAX_CLIENT_FRAME_BYTES).await
+                } else {
+                    tokio::time::timeout(std::time::Duration::from_secs(30),reader.next_frame(MAX_CLIENT_FRAME_BYTES)).await.map_err(|_|std::io::Error::new(std::io::ErrorKind::TimedOut,"Timeout: idle RPC connection"))?
+                }
+            } => {
+                first_frame = false;
                 let Some(line) = line? else { break }; // 客户端断连：直接退出，不动会话
                 let mut should_exit_after_reply = false;
+                // 控制预留连接只处理一条请求；语法错误也必须归还预留名额。
+                let close_connection_after_reply = control_only;
                 let reply = match decode_line::<Request>(&line) {
                     Err(e) => Reply::Error { message: format!("协议错误: {e}") },
-                    Ok(req) => match req {
+                    Ok(req) => {
+                        let operation_deadline=tokio::time::Instant::now()+std::time::Duration::from_secs(if matches!(&req,Request::ProcessTodoNow{..}){603}else{10});
+                        if registry.is_draining() && !matches!(&req,Request::Hello{..}|Request::Shutdown) {Reply::Error{message:"dozerd 正在停止，拒绝新请求".into()}} else if let Some(limit)=request_limit(&req) {Reply::Error{message:format!("Limit: {limit}")}} else if control_only && !matches!(&req, Request::Shutdown) {
+                            Reply::Error {
+                                message: busy_message(),
+                            }
+                        } else {
+                            match admit_request(&req).await {
+                                Err(message) => Reply::Error { message },
+                                Ok(_permit) => match req {
+                        request if crate::server_handlers::supports(&request) => {
+                            let stores = request_stores.clone();
+                            let contexts = preview_contexts.clone();
+                            let commands = preview_commands.clone();
+                            let runtime = tokio::runtime::Handle::current();
+                            match tokio::time::timeout_at(operation_deadline, dozer_services::blocking::run(move || {
+                                let _runtime = runtime.enter();
+                                Ok(crate::server_handlers::handle(request, stores, contexts, commands))
+                            })).await {
+                                Ok(Ok(reply)) => reply,
+                                Ok(Err(error)) => Reply::Error { message: error.to_string() },
+                                Err(_) => Reply::Error { message: "Timeout: 操作超时，写入结果未知，请查询状态".into() },
+                            }
+                        }
                         // 协议版本握手:回自己的版本与产品名。旧客户端不发
                         // Hello 也不影响——这只是一个普通请求分支。
                         Request::Hello { protocol: _ } => Reply::Hello {
@@ -496,17 +972,41 @@ async fn handle_conn(
                                     },
                                 }
                             }
-                            request => match apps.handle(request).await {
-                                Ok(reply) => Reply::App { reply },
-                                Err(failure) => Reply::App { reply: bytehost_apps::proto::AppReply::Failed { failure } },
+                            request => match tokio::time::timeout_at(operation_deadline,apps.handle(request)).await {
+                                Ok(Ok(reply)) => Reply::App { reply },
+                                Ok(Err(failure)) => Reply::App { reply: bytehost_apps::proto::AppReply::Failed { failure } },
+                                Err(_)=>Reply::Error{message:"Timeout: 应用操作可能已执行，结果未知，请查询状态".into()},
                             },
+                        },
+                        Request::GetBackfillState => Reply::BackfillState { state: transcripts.ingestion().status() },
+                        Request::RuntimeCapabilities => Reply::RuntimeCapabilities { capabilities: dozer_model_capabilities() },
+                        Request::AttachV2 {session_id, from_offset, epoch} => match registry.get(&session_id) {
+                            None => Reply::Error {message: format!("会话不存在: {session_id}")},
+                            Some(session) if session.history_evicted()=>Reply::Error{message:"会话历史已逐出（HistoryEvicted）".into()},
+                            Some(session) => {
+                                let rx = session.subscribe();
+                                let snapshot = session.attach_snapshot(from_offset);
+                                let mode = if from_offset > 0 && snapshot.next_offset.checked_sub(from_offset) == Some(snapshot.bytes.len() as u64) {
+                                    dozer_core::protocol::StreamMode::Resume
+                                } else { dozer_core::protocol::StreamMode::Reset };
+                                let state = session.terminal_state(snapshot.exit_status);
+                                sub = if state.output_complete { None } else { Some((session_id, rx)) };
+                                sent_until = snapshot.next_offset;
+                                stream_epoch = Some(epoch);
+                                Reply::Terminal { event: dozer_core::protocol::TerminalEvent::Snapshot {
+                                    epoch, mode, start_offset: snapshot.next_offset - snapshot.bytes.len() as u64,
+                                    next_offset: snapshot.next_offset, data: snapshot.bytes, state, degraded: false,
+                                }}
+                            }
                         },
                         Request::ListSessions => Reply::Sessions { sessions: registry.list() },
                         Request::CreateSession { name, command, args, cwd, cols, rows, project_id, agent } => {
                             if draining.load(Ordering::SeqCst) {
                                 Reply::Error { message: "dozerd 正在停止,无法创建新会话".into() }
                             } else {
-                                match registry.create(SessionSpec { name, command, args, cwd: cwd.clone(), cols, rows, project_id }) {
+                                let create_registry=registry.clone();let create_cwd=cwd.clone();
+                                let created=await_rpc(operation_deadline,dozer_services::blocking::run(move||create_registry.create(SessionSpec { name, command, args, cwd:create_cwd, cols, rows, project_id }).map_err(|e|dozer_services::ServiceError::new(dozer_services::ServiceErrorKind::Rejected,e.to_string())))).await;
+                                match created {
                                     Ok(s) => {
                                         // picker 在创建 PTY 时已经知道即将启动的 agent。
                                         // 立即记下，不要等可能很晚甚至本轮不会到达的 hook，
@@ -515,17 +1015,10 @@ async fn handle_conn(
                                         // Independent of UI attachment and IDE-bridge startup.
                                         let exit_session = s.clone();
                                         let exit_service = summary_service.clone();
-                                        let mut summary_rx = s.subscribe();
                                         tokio::spawn(async move {
-                                            loop {
-                                                match summary_rx.recv().await {
-                                                    Ok(SessionEvent::Exited { .. }) => break,
-                                                    Err(broadcast::error::RecvError::Closed) => break,
-                                                    _ => continue,
-                                                }
-                                            }
+                                            exit_session.wait_for_exit().await;
                                             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                                            if let Err(e) = enqueue_session_summary(&exit_session, &exit_service, dozer_core::protocol::SummaryTrigger::NaturalExit) {
+                                            if let Ok(Err(e)) = tokio::task::spawn_blocking(move ||enqueue_session_summary(&exit_session, &exit_service, dozer_core::protocol::SummaryTrigger::NaturalExit)).await {
                                                 dozer_core::log_warn!(LOG, error=%e, "自然退出总结提交失败");
                                             }
                                         });
@@ -536,19 +1029,10 @@ async fn handle_conn(
                                         // 会话的 bridge 提前拆掉(复现过的 bug,见代码审查记录)。
                                         if ide_bridge.session_started(project_id, &cwd).await {
                                             let ide_bridge_watch = ide_bridge.clone();
-                                            let mut exit_rx = s.subscribe();
+                                            let exit_session = s.clone();
                                             tokio::spawn(async move {
-                                                loop {
-                                                    match exit_rx.recv().await {
-                                                        Ok(SessionEvent::Exited { .. }) => {
-                                                            ide_bridge_watch.session_ended(project_id).await;
-                                                            break;
-                                                        }
-                                                        Ok(_) => continue,
-                                                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                                                        Err(broadcast::error::RecvError::Closed) => break,
-                                                    }
-                                                }
+                                                exit_session.wait_for_exit().await;
+                                                ide_bridge_watch.session_ended(project_id).await;
                                             });
                                         }
                                         Reply::Created { session: s.info() }
@@ -557,29 +1041,32 @@ async fn handle_conn(
                                 }
                             }
                         }
-                        Request::Attach { session_id, from_offset } => match registry.get(&session_id) {
+                        Request::Attach { session_id, from_offset } => {
+                            stream_epoch = None;
+                            match registry.get(&session_id) {
                             None => Reply::Error { message: format!("会话不存在: {session_id}") },
                             Some(s) => {
+                                if s.history_evicted() {
+                                    Reply::Error {
+                                        message: "会话历史已逐出（HistoryEvicted）".into(),
+                                    }
+                                } else {
                                 // 先 subscribe 后取快照：保证快照与订阅之间不漏事件；
                                 // 二者之间可能重叠投递的字节由 sent_until 水位在转发时过滤。
                                 let rx = s.subscribe();
-                                let (snap, next) = if from_offset > 0 {
-                                    match s.read_from_with_next(from_offset) {
-                                        Some((tail, next)) => (tail, next),
-                                        None => s.snapshot(),
-                                    }
-                                } else {
-                                    s.snapshot()
-                                };
+                                let snapshot = s.attach_snapshot(from_offset);
                                 sub = Some((session_id.clone(), rx));
-                                sent_until = next;
+                                sent_until = snapshot.next_offset;
+                                late_exit = snapshot.exit_status;
                                 Reply::Attached {
                                     session_id,
-                                    snapshot_b64: B64.encode(&snap),
-                                    next_offset: next,
+                                    snapshot_b64: B64.encode(&snapshot.bytes),
+                                    next_offset: snapshot.next_offset,
+                                }
                                 }
                             }
-                        },
+                            }
+                        }
                         Request::Write { session_id, data_b64 } => match registry.get(&session_id) {
                             None => Reply::Error { message: format!("会话不存在: {session_id}") },
                             Some(s) => match B64.decode(&data_b64) {
@@ -607,446 +1094,30 @@ async fn handle_conn(
                             ).is_err() {
                                 Reply::Error { message: "dozerd 正在停止中".into() }
                             } else {
-                                // Shutdown:持久化待处理总结任务并 kill 存活会话,
-                                // 不注入 prompt、不等模型完成;下次启动由 worker
-                                // 恢复执行。
-                                drain_all_sessions(registry.clone(), summary_service.clone());
-                                // 应用跟随 dozerd:撤下站点、观察态落成 Stopped(desired 保留,下次启动自动恢复)
-                                apps.shutdown().await;
+                                shutdown_stores(&request_stores).await;
                                 should_exit_after_reply = true;
                                 Reply::Ok
                             }
                         }
                         Request::HookEvent { session_id, agent, event, ts_ms, data } => {
-                            match registry.get(&session_id) {
-                                None => {
-                                    dozer_core::log_debug!(LOG, %session_id, %event, "hook 事件的会话不存在，丢弃");
+                            if let Some(s)=registry.get(&session_id) {
+                                s.set_agent(agent);
+                                if let Some(path)=extract_transcript_path(&data){s.set_transcript_path(path);}
+                                if let Some(state)=agent_state_for(&event){s.set_agent_state(state,&event,ts_ms);}
+                                match s.info().transcript_path {
+                                    Some(path)=>match transcripts.ingestion().submit(agent,PathBuf::from(path)) {Ok(())=>Reply::Ok,Err(message)=>Reply::Error{message}},
+                                    None=>Reply::Ok,
                                 }
-                                Some(s) => {
-                                    s.set_agent(agent);
-                                    if let Some(tp) = extract_transcript_path(&data) {
-                                        s.set_transcript_path(tp);
-                                    }
-                                    match agent_state_for(&event) {
-                                        Some(state) => {
-                                            let old_state = s.info().agent_state;
-                                            s.set_agent_state(state, &event, ts_ms);
-                                            let tp = s.info().transcript_path;
-                                            maybe_ingest_on_state_transition(
-                                                &transcripts,
-                                                agent,
-                                                old_state,
-                                                state,
-                                                tp.as_deref(),
-                                            );
-                                        }
-                                        None => dozer_core::log_debug!(LOG, %event, "未知 hook 事件，不改状态"),
-                                    }
-                                    maybe_ingest_from_hook_data(&transcripts, agent, &data);
-                                }
-                            }
-                            Reply::Ok
+                            } else {Reply::Ok}
                         }
-                        Request::OpenProject { path } => match projects.open(&path) {
-                            Ok(p) => Reply::Project { project: Some(p) },
-                            Err(e) => Reply::Error { message: format!("打开项目失败: {e}") },
-                        },
-                        Request::ListProjects => match projects.list() {
-                            Ok(projects) => Reply::Projects { projects },
-                            Err(e) => Reply::Error { message: format!("列项目失败: {e}") },
-                        },
-                        Request::RenameProject { id, name } => {
-                            let trimmed = name.trim();
-                            if trimmed.is_empty() {
-                                Reply::Error { message: "名称不能为空".into() }
-                            } else {
-                                match projects.rename(id, trimmed) {
-                                    Ok(p) => Reply::Project { project: Some(p) },
-                                    Err(e) => Reply::Error { message: format!("改名失败: {e}") },
-                                }
-                            }
+                        Request::ProcessTodoNow {id,human_reply}=>{
+                            let stores=request_stores.clone();let flight=in_flight.clone();let service=summary_service.clone();let runtime=tokio::runtime::Handle::current();
+                            executions.run_blocking(move||runtime.block_on(process_todo_now(&flight,&stores.executions,&stores.todos,&stores.session_summaries,&stores.transcripts,&stores.projects,id,human_reply,&service))).await.unwrap_or_else(|message|Reply::Error{message})
                         }
-                        Request::AddBookmark {
-                            scope,
-                            project_id,
-                            url,
-                            title,
-                        } => match bookmarks.add(scope, project_id, &url, &title) {
-                            Ok(_) => Reply::Ok,
-                            Err(e) => Reply::Error {
-                                message: format!("加入收藏失败: {e}"),
-                            },
-                        },
-                        Request::RemoveBookmark { id } => match bookmarks.remove(id) {
-                            Ok(()) => Reply::Ok,
-                            Err(e) => Reply::Error {
-                                message: format!("移除收藏失败: {e}"),
-                            },
-                        },
-                        Request::ListBookmarks { project_id } => {
-                            match bookmarks.list(project_id) {
-                                Ok(bookmarks) => Reply::Bookmarks { bookmarks },
-                                Err(e) => Reply::Error {
-                                    message: format!("列收藏失败: {e}"),
-                                },
-                            }
+                        Request::StartTodoExecution{id,human_reply,idempotency_key}=>{
+                            let stores=request_stores.clone();let flight=in_flight.clone();let service=summary_service.clone();let runtime=tokio::runtime::Handle::current();
+                            await_rpc(operation_deadline,dozer_services::blocking::run(move||Ok(runtime.block_on(start_todo_execution(&flight,&stores.executions,&stores.todos,&stores.session_summaries,&stores.transcripts,&stores.projects,id,human_reply,idempotency_key,&service))))).await.unwrap_or_else(|error|Reply::Error{message:error.to_string()})
                         }
-                        Request::GetLocale => Reply::Locale {
-                            snapshot: locale.get(),
-                        },
-                        Request::SetLocale { preference, expected_revision, system_candidates } => {
-                            match locale.set(preference, expected_revision, system_candidates) {
-                                Ok(outcome) => Reply::LocaleWrite { outcome },
-                                Err(e) => Reply::Error {
-                                    message: format!("写入语言设置失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::SaveCodeHealthReport {
-                            project_id,
-                            report_json,
-                            total_loc,
-                            total_functions,
-                            critical_functions,
-                            overall_tier,
-                            schema_version,
-                            git_head,
-                            git_branch,
-                            git_dirty,
-                        } => {
-                            let info = dozer_core::protocol::CodeHealthReportInfo {
-                                total_loc,
-                                total_functions,
-                                critical_functions,
-                                overall_tier,
-                                report_json,
-                                scanned_at_ms: 0, // store 内部会用自己的 now_ms() 覆盖
-                                schema_version,
-                                git_head,
-                                git_branch,
-                                git_dirty,
-                            };
-                            match code_health.save(project_id, &info) {
-                                Ok(()) => Reply::Ok,
-                                Err(e) => Reply::Error {
-                                    message: format!("保存代码健康度报告失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::GetCodeHealthReport { project_id } => {
-                            match code_health.get(project_id) {
-                                Ok(report) => Reply::CodeHealthReport { report },
-                                Err(e) => Reply::Error {
-                                    message: format!("查询代码健康度报告失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::ListCodeHealthReports { project_id, limit } => {
-                            match code_health.list(project_id, limit) {
-                                Ok(reports) => Reply::CodeHealthReports { reports },
-                                Err(e) => Reply::Error {
-                                    message: format!("查询代码健康度历史失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::ListTodos { project_id } => match todos.list(project_id) {
-                            Ok(todos) => Reply::Todos { todos },
-                            Err(e) => Reply::Error {
-                                message: format!("列任务失败: {e}"),
-                            },
-                        },
-                        Request::AddTodo { project_id, text } => {
-                            match todos.add(project_id, &text) {
-                                Ok(todo) => Reply::Todo { todo },
-                                Err(e) => Reply::Error {
-                                    message: format!("新增任务失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::ToggleTodo { id, done } => match todos.toggle(id, done) {
-                            Ok(todo) => Reply::Todo { todo },
-                            Err(e) => Reply::Error {
-                                message: format!("切换完成态失败: {e}"),
-                            },
-                        },
-                        Request::EditTodoText { id, text } => {
-                            match todos.edit_text(id, &text) {
-                                Ok(todo) => Reply::Todo { todo },
-                                Err(e) => Reply::Error {
-                                    message: format!("改任务文字失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::ReorderTodo { id, after_id } => {
-                            match todos.reorder(id, after_id) {
-                                Ok(todo) => Reply::Todo { todo },
-                                Err(e) => Reply::Error {
-                                    message: format!("排序失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::SetTodoPlanDate { id, plan_date } => {
-                            match todos.set_plan_date(id, plan_date.as_deref()) {
-                                Ok(todo) => Reply::Todo { todo },
-                                Err(e) => Reply::Error {
-                                    message: format!("设置计划日期失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::AssignTodoAgent { id, agent } => {
-                            match todos.assign_agent(id, agent) {
-                                Ok(todo) => Reply::Todo { todo },
-                                Err(e) => Reply::Error {
-                                    message: format!("指派任务失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::SetCategoryAutoPoll { id, enabled } => {
-                            match categories.set_auto_poll(id, enabled) {
-                                Ok(category) => Reply::Category { category },
-                                Err(e) => Reply::Error {
-                                    message: format!("设置自动轮询失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::ProcessTodoNow { id, human_reply } => {
-                            process_todo_now(
-                                &in_flight,
-                                &todos,
-                                &session_summaries,
-                                &transcripts,
-                                &projects,
-                                id,
-                                human_reply,
-                                &summary_service,
-                            )
-                            .await
-                        }
-                        Request::GetTodoDetail { id } => match todos.get(id) {
-                            Ok(info) => {
-                                let turns = info
-                                    .dispatch_session_id
-                                    .as_deref()
-                                    .and_then(|sid| {
-                                        transcripts.get_conversation_turns(sid, -1, u32::MAX).ok()
-                                    })
-                                    .unwrap_or_default();
-                                Reply::TodoDetail { info, turns }
-                            }
-                            Err(e) => Reply::Error {
-                                message: format!("获取任务详情失败: {e}"),
-                            },
-                        },
-                        Request::SetTodoStatus { id, status } => match todos.set_status(id, status) {
-                            Ok(todo) => Reply::Todo { todo },
-                            Err(e) => Reply::Error {
-                                message: format!("设置任务状态失败: {e}"),
-                            },
-                        },
-                        Request::ListMemories { project_id } => match memories.list(project_id) {
-                            Ok(memories) => Reply::Memories { memories },
-                            Err(e) => Reply::Error {
-                                message: format!("列共享记忆失败: {e}"),
-                            },
-                        },
-                        Request::WriteMemory {
-                            project_id,
-                            title,
-                            kind,
-                            description,
-                            body,
-                            actor,
-                        } => match memories.write(project_id, &title, &kind, &description, &body, &actor) {
-                            Ok(detail) => Reply::MemoryDetail { detail },
-                            Err(e) => Reply::Error {
-                                message: format!("写共享记忆失败: {e}"),
-                            },
-                        },
-                        Request::GetMemory { project_id, id } => match memories.get(project_id, id) {
-                            Ok(detail) => Reply::MemoryDetail { detail },
-                            Err(e) => Reply::Error {
-                                message: format!("查共享记忆失败: {e}"),
-                            },
-                        },
-                        Request::DeleteMemory { project_id, id, actor } => {
-                            match memories.delete(project_id, id, &actor) {
-                                Ok(()) => Reply::Ok,
-                                Err(e) => Reply::Error {
-                                    message: format!("删共享记忆失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::CreateGroup { project_id, topic } => {
-                            match groups.store().create_group(project_id, &topic) {
-                                Ok(group) => Reply::Group { group },
-                                Err(e) => Reply::Error { message: format!("新建群聊失败: {e}") },
-                            }
-                        }
-                        Request::ListGroups { project_id } => {
-                            match groups.store().list_groups(project_id) {
-                                Ok(groups) => Reply::Groups { groups },
-                                Err(e) => Reply::Error { message: format!("列群聊失败: {e}") },
-                            }
-                        }
-                        Request::DeleteGroup { group_id } => match groups.delete_group(group_id) {
-                            Ok(()) => Reply::Ok,
-                            Err(e) => Reply::Error { message: format!("删除群聊失败: {e}") },
-                        },
-                        Request::AddGroupMember { group_id, agent, handle, role_prompt } => {
-                            match groups.store().add_member(group_id, agent, &handle, &role_prompt) {
-                                Ok(group) => Reply::Group { group },
-                                Err(e) => Reply::Error { message: format!("添加成员失败: {e}") },
-                            }
-                        }
-                        Request::UpdateGroupMember { member_id, handle, role_prompt } => {
-                            match groups.store().update_member(member_id, &handle, &role_prompt) {
-                                Ok(group) => Reply::Group { group },
-                                Err(e) => Reply::Error { message: format!("修改成员失败: {e}") },
-                            }
-                        }
-                        Request::RemoveGroupMember { member_id } => {
-                            match groups.store().remove_member(member_id) {
-                                Ok(group) => Reply::Group { group },
-                                Err(e) => Reply::Error { message: format!("移除成员失败: {e}") },
-                            }
-                        }
-                        Request::PostGroupMessage { group_id, text } => {
-                            match groups.post(group_id, &text) {
-                                Ok(o) => Reply::GroupPosted {
-                                    human: o.human,
-                                    placeholders: o.placeholders,
-                                    unknown_handles: o.unknown_handles,
-                                },
-                                Err(e) => Reply::Error { message: format!("发送失败: {e}") },
-                            }
-                        }
-                        Request::ListGroupMessages { group_id, after_rev, limit } => {
-                            match groups.store().list_messages_after_rev(group_id, after_rev, limit.clamp(1, 500)) {
-                                Ok((messages, latest_rev)) => Reply::GroupMessages { messages, latest_rev },
-                                Err(e) => Reply::Error { message: format!("取群消息失败: {e}") },
-                            }
-                        }
-                        Request::CancelGroup { group_id, scope } => {
-                            groups.cancel(group_id, scope);
-                            Reply::Ok
-                        }
-                        Request::RetryGroupMessage { message_id } => match groups.retry(message_id) {
-                            Ok(message) => Reply::GroupMessage { message },
-                            Err(e) => Reply::Error { message: format!("重试失败: {e}") },
-                        },
-                        Request::PushGroupMessageToTodo { message_id, text } => {
-                            let text = text.trim().to_string();
-                            if text.is_empty() {
-                                Reply::Error { message: "待办内容不能为空".into() }
-                            } else {
-                                match groups.store().get_message(message_id) {
-                                    Err(e) => Reply::Error { message: format!("推送待办失败: {e}") },
-                                    Ok(msg) if msg.todo_id.is_some() => Reply::Error {
-                                        message: "该消息已转为待办".into(),
-                                    },
-                                    Ok(msg) => match groups.store().get_group(msg.group_id) {
-                                        Err(e) => Reply::Error { message: format!("推送待办失败: {e}") },
-                                        Ok(group) => match todos.add(group.project_id, &text) {
-                                            Err(e) => Reply::Error {
-                                                message: format!("新增任务失败: {e}"),
-                                            },
-                                            Ok(todo) => match groups.store().set_todo_link(message_id, todo.id) {
-                                                Ok(()) => Reply::Todo { todo },
-                                                Err(e) => {
-                                                    dozer_core::log_warn!(LOG, message_id, todo_id = todo.id, error = %e, "待办已创建但记录关联失败");
-                                                    Reply::Error {
-                                                        message: format!("待办已创建,但记录来源失败: {e}"),
-                                                    }
-                                                }
-                                            },
-                                        },
-                                    },
-                                }
-                            }
-                        },
-                        Request::ListCategories { project_id } => {
-                            match categories.list(project_id) {
-                                Ok(categories) => Reply::Categories { categories },
-                                Err(e) => Reply::Error {
-                                    message: format!("列分类失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::AddCategory { project_id, parent_id, name } => {
-                            match categories.add(project_id, parent_id, &name) {
-                                Ok(category) => Reply::Category { category },
-                                Err(e) => Reply::Error {
-                                    message: format!("新增分类失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::RenameCategory { id, name } => {
-                            match categories.rename(id, &name) {
-                                Ok(category) => Reply::Category { category },
-                                Err(e) => Reply::Error {
-                                    message: format!("重命名分类失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::DeleteCategory { id } => match categories.delete(id) {
-                            Ok(()) => Reply::Ok,
-                            Err(e) => Reply::Error {
-                                message: format!("删除分类失败: {e}"),
-                            },
-                        },
-                        Request::ReparentCategory { id, new_parent_id } => {
-                            match categories.reparent(id, new_parent_id) {
-                                Ok(category) => Reply::Category { category },
-                                Err(e) => Reply::Error {
-                                    message: format!("移动分类失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::MoveCategorySibling { id, direction } => {
-                            match categories.move_sibling(id, direction) {
-                                Ok(category) => Reply::Category { category },
-                                Err(e) => Reply::Error {
-                                    message: format!("调整分类顺序失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::SetTodoCategory { id, category_id } => {
-                            // 挂真实分类前先校验它存在且属于同一 project——
-                            // 防止 GUI 传错 id 把任务挂到别的项目的分类下面。
-                            // `TodoStore` 自己不知道 `CategoryStore` 的存在,
-                            // 这层校验只能在这里(两个 store 的交汇点)做。
-                            let validation = match category_id {
-                                None => Ok(()),
-                                Some(cat_id) => todos.get(id).and_then(|todo| {
-                                    let same_project = categories
-                                        .list(todo.project_id)?
-                                        .iter()
-                                        .any(|c| c.id == cat_id);
-                                    if same_project {
-                                        Ok(())
-                                    } else {
-                                        Err(anyhow::anyhow!(
-                                            "分类 id={cat_id} 不存在或不属于该项目"
-                                        ))
-                                    }
-                                }),
-                            };
-                            match validation.and_then(|()| todos.set_category(id, category_id)) {
-                                Ok(todo) => Reply::Todo { todo },
-                                Err(e) => Reply::Error {
-                                    message: format!("设置任务分类失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::UpdatePreviewContext { project_id, context } => {
-                            preview_contexts.update(project_id, context);
-                            Reply::Ok
-                        }
-                        Request::GetPreviewContext { project_id } => Reply::PreviewContext {
-                            context: preview_contexts.get(project_id),
-                        },
-                        // T13:下行预览命令。入队并等待 app 回传终态;app 不在线或
-                        // 超过超时时间则回 Timeout(不无限挂起)。
                         Request::RunPreviewCommand { command } => {
                             let request_id = command.request_id.clone();
                             match preview_commands.enqueue(command) {
@@ -1078,154 +1149,6 @@ async fn handle_conn(
                                 },
                             }
                         }
-                        Request::TakePendingPreviewCommands { project_id } => {
-                            Reply::PendingPreviewCommands {
-                                commands: preview_commands.take(project_id),
-                            }
-                        }
-                        Request::ReportPreviewCommandOutcome { outcome } => {
-                            preview_commands.report(outcome);
-                            Reply::Ok
-                        }
-                        Request::ListConversations { cwd, agent, limit, offset } => {
-                            match transcripts.list_conversations(&cwd, agent, limit, offset) {
-                                Ok(conversations) => Reply::Conversations { conversations },
-                                Err(e) => Reply::Error { message: format!("列对话失败: {e}") },
-                            }
-                        }
-                        Request::GetConversationTurns { conversation_id, after_turn_index, limit } => {
-                            match transcripts.get_conversation_turns(&conversation_id, after_turn_index, limit) {
-                                Ok(turns) => Reply::ConversationTurns { conversation_id, turns },
-                                Err(e) => Reply::Error { message: format!("查询回合失败: {e}") },
-                            }
-                        }
-                        Request::BackfillProjectTranscripts { cwd } => {
-                            let report = transcripts.backfill_project_report(&cwd);
-                            Reply::BackfillDone {
-                                imported_files: report.imported_files,
-                                failed_total: report.failed_total,
-                                failures: report.failures,
-                            }
-                        }
-                        Request::RemoveProject { id } => match projects.remove(id) {
-                            Ok(()) => Reply::Ok,
-                            Err(e) => Reply::Error { message: format!("删除项目失败: {e}") },
-                        },
-                        Request::DeleteProjectTranscripts { cwd } => {
-                            match transcripts.delete_project_transcripts(&cwd) {
-                                Ok(conversations) => Reply::DeletedTranscripts { conversations },
-                                Err(e) => Reply::Error {
-                                    message: format!("删除 agent 历史失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::ListConversationsWithSummaries {
-                            cwd,
-                            agent,
-                            limit,
-                            offset,
-                        } => {
-                            match transcripts.list_conversations(&cwd, agent, limit, offset) {
-                                Ok(conversations) => {
-                                    let ids: Vec<String> = conversations
-                                        .iter()
-                                        .map(|c| c.conversation_id.clone())
-                                        .collect();
-                                    let task_ids: std::collections::HashMap<String, i64> = projects
-                                        .list()
-                                        .unwrap_or_default()
-                                        .into_iter()
-                                        .filter(|p| p.path == cwd)
-                                        .flat_map(|p| todos.list(p.id).unwrap_or_default())
-                                        .filter_map(|t| {
-                                            t.dispatch_session_id.map(|cid| (cid, t.id))
-                                        })
-                                        .collect();
-                                    let mut summaries = session_summaries
-                                        .get_many(&ids)
-                                        .unwrap_or_default();
-                                    for (cid, result) in summary_jobs.get_results_many(&ids).unwrap_or_default() {
-                                        let old = summaries.get(&cid);
-                                        summaries.insert(cid.clone(), dozer_core::protocol::SessionSummaryPayload {
-                                            session_id: old.map(|s| s.session_id.clone()).unwrap_or_else(|| format!("summary:{}", result.source_job_id)),
-                                            agent_kind: result.provider, conversation_id: Some(cid.clone()),
-                                            title: result.title, summary: result.summary,
-                                            status: dozer_core::protocol::SummaryStatus::AiGenerated,
-                                            created_ts_ms: result.generated_at,
-                                            task_id: old
-                                                .and_then(|s| s.task_id)
-                                                .or_else(|| task_ids.get(&cid).copied()),
-                                        });
-                                    }
-                                    let rows = conversations
-                                        .into_iter()
-                                        .map(|c| {
-                                            let s = summaries
-                                                .get(&c.conversation_id)
-                                                .cloned();
-                                            (c, s)
-                                        })
-                                        .collect();
-                                    Reply::ConversationsWithSummaries { rows }
-                                }
-                                Err(e) => Reply::Error { message: format!("列对话失败: {e}") },
-                            }
-                        }
-                        Request::GetUsageSummary { cwd, since_ts } => {
-                            match transcripts.get_usage_summary(&cwd, since_ts) {
-                                Ok(rows) => Reply::UsageSummary { rows },
-                                Err(e) => Reply::Error { message: format!("查询用量失败: {e}") },
-                            }
-                        }
-                        Request::RecordSessionSummary { session_id, title, summary } => {
-                            match registry.get(&session_id) {
-                                None => Reply::Error { message: format!("会话不存在: {session_id}") },
-                                Some(s) => {
-                                    let payload = dozer_core::protocol::SessionSummaryPayload {
-                                        session_id: session_id.clone(),
-                                        agent_kind: s.info().agent,
-                                        conversation_id: conversation_id_for_session(&s),
-                                        title,
-                                        summary,
-                                        status: dozer_core::protocol::SummaryStatus::AiGenerated,
-                                        created_ts_ms: std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .map(|d| d.as_millis() as u64)
-                                            .unwrap_or(0),
-                                        task_id: None,
-                                    };
-                                    match session_summaries.record(&payload) {
-                                        Ok(()) => Reply::Ok,
-                                        Err(e) => Reply::Error {
-                                            message: format!("会话总结落库失败: {e}"),
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                        Request::GetSessionSummary { session_id } => {
-                            match session_summaries.get(&session_id) {
-                                Ok(summary) => Reply::SessionSummary { summary },
-                                Err(e) => Reply::Error {
-                                    message: format!("查询会话总结失败: {e}"),
-                                },
-                            }
-                        }
-
-                        Request::CloseWithSummary { session_id } => {
-                            match registry.get(&session_id) {
-                                None => Reply::Error { message: format!("会话不存在: {session_id}") },
-                                Some(s) => {
-                                    if let Err(e) = enqueue_session_summary(&s, &summary_service, dozer_core::protocol::SummaryTrigger::Close) {
-                                        dozer_core::log_warn!(LOG, error=%e, %session_id, "提交关闭总结任务失败");
-                                    }
-                                    if let Err(e) = registry.kill(&session_id) {
-                                        dozer_core::log_warn!(LOG, error = %e, %session_id, "关闭会话失败(可能已死亡)");
-                                    }
-                                    Reply::Ok
-                                }
-                            }
-                        }
                         Request::BackfillSessionSummaries { cwd } => {
                             match summary_service.submit_batch(&cwd) {
                                 Err(e) => Reply::Error { message: e.to_string() },
@@ -1246,307 +1169,35 @@ async fn handle_conn(
                                 }
                             }
                         }
-                        Request::GetSessionSummaryBackfillStatus { cwd } => {
-                            let progress = backfill_registry.get(&cwd).unwrap_or_default();
-                            Reply::BackfillStatus {
-                                total: progress.total,
-                                completed: progress.completed,
-                            }
-                        }
-                        Request::SubmitSummaryJob {
-                            conversation_id,
-                            source_session_id,
-                            trigger,
-                            provider,
-                            model,
-                            force,
-                        } => {
-                            match crate::summary_config::resolve_provider(provider, model.clone())
-                            {
-                                crate::summary_config::SummaryProviderResolution::Required => {
-                                    Reply::Error {
-                                        message: "未配置 summary provider(需 summary 配置或 default_agent)".into(),
-                                    }
-                                }
-                                crate::summary_config::SummaryProviderResolution::Configured(
-                                    cfg,
-                                    _,
-                                ) => {
-                                    let spec = crate::summary_service::SubmitSpec {
-                                        conversation_id,
-                                        source_session_id,
-                                        trigger,
-                                        provider: cfg.provider,
-                                        requested_model: cfg.model.or(model),
-                                        force,
-                                    };
-                                    match summary_service.submit_single(&spec) {
-                                        Ok(job_id) => Reply::SummaryJobSubmitted { job_id },
-                                        Err(e) => Reply::Error {
-                                            message: format!("提交总结任务失败: {e}"),
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                        Request::SubmitSummaryBatch { cwd, provider, model } => {
-                            match summary_service.submit_batch_with_provider(&cwd, provider, model) {
-                                Ok((batch_id, total)) => {
-                                    Reply::SummaryBatchSubmitted { batch_id, total }
-                                }
-                                Err(e) => Reply::Error { message: format!("提交批次失败: {e}") },
-                            }
-                        }
-                        Request::GetSummaryJob { job_id } => {
-                            match summary_service.jobs.get_job(job_id) {
-                                Ok(job) => Reply::SummaryJob { job },
-                                Err(e) => Reply::Error { message: format!("查询任务失败: {e}") },
-                            }
-                        }
-                        Request::GetSummaryBatch { batch_id } => {
-                            match summary_service.jobs.get_batch(batch_id) {
-                                Ok(batch) => Reply::SummaryBatch { batch },
-                                Err(e) => Reply::Error { message: format!("查询批次失败: {e}") },
-                            }
-                        }
-                        Request::RetrySummaryJob { job_id } => {
-                            match summary_service.retry_job(job_id) {
-                                Ok(new_id) => Reply::SummaryJobSubmitted { job_id: new_id },
-                                Err(e) => Reply::Error { message: format!("重试失败: {e}") },
-                            }
-                        }
-                        Request::CancelSummaryBatch { batch_id } => {
-                            match summary_service.cancel_batch(batch_id) {
-                                Ok(()) => Reply::Ok,
-                                Err(e) => Reply::Error { message: format!("取消失败: {e}") },
-                            }
-                        }
-                        Request::GetSummaryProvider { ui_choice, ui_model } => {
-                            let info = match crate::summary_config::resolve_provider(
-                                ui_choice, ui_model,
-                            ) {
-                                crate::summary_config::SummaryProviderResolution::Configured(
-                                    cfg,
-                                    src,
-                                ) => dozer_core::protocol::SummaryProviderInfo {
-                                    provider: Some(cfg.provider),
-                                    model: cfg.model,
-                                    source: Some(match src {
-                                        crate::summary_config::SummaryConfigSource::Ui => "ui",
-                                        crate::summary_config::SummaryConfigSource::Summary => {
-                                            "summary"
-                                        }
-                                        crate::summary_config::SummaryConfigSource::BuiltInDefault =>
-                                        {
-                                            "built_in_default"
-                                        }
-                                    }
-                                    .to_string()),
-                                    required: false,
-                                },
-                                crate::summary_config::SummaryProviderResolution::Required => {
-                                    dozer_core::protocol::SummaryProviderInfo {
-                                        provider: None,
-                                        model: None,
-                                        source: None,
-                                        required: true,
-                                    }
-                                }
-                            };
-                            Reply::SummaryProvider { info }
-                        }
-                        Request::GetSummaryResult { conversation_id } => {
-                            match summary_service.jobs.get_result(&conversation_id) {
-                                Ok(result) => Reply::SummaryResult { result },
-                                Err(e) => Reply::Error { message: format!("查询结果失败: {e}") },
-                            }
-                        }
-                        Request::LocateInFile { project_id, path, query } => {
-                            let root = projects
-                                .list()
-                                .ok()
-                                .and_then(|ps| ps.into_iter().find(|p| p.id == project_id))
-                                .map(|p| std::path::PathBuf::from(p.path));
-                            match root {
-                                None => Reply::Error {
-                                    message: "项目不存在".into(),
-                                },
-                                Some(root) => {
-                                    match crate::file_mutation::locate_in_file(&root, &path, &query)
-                                    {
-                                        Ok(matches) => Reply::LocateMatches { matches },
-                                        Err(e) => Reply::LocateMatches {
-                                            matches: locate_error_to_empty_with_log(e, &path),
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                        Request::ApplyPreciseEdit {
-                            project_id,
-                            path,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
-                            expected_text,
-                            new_text,
-                            summary,
-                            actor,
-                            session_id,
-                        } => {
-                            let root = projects
-                                .list()
-                                .ok()
-                                .and_then(|ps| ps.into_iter().find(|p| p.id == project_id))
-                                .map(|p| std::path::PathBuf::from(p.path));
-                            match root {
-                                None => Reply::Error {
-                                    message: "项目不存在".into(),
-                                },
-                                Some(root) => {
-                                    let input = crate::file_mutation::ApplyEditInput {
-                                        start_line,
-                                        start_col,
-                                        end_line,
-                                        end_col,
-                                        expected_text,
-                                        new_text: new_text.clone(),
-                                    };
-                                    let outcome = match crate::file_mutation::apply_precise_edit(
-                                        &root, &path, input,
-                                    ) {
-                                        Ok(Ok(applied)) => {
-                                            let history_id = file_edit_history
-                                                .record(crate::file_edit_history::NewFileEditHistoryEntry {
-                                                    project_id,
-                                                    target_path: path.clone(),
-                                                    actor,
-                                                    session_id,
-                                                    start_line,
-                                                    start_col,
-                                                    end_line,
-                                                    end_col,
-                                                    old_text: applied.old_text,
-                                                    new_text,
-                                                    summary,
-                                                })
-                                                .unwrap_or_else(|e| {
-                                                    dozer_core::log_warn!(LOG,
-                                                        error = %e,
-                                                        path = %path,
-                                                        "file_edit_history 写入失败(文件已改盘,仅历史记录丢失)"
-                                                    );
-                                                    -1
-                                                });
-                                            let outcome =
-                                                dozer_core::protocol::MutationOutcome::Applied {
-                                                    new_start_line: applied.new_start_line,
-                                                    new_start_col: applied.new_start_col,
-                                                    new_end_line: applied.new_end_line,
-                                                    new_end_col: applied.new_end_col,
-                                                    history_id,
-                                                };
-                                            schedule_post_edit_reveal(
-                                                preview_commands.clone(),
-                                                project_id,
-                                                path.clone(),
-                                                applied.new_start_line,
-                                                applied.new_start_col,
-                                                applied.new_end_line,
-                                                applied.new_end_col,
-                                            );
-                                            outcome
-                                        }
-                                        Ok(Err(actual_text)) => {
-                                            dozer_core::protocol::MutationOutcome::Conflict {
-                                                actual_text,
-                                            }
-                                        }
-                                        Err(crate::file_mutation::LocateError::OutOfBounds) => {
-                                            dozer_core::protocol::MutationOutcome::PathOutOfBounds
-                                        }
-                                        Err(crate::file_mutation::LocateError::NotFound) => {
-                                            dozer_core::protocol::MutationOutcome::NotFound
-                                        }
-                                        Err(crate::file_mutation::LocateError::Unwritable(
-                                            reason,
-                                        )) => {
-                                            dozer_core::protocol::MutationOutcome::Unwritable {
-                                                reason,
-                                            }
-                                        }
-                                        Err(crate::file_mutation::LocateError::EmptyQuery) => {
-                                            unreachable!("apply_precise_edit 不会产生 EmptyQuery")
-                                        }
-                                    };
-                                    Reply::MutationResult { outcome }
-                                }
-                            }
-                        }
-                        Request::AddContextItem { project_id, entity_kind, entity_ref } => {
-                            let root = projects
-                                .list()
-                                .ok()
-                                .and_then(|ps| ps.into_iter().find(|p| p.id == project_id))
-                                .map(|p| std::path::PathBuf::from(p.path));
-                            match root {
-                                None => Reply::Error {
-                                    message: "项目不存在".into(),
-                                },
-                                Some(root) => {
-                                    match crate::agent_context::validate_context_ref(
-                                        &root,
-                                        &entity_ref,
-                                    ) {
-                                        Err(message) => Reply::Error { message },
-                                        Ok(()) => match file_edit_history.add_context_item(
-                                            project_id,
-                                            &entity_kind,
-                                            &entity_ref,
-                                        ) {
-                                            Ok(item) => Reply::ContextItem { item },
-                                            Err(e) => Reply::Error {
-                                                message: format!("添加上下文项失败: {e}"),
-                                            },
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                        Request::RemoveContextItem { project_id, id } => {
-                            match file_edit_history.remove_context_item(project_id, id) {
-                                Ok(()) => Reply::Ok,
-                                Err(e) => Reply::Error {
-                                    message: format!("移除上下文项失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::ListContextItems { project_id } => {
-                            match file_edit_history.list_context_items(project_id) {
-                                Ok(items) => Reply::ContextItems { items },
-                                Err(e) => Reply::Error {
-                                    message: format!("列上下文项失败: {e}"),
-                                },
-                            }
-                        }
-                        Request::ListFileEditHistory { project_id, path_filter, limit } => {
-                            match file_edit_history.list_history(
-                                project_id,
-                                path_filter.as_deref(),
-                                limit,
-                            ) {
-                                Ok(entries) => Reply::FileEditHistory { entries },
-                                Err(e) => Reply::Error {
-                                    message: format!("查修改历史失败: {e}"),
-                                },
-                            }
-                        }
-                    },
+                        _ => Reply::Error { message: "unsupported request".into() },
+                        },
+                    }
+                }
+                },
+            };
+                let line = match encode_reply_checked(&reply) {
+                    Ok(line) => line,
+                    Err(error_reply) => encode_line(&error_reply),
                 };
-                w.write_all(encode_line(&reply).as_bytes()).await?;
+                let written = write_frame(&mut w, line.as_bytes()).await;
+                if should_exit_after_reply { shutdown_signal.notify_one(); }
+                written?;
+                if let Some(code) = late_exit.take() {
+                    let event = Reply::Exited {
+                        session_id: sub
+                            .as_ref()
+                            .map(|(id, _)| id.clone())
+                            .unwrap_or_default(),
+                        code,
+                    };
+                    write_frame(&mut w, encode_line(&event).as_bytes()).await?;
+                    sub = None;
+                }
                 if should_exit_after_reply {
                     shutdown_signal.notify_one();
+                    return Ok(());
+                }
+                if close_connection_after_reply {
                     return Ok(());
                 }
             }
@@ -1566,34 +1217,36 @@ async fn handle_conn(
                             // 整个事件已被快照覆盖，跳过
                         } else if offset - data.len() as u64 >= sent_until {
                             // 与已投递区间无重叠，全量转发
-                            let reply =
-                                Reply::Output { session_id: sid, data_b64: B64.encode(&data), offset };
-                            w.write_all(encode_line(&reply).as_bytes()).await?;
+                            let reply = terminal_output(stream_epoch, sid, data, offset);
+                            write_frame(&mut w, encode_line(&reply).as_bytes()).await?;
                             sent_until = offset;
                         } else {
                             // 部分重叠，只发未投递过的尾部
                             let skip = data.len() - (offset - sent_until) as usize;
-                            let reply = Reply::Output {
-                                session_id: sid,
-                                data_b64: B64.encode(&data[skip..]),
-                                offset,
-                            };
-                            w.write_all(encode_line(&reply).as_bytes()).await?;
+                            let reply = terminal_output(stream_epoch, sid, data[skip..].to_vec(), offset);
+                            write_frame(&mut w, encode_line(&reply).as_bytes()).await?;
                             sent_until = offset;
                         }
                     }
                     Ok(SessionEvent::Agent { agent, state, event, ts_ms, transcript_path }) => {
-                        let reply = Reply::AgentEvent { session_id: sid, agent, state, event, ts_ms, transcript_path };
-                        w.write_all(encode_line(&reply).as_bytes()).await?;
+                        let reply = if let Some(epoch) = stream_epoch {
+                            Reply::Terminal {event: dozer_core::protocol::TerminalEvent::State {epoch, state: registry.get(&sid).expect("subscribed session").terminal_state(None)}}
+                        } else { Reply::AgentEvent { session_id: sid, agent, state, event, ts_ms, transcript_path } };
+                        write_frame(&mut w, encode_line(&reply).as_bytes()).await?;
                     }
                     Ok(SessionEvent::Exited { code }) => {
-                        let reply = Reply::Exited { session_id: sid, code };
-                        w.write_all(encode_line(&reply).as_bytes()).await?;
+                        let reply = if let Some(epoch) = stream_epoch {
+                            Reply::Terminal {event: dozer_core::protocol::TerminalEvent::State {epoch, state: registry.get(&sid).expect("subscribed session").terminal_state(Some(code))}}
+                        } else { Reply::Exited { session_id: sid, code } };
+                        write_frame(&mut w, encode_line(&reply).as_bytes()).await?;
                         sub = None;
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
-                        let reply = Reply::Error { message: "lagged; reattach".into() };
-                        w.write_all(encode_line(&reply).as_bytes()).await?;
+                        let reply = match stream_epoch {
+                            Some(epoch) => Reply::Terminal {event: dozer_core::protocol::TerminalEvent::ResyncRequired {epoch}},
+                            None => Reply::Error { message: "lagged; reattach".into() },
+                        };
+                        write_frame(&mut w, encode_line(&reply).as_bytes()).await?;
                         sub = None;
                     }
                     Err(broadcast::error::RecvError::Closed) => { sub = None; }
@@ -1607,7 +1260,7 @@ async fn handle_conn(
             }, if app_sub.is_some() => {
                 match bytehost_apps::service::change_reply(ev) {
                     Some(reply) => {
-                        w.write_all(encode_line(&Reply::App { reply }).as_bytes()).await?;
+                        write_frame(&mut w, encode_line(&Reply::App { reply }).as_bytes()).await?;
                     }
                     None => { app_sub = None; }
                 }
@@ -1622,7 +1275,7 @@ async fn handle_conn(
 /// 的 `locate_in_file` 工具)据此提示"没搜到,检查路径和 query"就够了,不需要
 /// 额外区分"路径越界"和"文件不存在",这两者对 agent 来说都是同一句"重新确认
 /// 一下路径"。
-fn locate_error_to_empty_with_log(
+pub(crate) fn locate_error_to_empty_with_log(
     err: crate::file_mutation::LocateError,
     path: &str,
 ) -> Vec<dozer_core::protocol::LocateMatch> {
@@ -1637,7 +1290,7 @@ fn locate_error_to_empty_with_log(
 /// "Change Feedback"一节)。不等待这两条命令的应答——纯 best-effort,目标
 /// tab 未必存在(文件没被打开过),`PreviewCommandBus` 对找不到 tab 的情况本来
 /// 就有 `NotFound` 语义,这里不关心结果。
-fn schedule_post_edit_reveal(
+pub(crate) fn schedule_post_edit_reveal(
     bus: std::sync::Arc<crate::preview_commands::PreviewCommandBus>,
     project_id: i64,
     path: String,
@@ -1682,6 +1335,59 @@ fn schedule_post_edit_reveal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn read_frame_is_bounded_and_rejects_oversized_input_without_newline() {
+        let bytes = vec![b'x'; 64];
+        let mut reader = FrameReader::new(BufReader::new(&bytes[..]));
+        let err = reader.next_frame(16).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+
+        let bytes = b"{\"ok\":true}\n{\"next\":1}\n";
+        let mut reader = FrameReader::new(BufReader::new(&bytes[..]));
+        assert_eq!(
+            reader.next_frame(1024).await.unwrap().as_deref(),
+            Some("{\"ok\":true}")
+        );
+        assert_eq!(
+            reader.next_frame(1024).await.unwrap().as_deref(),
+            Some("{\"next\":1}")
+        );
+        assert!(reader.next_frame(1024).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn frame_reader_preserves_partial_frame_when_cancelled() {
+        let (mut tx, rx) = tokio::io::duplex(1024);
+        let mut reader = FrameReader::new(BufReader::new(rx));
+        write_frame(&mut tx, b"{\"type\":").await.unwrap();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            reader.next_frame(1024),
+        )
+        .await;
+        write_frame(&mut tx, b"\"list_sessions\"}\n").await.unwrap();
+        let frame = reader.next_frame(1024).await.unwrap().unwrap();
+        assert_eq!(frame, "{\"type\":\"list_sessions\"}");
+    }
+
+    #[tokio::test]
+    async fn control_connection_reserve_survives_normal_connection_exhaustion() {
+        let limiter = RuntimeLimiter {
+            connections: Arc::new(tokio::sync::Semaphore::new(1)),
+            control_connections: Arc::new(tokio::sync::Semaphore::new(1)),
+            work: Arc::new(tokio::sync::Semaphore::new(1)),
+            control: Arc::new(tokio::sync::Semaphore::new(1)),
+            waiting: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let (first, control_first) = limiter.try_connection().unwrap();
+        assert!(!control_first);
+        let (second, control_second) = limiter.try_connection().unwrap();
+        assert!(control_second, "普通连接满后应使用控制预留");
+        assert!(limiter.try_connection().is_none());
+        drop((first, second));
+        assert!(limiter.try_connection().is_some());
+    }
 
     #[tokio::test]
     async fn socket_has_live_listener_false_when_path_missing() {
@@ -1838,6 +1544,12 @@ mod tests {
                         crate::session_summary_backfill::BackfillRegistry::new(),
                     ),
                     todos,
+                    executions: std::sync::Arc::new(
+                        crate::task_execution::TaskExecutionStore::open(
+                            &std::env::temp_dir().join("dozer-test-executions.db"),
+                        )
+                        .unwrap(),
+                    ),
                     categories,
                     memories,
                     file_edit_history,
@@ -2037,6 +1749,12 @@ mod tests {
         }
 
         kill_remaining_live_sessions(&registry);
+        for _ in 0..200 {
+            if !registry.get(&live_id).unwrap().info().alive {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
 
         assert!(
             !registry.get(&live_id).unwrap().info().alive,
@@ -2046,5 +1764,114 @@ mod tests {
             !registry.get(&shortlived_id).unwrap().info().alive,
             "已死会话应该原样容忍,不 panic"
         );
+    }
+    #[test]
+    fn concurrent_close_and_natural_exit_have_one_persistent_summary_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("t.db");
+        let path = dir.path().join("summary-owner.jsonl");
+        std::fs::write(&path,"{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"fixture\"}}\n").unwrap();
+        let session = Arc::new(
+            crate::session::Session::spawn(SessionSpec {
+                name: "summary".into(),
+                command: "/bin/sh".into(),
+                args: vec!["-c".into(), "sleep 30".into()],
+                cwd: "/tmp".into(),
+                cols: 80,
+                rows: 24,
+                project_id: 1,
+            })
+            .unwrap(),
+        );
+        session.set_agent(dozer_core::protocol::AgentKind::Claude);
+        session.set_transcript_path(path.to_str().unwrap());
+        let jobs = Arc::new(crate::summary_jobs::SummaryJobStore::open(&db).unwrap());
+        let service = Arc::new(crate::summary_service::SummaryService {
+            jobs: jobs.clone(),
+            transcripts: Arc::new(crate::transcripts::TranscriptStore::open(&db).unwrap()),
+            session_summaries: Arc::new(
+                crate::session_summary::SessionSummaryStore::open(&db).unwrap(),
+            ),
+            scratch_root: dir.path().join("scratch"),
+        });
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let mut workers = Vec::new();
+        for trigger in [
+            dozer_core::protocol::SummaryTrigger::NaturalExit,
+            dozer_core::protocol::SummaryTrigger::Close,
+        ] {
+            let session = session.clone();
+            let service = service.clone();
+            let barrier = barrier.clone();
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                enqueue_session_summary(&session, &service, trigger)
+            }));
+        }
+        barrier.wait();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        assert_eq!(
+            jobs.list_jobs_by_conversation("summary-owner")
+                .unwrap()
+                .len(),
+            1
+        );
+        session.kill().unwrap();
+    }
+    #[tokio::test]
+    async fn a_peer_that_does_not_read_is_limited_by_the_write_deadline() {
+        let (mut writer, _reader) = tokio::io::duplex(1);
+        writer.write_all(b"x").await.unwrap();
+        let error = write_frame_with_budget(&mut writer, b"reply\n", std::time::Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    }
+    #[tokio::test]
+    async fn cancelled_request_waiter_releases_admission() {
+        let runtime = Arc::new(RuntimeLimiter {
+            connections: Arc::new(tokio::sync::Semaphore::new(0)),
+            control_connections: Arc::new(tokio::sync::Semaphore::new(1)),
+            work: Arc::new(tokio::sync::Semaphore::new(0)),
+            control: Arc::new(tokio::sync::Semaphore::new(1)),
+            waiting: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let copy = runtime.clone();
+        let work = tokio::spawn(async move { copy.acquire_work().await });
+        while runtime.waiting.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        work.abort();
+        let _ = work.await;
+        assert_eq!(runtime.waiting.load(Ordering::SeqCst), 0);
+    }
+}
+
+fn dozer_model_capabilities() -> dozer_core::protocol::RuntimeCapabilities {
+    dozer_core::protocol::RuntimeCapabilities {
+        terminal_stream_v2: true,
+        task_execution_state: true,
+        locate_v2: true,
+        backfill_state: true,
+    }
+}
+fn terminal_output(epoch: Option<u64>, session_id: String, data: Vec<u8>, offset: u64) -> Reply {
+    match epoch {
+        Some(epoch) => Reply::Terminal {
+            event: dozer_core::protocol::TerminalEvent::Output {
+                replay: false,
+                epoch,
+                start_offset: offset - data.len() as u64,
+                end_offset: offset,
+                data,
+            },
+        },
+        None => Reply::Output {
+            session_id,
+            data_b64: B64.encode(data),
+            offset,
+        },
     }
 }

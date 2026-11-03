@@ -1,17 +1,19 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub use dozer_model::{
-    AgentKind, AgentState, BackfillFailure, BackfillReport, BookmarkInfo, BookmarkScope,
-    CategoryInfo, CategoryMoveDirection, CodeHealthReportInfo, ContextItemInfo,
-    ConversationSummary, ConversationSummaryResult, FileEditHistoryInfo, GroupAuthor,
-    GroupCancelScope, GroupInfo, GroupMemberInfo, GroupMessageInfo, GroupMessageStatus, Locale,
-    LocalePreference, LocaleSnapshot, LocaleWriteOutcome, LocateMatch, MemoryDetail,
-    MemoryHistoryEntry, MemoryInfo, MutationOutcome, PREVIEW_COMMAND_TIMEOUT_MS,
-    PREVIEW_SELECTED_TEXT_MAX_CHARS, PreviewCommand, PreviewCommandAction, PreviewCommandOutcome,
-    PreviewCommandTarget, PreviewContext, PreviewTabularContext, ProjectInfo, SessionInfo,
-    SessionSummaryPayload, SummaryBatchInfo, SummaryErrorKind, SummaryJobInfo, SummaryJobStatus,
-    SummaryProviderInfo, SummaryStatus, SummaryTrigger, TodoInfo, TodoStoredStatus, ToolCallInfo,
-    TurnRecord, UsagePayload,
+    AgentKind, AgentState, BackfillFailure, BackfillPhase, BackfillReport, BackfillState,
+    BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection, CodeHealthReportInfo,
+    ContextItemInfo, ConversationSummary, ConversationSummaryResult, FileEditHistoryInfo,
+    GroupAuthor, GroupCancelScope, GroupInfo, GroupMemberInfo, GroupMessageInfo,
+    GroupMessageStatus, Locale, LocalePreference, LocaleSnapshot, LocaleWriteOutcome, LocateMatch,
+    LocateReport, MemoryDetail, MemoryHistoryEntry, MemoryInfo, MutationOutcome,
+    PREVIEW_COMMAND_TIMEOUT_MS, PREVIEW_SELECTED_TEXT_MAX_CHARS, PreviewCommand,
+    PreviewCommandAction, PreviewCommandOutcome, PreviewCommandTarget, PreviewContext,
+    PreviewTabularContext, ProjectInfo, RuntimeCapabilities, SessionInfo, SessionSummaryPayload,
+    StreamMode, SummaryBatchInfo, SummaryErrorKind, SummaryJobInfo, SummaryJobStatus,
+    SummaryProviderInfo, SummaryStatus, SummaryTrigger, TaskExecutionInfo, TaskExecutionStatus,
+    TerminalEvent, TerminalState, TodoInfo, TodoStoredStatus, ToolCallInfo, TurnRecord,
+    UsagePayload,
 };
 
 /// C/S 协议版本。客户端与守护进程用它握手:不一致时给出可读错误而不是
@@ -22,6 +24,13 @@ pub const PROTOCOL_VERSION: u32 = 1;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
+    RuntimeCapabilities,
+    GetBackfillState,
+    AttachV2 {
+        session_id: String,
+        from_offset: u64,
+        epoch: u64,
+    },
     /// 协议版本握手:任何业务请求前,客户端先发它确认双方版本一致。
     /// 旧守护进程不认识这个变体时只会回 `Reply::Error`,客户端据此
     /// 报"版本过旧"而不是反序列化炸裂。hook 的单向上报同样先发 Hello,
@@ -344,6 +353,17 @@ pub enum Request {
         id: i64,
         human_reply: Option<String>,
     },
+    /// 异步启动一次任务执行,立即返回 attempt;执行状态通过 `GetTodoExecution`
+    /// 查询。`idempotency_key` 相同且输入代次相同则返回原 attempt。
+    StartTodoExecution {
+        id: i64,
+        human_reply: Option<String>,
+        idempotency_key: Option<String>,
+    },
+    /// 查询任务最近一次执行 attempt(没有则 `None`)。
+    GetTodoExecution {
+        id: i64,
+    },
     /// 列出某项目全部共享记忆(不含正文,列表用)。按 `updated_ms` 倒序。
     ListMemories {
         project_id: i64,
@@ -371,8 +391,14 @@ pub enum Request {
         path: String,
         query: String,
     },
+    /// LocateV2:允许已知前缀 + `complete/limit_reason/revision`。
+    LocateInFileV2 {
+        project_id: i64,
+        path: String,
+        query: String,
+    },
     /// 精确替换项目内某文本文件的 `[start_line,start_col]`~`[end_line,end_col]`
-    /// 区间(1-based,含端点)。`expected_text` 是调用方认为该区间当前的原样
+    /// 区间(1-based,半开区间 `[start,end)`:end 是最后一个替换字符之后的位置)。`expected_text` 是调用方认为该区间当前的原样
     /// 内容,用于 Conflict Detection。`actor`/`session_id` 供历史记录署名。
     ApplyPreciseEdit {
         project_id: i64,
@@ -540,6 +566,15 @@ fn is_zero_u32(n: &u32) -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Reply {
+    BackfillState {
+        state: BackfillState,
+    },
+    RuntimeCapabilities {
+        capabilities: dozer_model::RuntimeCapabilities,
+    },
+    Terminal {
+        event: dozer_model::TerminalEvent,
+    },
     /// `Request::Hello` 的应答:守护进程的协议版本与产品名。
     Hello {
         protocol: u32,
@@ -706,6 +741,10 @@ pub enum Reply {
     LocateMatches {
         matches: Vec<LocateMatch>,
     },
+    /// `LocateInFileV2` 应答。
+    LocateReport {
+        report: LocateReport,
+    },
     /// `ApplyPreciseEdit` 应答。
     MutationResult {
         outcome: MutationOutcome,
@@ -732,6 +771,10 @@ pub enum Reply {
     TodoDetail {
         info: TodoInfo,
         turns: Vec<TurnRecord>,
+    },
+    /// `StartTodoExecution`/`GetTodoExecution` 应答。
+    TodoExecution {
+        execution: Option<TaskExecutionInfo>,
     },
     /// `CreateGroup`/`ListGroups` 用的单个群(含成员)。
     Group {
@@ -774,6 +817,48 @@ pub fn encode_line<T: Serialize>(value: &T) -> String {
     let mut s = serde_json::to_string(value).expect("protocol types always serialize");
     s.push('\n');
     s
+}
+
+/// Encode with an allocation budget, including the final newline. Oversized
+/// escaped text is rejected while serializing, before building a full JSON String.
+pub fn encode_line_bounded<T: Serialize>(value: &T, max: usize) -> anyhow::Result<String> {
+    struct Buffer {
+        bytes: Vec<u8>,
+        max: usize,
+    }
+    impl std::io::Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let needed = self
+                .bytes
+                .len()
+                .checked_add(bytes.len())
+                .filter(|n| *n <= self.max)
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Limit: encoded frame exceeds byte budget",
+                    )
+                })?;
+            if needed > self.bytes.capacity() {
+                let capacity = needed
+                    .max(self.bytes.capacity().saturating_mul(2))
+                    .min(self.max);
+                self.bytes.reserve_exact(capacity - self.bytes.len());
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut buffer = Buffer {
+        bytes: Vec::new(),
+        max,
+    };
+    serde_json::to_writer(&mut buffer, value)?;
+    std::io::Write::write_all(&mut buffer, b"\n")?;
+    Ok(String::from_utf8(buffer.bytes)?)
 }
 
 pub fn decode_line<T: DeserializeOwned>(line: &str) -> anyhow::Result<T> {
@@ -2524,5 +2609,21 @@ mod tests {
         };
         let back: Request = decode_line(&encode_line(&cancel)).unwrap();
         assert_eq!(back, cancel);
+    }
+}
+
+#[cfg(test)]
+mod bounded_encoding_tests {
+    use super::*;
+    #[test]
+    fn bounded_encoding_keeps_golden_bytes_and_counts_escaping() {
+        let request = Request::Write {
+            session_id: "s".into(),
+            data_b64: "abc".into(),
+        };
+        let line = encode_line(&request);
+        assert_eq!(encode_line_bounded(&request, line.len()).unwrap(), line);
+        assert!(encode_line_bounded(&request, line.len() - 1).is_err());
+        assert!(encode_line_bounded(&"\0".repeat(1024), 1024).is_err());
     }
 }

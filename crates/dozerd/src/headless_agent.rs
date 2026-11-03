@@ -3,6 +3,7 @@
 //! 的 JSON 做输出协议——四家 CLI 的私有结构化输出格式互不相同,统一约定
 //! "模型最终文本里必须包含这一段"比对齐四种进程输出协议更简单。
 
+use crate::process_runner::{ExecutionFailure, ExecutionSpec};
 use dozer_core::protocol::{AgentKind, TurnRecord};
 use serde::Deserialize;
 use std::path::Path;
@@ -51,6 +52,10 @@ pub enum HeadlessError {
     Spawn(String),
     /// 超过 `HEADLESS_TIMEOUT` 仍未退出。
     Timeout,
+    /// 子进程非零退出。
+    NonzeroExit(i32),
+    /// 执行器分类错误(输出超限、队列满、清理失败等)。
+    Execution(String),
     /// stdout 里找不到完整的一对分隔符。
     NoMarkers,
     /// 分隔符之间的内容不是合法 JSON,或缺 `title`/`summary` 字段。
@@ -199,18 +204,16 @@ pub(crate) async fn resolve_binary_path(bin: &str) -> Option<String> {
     }
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-    let output = tokio::process::Command::new(&shell)
-        .arg("-ilc")
-        // `command -v` may resolve a user alias to the bare alias name. Ask
-        // zsh/bash for the executable-only result as well, then select an
-        // absolute path from the combined output below.
-        .arg(format!(
-            "command -v -- {bin}; whence -p -- {bin} 2>/dev/null; type -P -- {bin} 2>/dev/null"
-        ))
-        .output()
-        .await
-        .ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut command = tokio::process::Command::new(&shell);
+    command.arg("-ilc").arg(format!(
+        "command -v -- {bin}; whence -p -- {bin} 2>/dev/null; type -P -- {bin} 2>/dev/null"
+    ));
+    let output = crate::process_runner::run(
+        ExecutionSpec::new(command, Duration::from_secs(3)).limits(8192, 8192),
+    )
+    .await
+    .ok()?;
+    let stdout = output.stdout.text;
     // `command -v` 在交互式 zsh 下对别名/内置命令(如用户把 `ls` alias 成
     // `eza`)会打印别名定义或裸命令名而不是文件路径——只信一段以 `/`
     // 开头、看起来真是绝对路径的输出,否则当作没解析出来,回退到裸命令名
@@ -470,37 +473,23 @@ fn build_task_command(
 /// 是为了这一段能用真实存在的 `sh`/不存在的二进制名做确定性单测,不需要
 /// 装 claude/codebuddy/opencode/v8agent 才能测超时/spawn 失败这些分支。
 async fn run_and_extract(
-    mut cmd: tokio::process::Command,
+    cmd: tokio::process::Command,
     stdin_bytes: Option<Vec<u8>>,
     timeout: Duration,
     clean: bool,
 ) -> Result<(String, String), HeadlessError> {
-    use std::process::Stdio;
-    cmd.stdin(if stdin_bytes.is_some() {
-        Stdio::piped()
-    } else {
-        Stdio::null()
-    });
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::null());
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| HeadlessError::Spawn(e.to_string()))?;
-    if let Some(bytes) = stdin_bytes {
-        use tokio::io::AsyncWriteExt;
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(&bytes).await;
-        }
-    }
-    let output = tokio::time::timeout(timeout, child.wait_with_output())
+    let outcome = crate::process_runner::run(ExecutionSpec::new(cmd, timeout).stdin(stdin_bytes))
         .await
-        .map_err(|_| HeadlessError::Timeout)?
-        .map_err(|e| HeadlessError::Spawn(e.to_string()))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
+        .map_err(map_execution_failure)?;
+    if !outcome.status.success() {
+        return Err(HeadlessError::NonzeroExit(
+            outcome.status.code().unwrap_or(-1),
+        ));
+    }
     let stdout = if clean {
-        clean_aider_stdout(&stdout)
+        clean_aider_stdout(&outcome.stdout.text)
     } else {
-        stdout.into_owned()
+        outcome.stdout.text
     };
     extract_summary(&stdout)
 }
@@ -535,12 +524,17 @@ pub async fn summarize_headless(
     agent: AgentKind,
     turns: &[TurnRecord],
 ) -> Result<(String, String), HeadlessError> {
+    let deadline = std::time::Instant::now() + HEADLESS_TIMEOUT;
     let Some(bare) = bare_program_name(agent) else {
         return Err(HeadlessError::Unsupported);
     };
-    let program = resolve_binary_path(bare)
-        .await
-        .unwrap_or_else(|| bare.to_string());
+    let program = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(deadline),
+        resolve_binary_path(bare),
+    )
+    .await
+    .map_err(|_| HeadlessError::Timeout)?
+    .unwrap_or_else(|| bare.to_string());
     let turns_text = build_transcript_text(turns);
     let Some((cmd, stdin_bytes)) = build_command(agent, &program, &turns_text) else {
         return Err(HeadlessError::Unsupported);
@@ -548,7 +542,7 @@ pub async fn summarize_headless(
     run_and_extract(
         cmd,
         stdin_bytes,
-        HEADLESS_TIMEOUT,
+        deadline.saturating_duration_since(std::time::Instant::now()),
         agent == AgentKind::Aider,
     )
     .await
@@ -557,33 +551,31 @@ pub async fn summarize_headless(
 /// 与 `run_and_extract` 并列,但不做分隔符提取——原样返回完整 stdout(容
 /// 忍非 UTF-8 字节用 `from_utf8_lossy`,这次输出是任意自由文本,不是受控
 /// 的 JSON 载荷)。
+#[cfg(test)]
 async fn run_task_and_capture(
-    mut cmd: tokio::process::Command,
+    cmd: tokio::process::Command,
     stdin_bytes: Option<Vec<u8>>,
     timeout: Duration,
 ) -> Result<String, HeadlessError> {
-    use std::process::Stdio;
-    cmd.stdin(if stdin_bytes.is_some() {
-        Stdio::piped()
-    } else {
-        Stdio::null()
-    });
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::null());
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| HeadlessError::Spawn(e.to_string()))?;
-    if let Some(bytes) = stdin_bytes {
-        use tokio::io::AsyncWriteExt;
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(&bytes).await;
-        }
-    }
-    let output = tokio::time::timeout(timeout, child.wait_with_output())
+    let outcome = crate::process_runner::run(ExecutionSpec::new(cmd, timeout).stdin(stdin_bytes))
         .await
-        .map_err(|_| HeadlessError::Timeout)?
-        .map_err(|e| HeadlessError::Spawn(e.to_string()))?;
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        .map_err(map_execution_failure)?;
+    if !outcome.status.success() {
+        return Err(HeadlessError::NonzeroExit(
+            outcome.status.code().unwrap_or(-1),
+        ));
+    }
+    Ok(outcome.stdout.text)
+}
+
+fn map_execution_failure(failure: ExecutionFailure) -> HeadlessError {
+    match failure {
+        ExecutionFailure::Spawn(reason) => HeadlessError::Spawn(reason),
+        ExecutionFailure::Timeout
+        | ExecutionFailure::Cancelled
+        | ExecutionFailure::CleanupFailed(_) => HeadlessError::Timeout,
+        other => HeadlessError::Execution(other.to_string()),
+    }
 }
 
 /// 任务处理变体的对外唯一入口:喂入任务文本 + 已有往来记录 + 本次人类指示,
@@ -598,19 +590,58 @@ pub async fn process_task_headless(
     prior_turns_text: &str,
     human_instruction: &str,
 ) -> Result<String, HeadlessError> {
+    process_task_headless_cancellable(
+        agent,
+        project_dir,
+        session_id,
+        task_text,
+        prior_turns_text,
+        human_instruction,
+        None,
+    )
+    .await
+}
+pub async fn process_task_headless_cancellable(
+    agent: AgentKind,
+    project_dir: &Path,
+    session_id: &str,
+    task_text: &str,
+    prior_turns_text: &str,
+    human_instruction: &str,
+    cancel: Option<tokio::sync::watch::Receiver<bool>>,
+) -> Result<String, HeadlessError> {
+    let deadline = std::time::Instant::now() + TASK_PROCESS_TIMEOUT;
     let Some(bare) = bare_program_name(agent) else {
         return Err(HeadlessError::Unsupported);
     };
-    let program = resolve_binary_path(bare)
-        .await
-        .unwrap_or_else(|| bare.to_string());
+    let program = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(deadline),
+        resolve_binary_path(bare),
+    )
+    .await
+    .map_err(|_| HeadlessError::Timeout)?
+    .unwrap_or_else(|| bare.to_string());
     let prompt = task_instruction_text(task_text, prior_turns_text, human_instruction);
     let Some((cmd, stdin_bytes)) =
         build_task_command(agent, &program, project_dir, session_id, &prompt)
     else {
         return Err(HeadlessError::Unsupported);
     };
-    run_task_and_capture(cmd, stdin_bytes, TASK_PROCESS_TIMEOUT).await
+    let mut spec = ExecutionSpec::new(
+        cmd,
+        deadline.saturating_duration_since(std::time::Instant::now()),
+    )
+    .stdin(stdin_bytes);
+    spec.cancel = cancel;
+    let outcome = crate::process_runner::run(spec)
+        .await
+        .map_err(map_execution_failure)?;
+    if !outcome.status.success() {
+        return Err(HeadlessError::NonzeroExit(
+            outcome.status.code().unwrap_or(-1),
+        ));
+    }
+    Ok(outcome.stdout.text)
 }
 
 #[cfg(test)]

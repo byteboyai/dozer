@@ -1119,7 +1119,7 @@ fn editor_save_requested_emits_save_file_and_save_finished_clears_dirty() {
         Message::SaveFinished {
             tab_id: id,
             revision: generation,
-            result: Ok(()),
+            result: Ok(crate::SaveOutcome::Committed),
         },
         &c,
     );
@@ -1130,6 +1130,33 @@ fn editor_save_requested_emits_save_file_and_save_finished_clears_dirty() {
         e,
         Effect::ClearRecoverySnapshot { path, .. } if *path == rs
     )));
+}
+
+#[test]
+fn save_finished_durability_unknown_marks_saved_with_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = file(dir.path(), "a.rs", "fn main() {}\n");
+    let caps = PreviewCapabilities::all();
+    let c = ctx(&caps, None);
+    let mut st = PreviewPanelState::default();
+    let (id, generation) = open_markdown(&mut st, &c, &rs);
+    let _ = update(
+        &mut st,
+        Message::SaveFinished {
+            tab_id: id,
+            revision: generation,
+            result: Ok(crate::SaveOutcome::CommittedDurabilityUnknown(
+                "fsync failed".into(),
+            )),
+        },
+        &c,
+    );
+    let tab = st.pane.tabs().iter().find(|t| t.id == id).unwrap();
+    assert!(!tab.dirty, "内容已提交,应清脏标");
+    assert!(
+        tab.web_error.is_some(),
+        "持久性未确认必须给用户提示,不能静默当普通成功"
+    );
 }
 
 #[test]
@@ -1182,7 +1209,7 @@ fn save_finished_then_close_reports_the_real_index_and_resets_tab_first() {
         Message::SaveFinished {
             tab_id: id,
             revision: generation,
-            result: Ok(()),
+            result: Ok(crate::SaveOutcome::Committed),
         },
         &c,
     );
@@ -1237,7 +1264,7 @@ fn save_finished_with_a_stale_revision_keeps_the_tab_dirty() {
         Message::SaveFinished {
             tab_id: id,
             revision: generation,
-            result: Ok(()),
+            result: Ok(crate::SaveOutcome::Committed),
         },
         &c,
     );
@@ -1250,7 +1277,7 @@ fn save_finished_with_a_stale_revision_keeps_the_tab_dirty() {
         Message::SaveFinished {
             tab_id: id,
             revision: generation + 1,
-            result: Ok(()),
+            result: Ok(crate::SaveOutcome::Committed),
         },
         &c,
     );
@@ -1292,7 +1319,7 @@ fn stale_save_receipt_keeps_the_recovery_snapshot() {
         Message::SaveFinished {
             tab_id: id,
             revision: generation,
-            result: Ok(()),
+            result: Ok(crate::SaveOutcome::Committed),
         },
         &c,
     );
@@ -1314,7 +1341,7 @@ fn stale_save_receipt_keeps_the_recovery_snapshot() {
         Message::SaveFinished {
             tab_id: id,
             revision: generation + 1,
-            result: Ok(()),
+            result: Ok(crate::SaveOutcome::Committed),
         },
         &c,
     );
@@ -1403,7 +1430,7 @@ fn stale_save_receipt_does_not_close_a_tab_with_newer_edits() {
         Message::SaveFinished {
             tab_id: id,
             revision: generation,
-            result: Ok(()),
+            result: Ok(crate::SaveOutcome::Committed),
         },
         &c,
     );
@@ -1426,7 +1453,7 @@ fn stale_save_receipt_does_not_close_a_tab_with_newer_edits() {
         Message::SaveFinished {
             tab_id: id,
             revision: generation + 1,
-            result: Ok(()),
+            result: Ok(crate::SaveOutcome::Committed),
         },
         &c,
     );

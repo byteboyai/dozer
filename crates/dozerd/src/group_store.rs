@@ -458,7 +458,9 @@ impl GroupStore {
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params![group_id, after_rev, limit as i64], row_to_message)?;
-        let messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        let messages = dozer_services::query_budget::collect(rows, |row: &GroupMessageInfo| {
+            row.text.len() + row.mentions.len() * std::mem::size_of::<i64>()
+        })?;
         let latest = messages.iter().map(|m| m.rev).max().unwrap_or(after_rev);
         Ok((messages, latest))
     }
@@ -487,7 +489,10 @@ impl GroupStore {
             params![group_id, before_seq, HISTORY_FETCH_LIMIT],
             row_to_message,
         )?;
-        let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut messages =
+            dozer_services::query_budget::collect(rows, |row: &GroupMessageInfo| {
+                row.text.len() + row.mentions.len() * std::mem::size_of::<i64>()
+            })?;
         messages.reverse();
         let omitted = (total as usize).saturating_sub(messages.len());
         Ok((messages, omitted))

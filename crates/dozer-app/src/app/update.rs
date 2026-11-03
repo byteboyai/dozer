@@ -649,10 +649,46 @@ impl App {
                     }
                 });
             }
-            Message::TodoDetailLoaded(idx, turns) => {
-                self.with_focused_project(move |ws, _io| {
-                    if ws.todo.detail_open_idx() == Some(idx) {
+            Message::TodoDetailLoaded(project_id, id, nonce, turns) => {
+                self.with_project(project_id, move |ws, _io| {
+                    if ws.todo.detail_nonce == nonce
+                        && ws
+                            .todo
+                            .detail_open_idx()
+                            .and_then(|idx| ws.todo.items().get(idx))
+                            .is_some_and(|t| t.id == id)
+                    {
                         ws.todo.replace_detail_turns(turns);
+                    }
+                });
+            }
+            Message::TodoExecutionLoaded(project_id, id, nonce, result) => {
+                self.with_project(project_id, move |ws, _io| {
+                    if ws.todo.detail_nonce != nonce
+                        || !ws
+                            .todo
+                            .detail_open_idx()
+                            .and_then(|idx| ws.todo.items().get(idx))
+                            .is_some_and(|t| t.id == id)
+                    {
+                        return;
+                    }
+                    match result {
+                        Ok(info) => {
+                            ws.todo.detail_processing = info.as_ref().is_some_and(|i| {
+                                matches!(
+                                    i.status,
+                                    dozer_model::TaskExecutionStatus::Running
+                                        | dozer_model::TaskExecutionStatus::Queued
+                                )
+                            });
+                            ws.todo.detail_execution = info;
+                            ws.todo.detail_execution_error = None;
+                        }
+                        Err(error) => {
+                            ws.todo.detail_processing = false;
+                            ws.todo.detail_execution_error = Some(error);
+                        }
                     }
                 });
             }
@@ -2545,7 +2581,7 @@ impl App {
             let ids: Vec<String> = restore
                 .sessions
                 .iter()
-                .map(|session| session.info.id.clone())
+                .map(|(info, _)| info.id.clone())
                 .collect();
             let task = self.handle.spawn(async move {
                 for sid in ids {
@@ -3214,97 +3250,6 @@ impl App {
                 request,
                 Box::new(todo::Message::Mutated(res)),
             )));
-        });
-    }
-
-    /// 打开任务详情弹窗:先本地记下 `idx`(弹窗定位/后续"处理"要用),再
-    /// 异步拉 `GetTodoDetail`。RPC 结果经专门的 `Message::TodoDetailLoaded`
-    /// 落地——`todo::Message::Mutated` 那条通用刷新链路只刷 `items`/
-    /// `categories`,不携带回合数据,不能复用。
-    pub(crate) fn todo_detail_open(&mut self, idx: usize) {
-        let Some(id) = self
-            .active_workspace()
-            .and_then(|ws| ws.todo.items().get(idx))
-            .map(|item| item.id)
-        else {
-            return;
-        };
-        self.with_focused_project(|ws, _io| {
-            ws.todo.open_detail(idx, Vec::new());
-        });
-        let handle = self.handle.clone();
-        let client = self.client.clone();
-        let proxy = self.proxy.clone();
-        handle.spawn(async move {
-            match client.get_todo_detail(id).await {
-                Ok((_, turns)) => {
-                    let _ = proxy.send_event(Message::TodoDetailLoaded(idx, turns));
-                }
-                Err(e) => {
-                    // 详情弹窗已经打开(空回合),读取失败时用户只会看到一片空白。
-                    let _ = proxy.send_event(Message::Toast(toast::Message::Push {
-                        scope: todo::LOG,
-                        level: toast::Level::Error,
-                        text: dozer_model::LocalizedText::keyed(
-                            crate::i18n::HOST_OWNER,
-                            "toast.todo_detail_load_failed",
-                            "Could not load task details: {error}",
-                        )
-                        .with_arg("error", e.to_string()),
-                        key: None,
-                    }));
-                }
-            }
-        });
-    }
-
-    /// 详情弹窗"处理"按钮:乐观插入已经在 `todo::update`(`DetailReplySubmit`
-    /// 分支)做过,这里只管发 `ProcessTodoNow` RPC 并在结果回来后用服务端
-    /// 权威回合列表刷新。耗时可能到 10 分钟,走 `handle.spawn` 不阻塞 UI。
-    pub(crate) fn todo_detail_process(&mut self) {
-        let Some((idx, id, reply_text)) = self.active_workspace().and_then(|ws| {
-            let idx = ws.todo.detail_open_idx()?;
-            let id = ws.todo.items().get(idx)?.id;
-            Some((idx, id, ws.todo.last_reply_text()))
-        }) else {
-            return;
-        };
-        let handle = self.handle.clone();
-        let client = self.client.clone();
-        let proxy = self.proxy.clone();
-        handle.spawn(async move {
-            // 失败此前被 `let _ =` 吞掉,随后照常刷新详情,用户看到的是"点了什么都没发生"。
-            let processed = client.process_todo_now(id, reply_text.as_deref()).await;
-            let failed = processed.is_err();
-            if let Some(msg) = toast::failure_message(
-                todo::LOG,
-                "todo.process_failed",
-                "Failed to process task: {e}",
-                &processed,
-            ) {
-                let _ = proxy.send_event(Message::Toast(msg));
-            }
-            // 无论处理成败都用服务端权威回合列表刷新;刷新本身也失败时,只有在"处理成功"的
-            // 情况下才再提示——处理已经失败时不在其上再叠一条(daemon 不通时两个请求会一起失败)。
-            match client.get_todo_detail(id).await {
-                Ok((_, turns)) => {
-                    let _ = proxy.send_event(Message::TodoDetailLoaded(idx, turns));
-                }
-                Err(e) if !failed => {
-                    let _ = proxy.send_event(Message::Toast(toast::Message::Push {
-                        scope: todo::LOG,
-                        level: toast::Level::Error,
-                        text: dozer_model::LocalizedText::keyed(
-                            crate::i18n::HOST_OWNER,
-                            "toast.todo_detail_refresh_failed",
-                            "Could not refresh task details: {error}",
-                        )
-                        .with_arg("error", e.to_string()),
-                        key: None,
-                    }));
-                }
-                Err(_) => {}
-            }
         });
     }
 

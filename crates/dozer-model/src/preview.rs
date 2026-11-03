@@ -203,6 +203,19 @@ pub struct LocateMatch {
     pub context: String,
 }
 
+/// LocateV2 结果:除了匹配列表,还显式声明是否完整、截断原因与文件 revision。
+/// 旧的 `LocateInFile` 保持“完整列表或错误”的语义;V2 允许返回已知前缀但
+/// 必须 `complete=false`,不能伪装成全部命中。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LocateReport {
+    pub matches: Vec<LocateMatch>,
+    pub complete: bool,
+    /// `matches` / `response` / `context` 等允许列表原因。
+    pub limit_reason: Option<String>,
+    /// 读取时的文件 revision(元数据混合值),供调用方判断后续是否变化。
+    pub revision: Option<u64>,
+}
+
 /// `ApplyPreciseEdit` 的结果。`Applied` 里的 `new_*` 坐标是替换后
 /// `new_text` 对应的新区间(供自动定位/高亮使用),`history_id` 是这次修改
 /// 写入 `file_edit_history` 表的行 id。

@@ -106,6 +106,13 @@ pub struct Flash {
 /// 的清除)。
 pub const ADD_SELECT_HIGHLIGHT: std::time::Duration = std::time::Duration::from_secs(2);
 
+pub struct DetailWatch(tokio::task::AbortHandle);
+impl Drop for DetailWatch {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Todo 面板挂在每个 `Workspace` 上的状态。
 #[derive(Default)]
 pub struct WorkspaceState {
@@ -161,6 +168,10 @@ pub struct WorkspaceState {
     /// "处理"按钮是否正在等待 `ProcessTodoNow` RPC 返回——耗时可能到 10
     /// 分钟,期间按钮显示 loading 态、禁用重复提交。
     pub detail_processing: bool,
+    pub detail_nonce: u64,
+    pub detail_watch: Option<DetailWatch>,
+    pub detail_execution: Option<dozer_model::TaskExecutionInfo>,
+    pub detail_execution_error: Option<String>,
     /// "清空列表"确认弹窗是否展开。点 footbar「清空列表」按钮先弹这个
     /// 确认框(危险操作,不可撤销),取消/遮罩收起,确认才真正触发
     /// `Message::ClearListConfirm`。
@@ -443,13 +454,25 @@ impl WorkspaceState {
     }
 
     /// `App::todo_detail_open` 拉到 `GetTodoDetail` 应答后写回本地状态。
+    pub fn set_detail_watch(&mut self, watch: tokio::task::AbortHandle) {
+        self.detail_watch = Some(DetailWatch(watch));
+    }
     pub fn open_detail(&mut self, idx: usize, turns: Vec<dozer_model::TurnRecord>) {
+        self.detail_watch = None;
+        self.detail_nonce = self.detail_nonce.wrapping_add(1);
+        self.detail_execution = None;
+        self.detail_execution_error = None;
+        self.detail_processing = false;
         self.detail_open = Some(idx);
         self.detail_turns = turns;
         self.detail_reply_draft.clear();
     }
 
     pub fn close_detail(&mut self) {
+        self.detail_watch = None;
+        self.detail_nonce = self.detail_nonce.wrapping_add(1);
+        self.detail_execution = None;
+        self.detail_execution_error = None;
         self.detail_open = None;
         self.detail_turns.clear();
         self.detail_reply_draft.clear();

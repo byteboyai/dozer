@@ -6,6 +6,7 @@ use std::{
 };
 #[derive(Default)]
 pub struct WorkspaceState {
+    pub backfill: Option<dozer_model::BackfillState>,
     /// Current detail; the snapshot is published only for accepted current-source results.
     pub review: Option<ReviewView>,
     /// Workspace-wide wrapping watermark, independent of the selected source.

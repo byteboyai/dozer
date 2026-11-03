@@ -37,7 +37,7 @@ struct CurrentTurn {
 }
 
 struct Worker {
-    tx: mpsc::UnboundedSender<()>,
+    tx: mpsc::Sender<()>,
     current: Arc<Mutex<Option<CurrentTurn>>>,
 }
 
@@ -46,6 +46,7 @@ pub struct GroupService {
     runner: Arc<dyn GroupAgentRunner>,
     project_dir: ProjectDirFn,
     workers: Mutex<HashMap<i64, Worker>>,
+    stopping: Mutex<bool>,
 }
 
 impl GroupService {
@@ -59,6 +60,7 @@ impl GroupService {
             runner,
             project_dir,
             workers: Mutex::new(HashMap::new()),
+            stopping: Mutex::new(false),
         })
     }
 
@@ -102,7 +104,25 @@ impl GroupService {
         }
     }
 
+    pub fn shutdown(&self) {
+        *self.stopping.lock().expect("group admission") = true;
+        let ids: Vec<_> = self
+            .workers
+            .lock()
+            .expect("workers lock")
+            .keys()
+            .copied()
+            .collect();
+        for id in ids {
+            self.cancel(id, GroupCancelScope::Round);
+        }
+        self.workers.lock().expect("workers lock").clear();
+    }
     pub fn post(self: &Arc<Self>, group_id: i64, text: &str) -> Result<PostOutcome> {
+        let stopping = self.stopping.lock().expect("group admission");
+        if *stopping {
+            bail!("Unavailable: group runtime draining");
+        }
         let trimmed = text.trim();
         if trimmed.is_empty() {
             bail!("消息不能为空");
@@ -146,6 +166,10 @@ impl GroupService {
     }
 
     pub fn retry(self: &Arc<Self>, message_id: i64) -> Result<GroupMessageInfo> {
+        let stopping = self.stopping.lock().expect("group admission");
+        if *stopping {
+            bail!("Unavailable: group runtime draining");
+        }
         let msg = self.store.requeue(message_id)?;
         self.wake_worker(msg.group_id);
         Ok(msg)
@@ -162,7 +186,7 @@ impl GroupService {
     fn wake_worker(self: &Arc<Self>, group_id: i64) {
         let mut workers = self.workers.lock().expect("workers lock");
         let worker = workers.entry(group_id).or_insert_with(|| {
-            let (tx, mut rx) = mpsc::unbounded_channel::<()>();
+            let (tx, mut rx) = mpsc::channel::<()>(1);
             let current: Arc<Mutex<Option<CurrentTurn>>> = Arc::new(Mutex::new(None));
             let svc = Arc::clone(self);
             let cur = Arc::clone(&current);
@@ -185,7 +209,7 @@ impl GroupService {
             });
             Worker { tx, current }
         });
-        let _ = worker.tx.send(());
+        let _ = worker.tx.try_send(());
     }
 
     /// 跑一位。取消通道在 `try_start` **之前**登记进 `current`,这样库里一旦是

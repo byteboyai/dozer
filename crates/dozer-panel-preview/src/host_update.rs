@@ -67,7 +67,7 @@ pub fn save_finished(
     ctx: &UpdateCtx<'_>,
     tab_id: usize,
     revision: u64,
-    result: Result<(), String>,
+    result: Result<crate::SaveOutcome, String>,
     fx: &mut Vec<Effect>,
 ) {
     // `None` = 这次回执不能当作"已落盘":写盘期间又有编辑(`revision` 落后于
@@ -80,13 +80,21 @@ pub fn save_finished(
             return;
         };
         match result {
-            Ok(()) => {
+            Ok(outcome) => {
                 // 写盘期间若又有编辑(`revision` 已前进),这次旧写盘不能清脏,
                 // 也**不能**清恢复快照——那会让崩溃丢掉这段时间的编辑(N2)。
                 if revision >= tab.web_revision {
                     tab.dirty = false;
                     tab.recovery_written = false;
                     tab.conflict_baseline = None;
+                    if let crate::SaveOutcome::CommittedDurabilityUnknown(warning) = outcome {
+                        tab.web_error = Some(localized(
+                            "text_save.durability_unknown",
+                            "Saved, but durability is unconfirmed: {message}",
+                            ctx.locale,
+                            &[("message", &warning)],
+                        ));
+                    }
                     if let TabKind::File(path) = &tab.kind {
                         saved_path = Some(path.clone());
                     }
@@ -422,6 +430,7 @@ fn editor_event(
                                 tab_id: tab.id,
                                 path: path.clone(),
                                 text: save_text,
+                                project_root: ctx.project_root.map(|root| root.to_path_buf()),
                                 revision: save_revision,
                             });
                         } else if save_revision > tab.web_revision {

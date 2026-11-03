@@ -166,7 +166,7 @@ pub(crate) fn preview_context_from_editor_state(
 /// 最近项目列表打包成 [`ProjectRestore`]。整段只碰 `Client`,不碰任何 GUI
 /// 类型,所以可以在 tokio 线程池上跑(`App::ensure_loaded` 正是这么用的)。
 pub(crate) async fn fetch_project_restore(client: &Client, project: ProjectInfo) -> ProjectRestore {
-    let sessions = dozer_panel_agent::restore::fetch_restored(client, project.id).await;
+    let sessions = dozer_panel_agent::restore::fetch_connections(client, project.id).await;
     // 最近项目列表（git 分支/脏在窗口起来后异步补）。"当前项目"不再
     // 向 daemon 打听——daemon 侧的"活跃项目"概念已随 P2a Task 1-3 删除
     // （多项目并行下没有唯一活跃项目），改由调用方(`App`)指定。

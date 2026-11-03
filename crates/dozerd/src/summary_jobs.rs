@@ -12,7 +12,7 @@ use dozer_core::protocol::{
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Weak};
 
 // ---- enum <-> str 转换 ----
 
@@ -128,11 +128,80 @@ pub fn select_legacy_result(
     Some(payloads.into_iter().next().expect("已非空"))
 }
 
+#[derive(Debug, Clone)]
+pub struct SessionFinalization {
+    pub session_id: String,
+    pub conversation_id: String,
+    pub agent: AgentKind,
+    pub transcript_path: String,
+    pub trigger: SummaryTrigger,
+}
+
 pub struct SummaryJobStore {
     conn: Mutex<Connection>,
+    stopping: tokio::sync::watch::Sender<bool>,
+    finalization_locks: Mutex<HashMap<String, Weak<Mutex<()>>>>,
 }
 
 impl SummaryJobStore {
+    pub(crate) fn finalization_gate(&self, id: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.finalization_locks.lock().expect("finalization gates");
+        locks.retain(|_, gate| gate.strong_count() > 0);
+        if let Some(gate) = locks.get(id).and_then(Weak::upgrade) {
+            gate
+        } else {
+            let gate = Arc::new(Mutex::new(()));
+            locks.insert(id.into(), Arc::downgrade(&gate));
+            gate
+        }
+    }
+    pub fn pending_finalization_count(&self) -> Result<u64> {
+        Ok(self.conn.lock().expect("db lock").query_row(
+            "SELECT COUNT(*) FROM session_finalizations WHERE job_id IS NULL",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+    pub fn record_finalization(&self, spec: &SessionFinalization) -> Result<()> {
+        self.conn.lock().expect("db lock").execute("INSERT OR IGNORE INTO session_finalizations(session_id,conversation_id,agent,transcript_path,trigger,created_ms) VALUES(?1,?2,?3,?4,?5,?6)",rusqlite::params![spec.session_id,spec.conversation_id,agent_to_str(spec.agent),spec.transcript_path,trigger_to_str(spec.trigger),now_ms()])?;
+        Ok(())
+    }
+    pub fn defer_finalization(&self, session_id: &str) -> Result<()> {
+        self.conn.lock().expect("db lock").execute(
+            "UPDATE session_finalizations SET retry_after_ms=?2 WHERE session_id=?1",
+            rusqlite::params![session_id, now_ms() + 30_000],
+        )?;
+        Ok(())
+    }
+    pub fn complete_finalization(&self, session_id: &str, job_id: i64) -> Result<()> {
+        self.conn.lock().expect("db lock").execute(
+            "UPDATE session_finalizations SET job_id=?2 WHERE session_id=?1",
+            rusqlite::params![session_id, job_id],
+        )?;
+        Ok(())
+    }
+    pub fn pending_finalizations_after(&self, after: &str) -> Result<Vec<SessionFinalization>> {
+        let conn = self.conn.lock().expect("db lock");
+        let mut query=conn.prepare("SELECT session_id,conversation_id,agent,transcript_path,trigger FROM session_finalizations WHERE job_id IS NULL AND session_id>?1 AND retry_after_ms<=?2 ORDER BY session_id LIMIT 64")?;
+        Ok(query
+            .query_map(rusqlite::params![after, now_ms()], |r| {
+                Ok(SessionFinalization {
+                    session_id: r.get(0)?,
+                    conversation_id: r.get(1)?,
+                    agent: agent_from_str(&r.get::<_, String>(2)?),
+                    transcript_path: r.get(3)?,
+                    trigger: trigger_from_str(&r.get::<_, String>(4)?),
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+    pub fn stop(&self) {
+        self.stopping.send_replace(true);
+    }
+    pub fn cancellation(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.stopping.subscribe()
+    }
+
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).context("建库目录")?;
@@ -195,6 +264,12 @@ impl SummaryJobStore {
                 job_id INTEGER NOT NULL,
                 PRIMARY KEY (batch_id, job_id)
             );
+            CREATE TABLE IF NOT EXISTS session_finalizations (
+                session_id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL,agent TEXT NOT NULL,
+                transcript_path TEXT NOT NULL,trigger TEXT NOT NULL,job_id INTEGER,
+                created_ms INTEGER NOT NULL,retry_after_ms INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_finalizations_pending ON session_finalizations(session_id) WHERE job_id IS NULL;
             CREATE TABLE IF NOT EXISTS summary_artifacts (
                 job_id INTEGER NOT NULL,
                 kind TEXT NOT NULL,
@@ -203,6 +278,7 @@ impl SummaryJobStore {
             );",
         )
         .context("建规范总结表")?;
+        if !conn.prepare("SELECT 1 FROM pragma_table_info('session_finalizations') WHERE name='retry_after_ms'")?.exists([])?{conn.execute_batch("ALTER TABLE session_finalizations ADD COLUMN retry_after_ms INTEGER NOT NULL DEFAULT 0;")?;}
         let has_cancelled = conn
             .prepare(
                 "SELECT 1 FROM pragma_table_info('summary_batch_jobs') WHERE name='cancelled'",
@@ -215,6 +291,8 @@ impl SummaryJobStore {
         }
         Ok(Self {
             conn: Mutex::new(conn),
+            stopping: tokio::sync::watch::channel(false).0,
+            finalization_locks: Mutex::new(HashMap::new()),
         })
     }
 

@@ -26,5 +26,7 @@
   "pane_title": "Conversations",
   "generating": "Generating…",
   "generate_summary": "Generate Summary",
-  "no_review_content": "No review content—click a conversation in the list on the left to start reviewing"
+  "no_review_content": "No review content—click a conversation in the list on the left to start reviewing",
+  "backfill.loading": "Importing history; results are incomplete",
+  "backfill.failed": "History import did not finish; results may be incomplete"
 }

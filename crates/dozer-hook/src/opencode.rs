@@ -14,6 +14,7 @@
 
 use serde_json::Value;
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 fn home_dir() -> PathBuf {
@@ -59,7 +60,26 @@ fn append_transcript_line_in(
         .create(true)
         .append(true)
         .open(&path)?;
-    writeln!(f, "{line}")
+    // Serialize before taking the lock: formatting JSON directly into File uses
+    // many writes, which concurrent hook processes can interleave.
+    let mut line = line.clone();
+    if let Some(obj) = line.as_object_mut() {
+        obj.entry("timestamp").or_insert_with(|| {
+            serde_json::json!(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64
+            )
+        });
+    }
+    let mut bytes = serde_json::to_vec(&line)?;
+    bytes.push(b'\n');
+    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // Closing the file releases the lock even if write_all fails.
+    f.write_all(&bytes)
 }
 
 #[cfg(test)]
@@ -92,7 +112,41 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content.lines().count(), 1);
         let parsed: Value = serde_json::from_str(content.trim()).unwrap();
-        assert_eq!(parsed, line);
+        assert!(parsed["timestamp"].as_u64().unwrap() > 0);
+        assert_eq!(parsed["message"], line["message"]);
+        assert_eq!(parsed["type"], line["type"]);
+    }
+
+    #[test]
+    fn concurrent_appends_remain_complete_json_lines() {
+        let home = tempfile::tempdir().unwrap();
+        std::thread::scope(|scope| {
+            for worker in 0..8 {
+                let home = home.path();
+                scope.spawn(move || {
+                    for i in 0..20 {
+                        append_transcript_line_in(
+                            home,
+                            "/proj",
+                            "shared",
+                            &json!({
+                                "type": "user", "timestamp": 123,
+                                "message": {"content": "x".repeat(10000)},
+                                "worker": worker, "index": i
+                            }),
+                        )
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        let content =
+            std::fs::read_to_string(transcript_path_in(home.path(), "/proj", "shared")).unwrap();
+        assert_eq!(content.lines().count(), 160);
+        for line in content.lines() {
+            let value: Value = serde_json::from_str(line).unwrap();
+            assert_eq!(value["timestamp"], 123);
+        }
     }
 
     #[test]

@@ -5,11 +5,11 @@
 //! 环境变量、整次调用 deadline、有界并发读取 stdout/stderr、stdin 错误、
 //! 退出码检查、超时 kill 进程组、脱敏日志、以及 provider 能力表(含 Codex)。
 
+use crate::process_runner::{ExecutionFailure, ExecutionSpec};
 use crate::summary_config::SummaryConfig;
 use dozer_core::protocol::AgentKind;
 use std::path::Path;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
 
 /// 单次调用 stdout/stderr 的读取上限(字节)。超过即截断并标记,防止单条
 /// 异常输出把内存/日志撑爆。
@@ -127,8 +127,11 @@ fn stderr_tail(stderr: &str, max: usize) -> String {
     }
 }
 
-/// 有界读取一个 reader 直到 EOF 或上限,超上限截断标记。`R: AsyncRead`。
+/// 有界读取一个 reader 直到 EOF 或上限,超上限截断标记。仅保留给总结输出
+/// 解析的单元测试;生产路径统一走 `process_runner`。
+#[cfg(test)]
 async fn read_bounded<R: tokio::io::AsyncRead + Unpin>(reader: R, max: usize) -> String {
+    use tokio::io::AsyncReadExt;
     let mut reader = reader;
     let mut buf = Vec::new();
     let mut block = [0u8; 8192];
@@ -148,21 +151,6 @@ async fn read_bounded<R: tokio::io::AsyncRead + Unpin>(reader: R, max: usize) ->
     s
 }
 
-#[cfg(unix)]
-fn kill_process_group(child: &tokio::process::Child) {
-    if let Some(pid) = child.id() {
-        // 负 pid 表示向整个进程组发信号(spawn 时已 process_group(0))。
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn kill_process_group(child: &tokio::process::Child) {
-    let _ = child;
-}
-
 /// 执行一次隔离总结调用。`turns_text` 是已构建好的对话文本,`cwd` 是隔离
 /// 临时目录(调用方负责创建/清理)。返回结构化结果或分类错误。
 pub async fn invoke_summary(
@@ -171,14 +159,19 @@ pub async fn invoke_summary(
     config: &SummaryConfig,
     cwd: &Path,
 ) -> Result<SummaryOutput, SummaryInvokeError> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(config.call_timeout_secs);
     let Some(bare) = crate::headless_agent::bare_program_name(agent) else {
         return Err(SummaryInvokeError::UnsupportedCapability(
             "该 agent 没有 headless 适配器".into(),
         ));
     };
-    let program = crate::headless_agent::resolve_binary_path(bare)
-        .await
-        .unwrap_or_else(|| bare.to_string());
+    let program = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(deadline),
+        crate::headless_agent::resolve_binary_path(bare),
+    )
+    .await
+    .map_err(|_| SummaryInvokeError::Timeout)?
+    .unwrap_or_else(|| bare.to_string());
     let Some((cmd, stdin_bytes)) =
         crate::headless_agent::build_command(agent, &program, turns_text)
     else {
@@ -190,7 +183,7 @@ pub async fn invoke_summary(
         cmd,
         stdin_bytes,
         cwd,
-        Duration::from_secs(config.call_timeout_secs),
+        deadline.saturating_duration_since(std::time::Instant::now()),
         agent,
     )
     .await
@@ -257,29 +250,16 @@ pub async fn invoke_summary_parts(
     .map_err(|_| SummaryInvokeError::Timeout)?
 }
 
-// Drop runs on task cancellation and runtime shutdown as well as timeout. Keep
-// the original process-group id even after the leader has exited.
-struct ProcessGroup(u32);
-impl Drop for ProcessGroup {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(-(self.0 as i32), libc::SIGKILL);
-        }
-    }
-}
-
-/// 隔离执行一个已构造的命令:临时 cwd、清 env、deadline、有界并发读取
-/// stdout/stderr、stdin 错误、退出码、超时 kill 进程组。返回
+/// 隔离执行一个已构造的命令:临时 cwd、清 env、统一 deadline、并行泵送
+/// stdin/stdout/stderr、输出预算、退出码与进程组清理。返回
 /// `(stdout, stderr, 退出码)` 三元素,由调用方决定怎么解析/分类。
 async fn run_isolated_capture(
     mut cmd: tokio::process::Command,
     stdin_bytes: Option<Vec<u8>>,
     cwd: &Path,
     timeout: Duration,
-    agent: AgentKind,
+    _agent: AgentKind,
 ) -> Result<(String, String, Option<i32>), SummaryInvokeError> {
-    use std::process::Stdio;
     cmd.current_dir(cwd);
     // `resolve_binary_path` may find an npm-installed CLI such as
     // `/usr/local/bin/codex` even when dozerd was launched by Finder with the
@@ -307,59 +287,40 @@ async fn run_isolated_capture(
     cmd.env_remove("DOZER_AIDER_CHAT_HISTORY");
     cmd.env_remove("DOZER_AIDER_INPUT_HISTORY");
     cmd.env_remove("AIDER_NOTIFICATIONS_COMMAND");
-    cmd.stdin(if stdin_bytes.is_some() {
-        Stdio::piped()
-    } else {
-        Stdio::null()
-    });
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    cmd.kill_on_drop(true);
-    #[cfg(unix)]
-    cmd.process_group(0);
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| SummaryInvokeError::Spawn(format!("spawn {} 失败: {e}", agent.label())))?;
-    let _group = ProcessGroup(child.id().expect("spawned child"));
-    let mut stdin = child.stdin.take();
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
-    let io = async {
-        let write = async {
-            use tokio::io::AsyncWriteExt;
-            let result = match (stdin.as_mut(), stdin_bytes) {
-                (Some(input), Some(bytes)) => input.write_all(&bytes).await,
-                _ => Ok(()),
-            };
-            drop(stdin.take());
-            result
-        };
-        tokio::join!(
-            write,
-            read_bounded(stdout, MAX_OUTPUT_BYTES),
-            read_bounded(stderr, MAX_OUTPUT_BYTES),
-            child.wait()
-        )
-    };
-    let (write, stdout, stderr, status) = match tokio::time::timeout(timeout, io).await {
-        Ok(result) => result,
-        Err(_) => {
-            kill_process_group(&child);
-            let _ = child.kill().await;
-            return Err(SummaryInvokeError::Timeout);
-        }
-    };
-    let status = status.map_err(|e| SummaryInvokeError::Spawn(e.to_string()))?;
-    let code = status.code();
-    if !status.success() {
-        return Err(classify_failure(code.unwrap_or(-1), &stderr));
+    let spec = ExecutionSpec::new(cmd, timeout)
+        .stdin(stdin_bytes)
+        .limits(MAX_OUTPUT_BYTES, MAX_OUTPUT_BYTES);
+    let outcome = crate::process_runner::run(spec)
+        .await
+        .map_err(map_execution_failure)?;
+    let code = outcome.status.code();
+    if !outcome.status.success() {
+        return Err(classify_failure(code.unwrap_or(-1), &outcome.stderr.text));
     }
-    write.map_err(|e| SummaryInvokeError::NonzeroExit(-1, format!("写 stdin 失败: {e}")))?;
-    if stdout.ends_with("…[truncated]") {
+    if outcome.stdout.truncated {
         return Err(SummaryInvokeError::InvalidOutput("模型输出超过限制".into()));
     }
-    Ok((stdout, stderr, code))
+    Ok((outcome.stdout.text, outcome.stderr.text, code))
+}
+
+fn map_execution_failure(failure: ExecutionFailure) -> SummaryInvokeError {
+    match failure {
+        ExecutionFailure::Spawn(reason) => SummaryInvokeError::Spawn(reason),
+        ExecutionFailure::Timeout
+        | ExecutionFailure::Cancelled
+        | ExecutionFailure::CleanupFailed(_) => SummaryInvokeError::Timeout,
+        ExecutionFailure::OutputLimit { .. } => {
+            SummaryInvokeError::InvalidOutput("模型输出超过限制".into())
+        }
+        ExecutionFailure::Stdin(reason) => {
+            SummaryInvokeError::NonzeroExit(-1, format!("写 stdin 失败: {reason}"))
+        }
+        ExecutionFailure::Wait(reason) | ExecutionFailure::Read { reason, .. } => {
+            SummaryInvokeError::NonzeroExit(-1, reason)
+        }
+        ExecutionFailure::Busy => SummaryInvokeError::Spawn("总结执行队列已满，请稍后重试".into()),
+    }
 }
 
 /// 总结调用:隔离执行 + 解析分隔符 JSON。
@@ -420,7 +381,7 @@ mod tests {
             cmd,
             None,
             dir.path(),
-            Duration::from_secs(2),
+            Duration::from_secs(5),
             AgentKind::Codex,
         )
         .await

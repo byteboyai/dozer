@@ -80,7 +80,10 @@ pub struct ProjectRestore {
     /// 最近项目列表(顺带取回,省一次往返)。
     pub(crate) recent_projects: Vec<ProjectInfo>,
     /// 已 attach 上的存活会话。
-    pub(crate) sessions: Vec<dozer_panel_agent::restore::RestoredSession>,
+    pub(crate) sessions: Vec<(
+        dozer_model::SessionInfo,
+        dozer_panel_agent::stream::Connection,
+    )>,
 }
 
 /// `Message::ProjectSlotLoaded` 的载荷:一份**一次性**的 [`ProjectRestore`]
@@ -426,7 +429,7 @@ impl Workspace {
         let project_id = project.id;
         let mut agent = AgentPanelState::new();
         let proxy = io.proxy.clone();
-        agent.adopt_restored(sessions, &io.handle, move |message| {
+        agent.adopt_connections(sessions, &io.handle, move |message| {
             let _ = proxy.send_event(Message::Agent(project_id, message));
         });
 

@@ -12,6 +12,11 @@ use std::collections::HashMap;
 
 /// 从 `Workspace` 搬出的 Agent 面板自有状态。
 pub struct AgentPanelState {
+    pub(crate) stream_owners: HashMap<usize, u64>,
+    pub(crate) stream_epochs: HashMap<usize, u64>,
+    pub(crate) stream_versions: HashMap<usize, (u64, u64)>,
+    pub(crate) stream_errors: HashMap<usize, String>,
+    pub stream_status: HashMap<usize, crate::stream::Status>,
     pub tabs: Vec<SessionTab>,
     /// 当前显示的 tab 在 `tabs` 中的位置(不是 `tab_id`)。
     pub active: usize,
@@ -38,6 +43,11 @@ pub struct AgentPanelState {
 impl AgentPanelState {
     pub fn new() -> Self {
         Self {
+            stream_owners: HashMap::new(),
+            stream_epochs: HashMap::new(),
+            stream_versions: HashMap::new(),
+            stream_status: HashMap::new(),
+            stream_errors: HashMap::new(),
             tabs: Vec::new(),
             active: 0,
             next_tab_id: 0,
@@ -53,6 +63,16 @@ impl AgentPanelState {
         }
     }
 
+    pub fn adopt_connections(
+        &mut self,
+        sessions: Vec<(dozer_model::SessionInfo, crate::stream::Connection)>,
+        handle: &tokio::runtime::Handle,
+        emit: impl Fn(Message) + Clone + Send + 'static,
+    ) {
+        for (info, connection) in sessions {
+            crate::stream::adopt(self, info, connection, handle, emit.clone());
+        }
+    }
     pub fn take_outbox(&mut self) -> Vec<Notice> {
         self.outbox.take()
     }
@@ -217,5 +237,13 @@ mod tests {
         state.adopt_restored(Vec::new(), &tokio::runtime::Handle::current(), |_| {});
         assert!(state.tabs.is_empty());
         assert_eq!(state.next_tab_id, 0);
+    }
+}
+
+impl Drop for AgentPanelState {
+    fn drop(&mut self) {
+        for tab in &self.tabs {
+            tab.forwarder.abort();
+        }
     }
 }
