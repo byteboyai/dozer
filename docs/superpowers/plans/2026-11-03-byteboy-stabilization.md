@@ -1,6 +1,6 @@
 # ByteBoy 稳定化剩余工作与交接计划
 
-日期：2026-11-03。状态：**候选实现已准备并验证；跨仓落地、正式发布组合和实机验收尚未完成。** 本文用于有五仓库写权限的新会话继续执行，不要求重做已经通过的候选实现。
+日期：2026-11-03。状态：**共享库标签、Digger 正式 git 来源锁和两产品 locked/核心测试已完成；GUI、真实 agent、远端 CI 与发行性能验收仍未完成。** 本文用于继续收口实机与验收，不要求重做已发布实现。
 
 目标：用首次 2–3 个工作日时间盒收口发布可复现、门禁可信和关键使用路径；达标后转回功能开发。时间盒是首次复盘节点，不是通过跳过失败来按期完成的理由。本批不启动插件化、通用 actor、编辑器底层替换或大范围结构重写。
 
@@ -33,7 +33,8 @@ Dozer 内已有上述修改和未跟踪文档/补丁包，必须保留；不要�
 - 四份补丁的 SHA256 与 manifest 一致；ByteUI/ByteHost/Digger/Dozer 的 `git apply --check` 均通过。Dozer `dozer-release.patch` 仍可在当前 HEAD 上 dry-run。
 - `bash scripts/check-host-deps.sh --self-test` 已调整为先进入隔离自检，不再被当前工作区的个人 path patch / `--locked` 锁文件阻断；13 项自检通过。正式 locked 门禁仍必须在无个人 patch 的干净副本执行。
 - Dozer 最新运行时提交 `6e389a30`（App 0.5.315）已包含在本地基线；尚未推送远端，因此不能作为已发布 libs 快照引用。
-- 二次审核后：Dozer CI 已同时运行真实依赖门禁与 `--self-test`；Digger 的 `scripts/check-host-deps.sh`、`run-editor-selftest.sh` 及两组脚本测试已落到 `../digger` 工作树，15 项门禁自检与 4 项实机入口自检通过。Digger `Cargo.toml`/`Cargo.lock` 仍未改，正式 tag/lock 收口仍被未发布的上游标签阻断。
+- 二次审核后：Dozer CI 已同时运行真实依赖门禁与 `--self-test`；Digger 的门禁/自检修复、正式版本清单与 git 来源 lock 已提交并推送到 main `e82c048`。
+- 已发布 ByteUI `v0.5.2`（`e338245`）、ByteHost `v0.4.22`（`729fcaf`）、Dozer `libs-2026-11-03a`（`e019a56`）；Digger locked 全目标与 workspace lib 测试通过。
 
 ## 2. 基线与依赖顺序
 

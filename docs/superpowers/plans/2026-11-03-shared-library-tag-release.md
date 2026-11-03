@@ -1,6 +1,6 @@
 # 共享库标签缺失解阻计划
 
-日期：2026-11-03。状态：**待执行；T0 基线与补丁核对已完成，T3–T6 的推送/tag/正式锁仍待授权执行。** 目标是实际发布 `byteui/v0.5.2`、`bytehost/v0.4.22`、`dozer/libs-2026-11-03a`，并让 Digger 使用真实已发布依赖通过干净 locked 验证。
+日期：2026-11-03。状态：**T0–T6 已完成；三个远端标签和 Digger 正式 git 来源锁已验证。** 目标 `byteui/v0.5.2`、`bytehost/v0.4.22`、`dozer/libs-2026-11-03a` 已发布；GUI/真实 agent/性能验收仍由稳定化总计划跟踪。
 
 本计划只处理标签、对应源码、消费版本和正式锁文件。整体稳定化的 GUI、真实 agent、性能和其它验收继续由 [稳定化总计划](2026-11-03-byteboy-stabilization.md) 跟踪，不因三个标签出现而自动完成。
 
@@ -40,12 +40,12 @@ ByteGit 保持 v0.9.2。ByteHost 的 crate package version 沿用仓库规则，
 
 ## 3. T1：将所需源码落到发布提交
 
-- [ ] ByteUI：落地 byteui.patch，确保本地 NotebookTabs 提交及资源也进入待发布分支；版本、CHANGELOG 与待发布功能一致。
-- [ ] ByteHost：落地 bytehost.patch，审阅测试 helper 清理、联合检查及 ByteUI 钉版；保留生产进程身份/权限校验。
-- [ ] Dozer：保留最新运行时及当前门禁修复；审阅 dozer-release.patch 的 ByteUI/ByteHost 版本升级。发布目标必须包含 Digger 所需的 SaveOutcome、SaveFile.project_root 等共享 API。
-- [ ] Digger：落地 digger.patch，准备统一版本清单与门禁/自检修复；正式 Cargo.lock 等上游实际发布后生成。
+- [x] ByteUI：落地 byteui.patch，确保本地 NotebookTabs 提交及资源也进入待发布分支；版本、CHANGELOG 与待发布功能一致。
+- [x] ByteHost：落地 bytehost.patch，审阅测试 helper 清理、联合检查及 ByteUI 钉版；保留生产进程身份/权限校验。
+- [x] Dozer：保留最新运行时及当前门禁修复；审阅 dozer-release.patch 的 ByteUI/ByteHost 版本升级。发布目标必须包含 Digger 所需的 SaveOutcome、SaveFile.project_root 等共享 API。
+- [x] Digger：落地 digger.patch，准备统一版本清单与门禁/自检修复；正式 Cargo.lock 等上游实际发布后生成。
 - [x] 检查 Dozer CI 的真实依赖门禁和隔离自检分别执行，不能因 `--self-test` 提前返回而跳过真实图；以当前实际文件为准，不覆盖其它会话已完成的修复。
-- [ ] 将行为修复与版本/lock 更新组织成可审阅提交。不得包含临时 path patch、个人绝对路径、候选 lock、凭据或无关修改。
+- [x] 将行为修复与版本/lock 更新组织成可审阅提交。不得包含临时 path patch、个人绝对路径、候选 lock、凭据或无关修改。
 
 完成产物：四仓库待发布/消费提交，列明每个提交的源码差异及必要前置。原有本地 HEAD 只是基线，不能直接给它补目标 tag 当作完成。
 
@@ -66,11 +66,11 @@ ByteGit 保持 v0.9.2。ByteHost 的 crate package version 沿用仓库规则，
 
 ## 5. T3：发布 ByteUI v0.5.2
 
-- [ ] 确认最终提交含 NotebookTabs、SVG、version 0.5.2 和发布说明，发布前验证通过。
-- [ ] 将实际测试的提交纳入目标发布分支；若通过 PR 合并改变了 commit SHA，重新确认/验证最终内容。
-- [ ] 在该精确提交创建 v0.5.2，并将必要分支提交与该标签推送到正确远端。
-- [ ] 重新从远端获取标签，核对剥离后的 commit 等于 tested SHA；记录远端 URL/tag/SHA。
-- [ ] 在无个人 patch 的临时消费者中确认能通过 git tag 解析到 ByteUI 0.5.2。
+- [x] 确认最终提交含 NotebookTabs、SVG、version 0.5.2 和发布说明，发布前验证通过。
+- [x] 将实际测试的提交纳入目标发布分支；若通过 PR 合并改变了 commit SHA，重新确认/验证最终内容。
+- [x] 在该精确提交创建 v0.5.2，并将必要分支提交与该标签推送到正确远端。
+- [x] 重新从远端获取标签，核对剥离后的 commit 等于 tested SHA；记录远端 URL/tag/SHA。
+- [x] 在无个人 patch 的临时消费者中确认能通过 git tag 解析到 ByteUI 0.5.2。
 
 完成标准：远端标签存在、指向正确源码、消费方真实解析可用；仅本地有 tag 不算完成。
 
@@ -78,11 +78,11 @@ ByteGit 保持 v0.9.2。ByteHost 的 crate package version 沿用仓库规则，
 
 前置：T3 完成。
 
-- [ ] ByteHost 所有实际消费 ByteUI 的清单统一使用已发布 v0.5.2，检查 chrome/settings-ui 等容易遗漏的 crate。
-- [ ] 使用实际已发布 ByteUI 验证 ByteHost，不能继续靠本地 ByteUI path patch。
-- [ ] 按仓库规则验证库本身、公开契约与候选消费者，记录正常权限环境的孤儿恢复结果；若仍失败，先修再发布。
-- [ ] 创建并推送指向最终 tested SHA 的 v0.4.22；从远端重新获取并核对 commit。
-- [ ] 确认消费者能解析已发布的九个 ByteHost crate，同一仓库所有 crate 使用同一 tag/SHA。
+- [x] ByteHost 所有实际消费 ByteUI 的清单统一使用已发布 v0.5.2，检查 chrome/settings-ui 等容易遗漏的 crate。
+- [x] 使用实际已发布 ByteUI 验证 ByteHost，不能继续靠本地 ByteUI path patch。
+- [x] 按仓库规则验证库本身、公开契约与候选消费者，记录正常权限环境的孤儿恢复结果；若仍失败，先修再发布。
+- [x] 创建并推送指向最终 tested SHA 的 v0.4.22；从远端重新获取并核对 commit。
+- [x] 确认消费者能解析已发布的九个 ByteHost crate，同一仓库所有 crate 使用同一 tag/SHA。
 
 完成标准：远端 v0.4.22 可用，内部 ByteUI 依赖正确，实际源码/测试和 tag 对应。
 
@@ -90,12 +90,12 @@ ByteGit 保持 v0.9.2。ByteHost 的 crate package version 沿用仓库规则，
 
 前置：T3、T4 完成。
 
-- [ ] 更新 Dozer 的 workspace 依赖到真实 v0.5.2/v0.4.22，确认必要本地运行时/API 提交和门禁修复已包含。
-- [ ] 在不含个人 .cargo patch 的源码副本中解析已发布依赖，按共享库变更定向更新正式 Cargo.lock；审阅差异，避免无关 registry 依赖漂移。
-- [ ] 将正式锁带回对应工作树，提交后从该实际提交再做干净验证；不能手填未来 git SHA 或把 path lock 作为正式锁。
-- [ ] 运行 locked workspace all-targets、运行时/client/panel/文件 IO 相关回归与真实边界门禁，记录实际结果。
-- [ ] 创建并发布统一 libs-2026-11-03a，目标为完整 tested SHA；共享 crates 来自同一提交，不分别引用不同快照。
-- [ ] 从远端重新取 tag，确认 Digger 所需的新类型/字段和必要新 crate 实际在该提交中。
+- [x] 更新 Dozer 的 workspace 依赖到真实 v0.5.2/v0.4.22，确认必要本地运行时/API 提交和门禁修复已包含。
+- [x] 在不含个人 .cargo patch 的源码副本中解析已发布依赖，按共享库变更定向更新正式 Cargo.lock；审阅差异，避免无关 registry 依赖漂移。
+- [x] 将正式锁带回对应工作树，提交后从该实际提交再做干净验证；不能手填未来 git SHA 或把 path lock 作为正式锁。
+- [x] 运行 locked workspace all-targets、运行时/client/panel/文件 IO 相关回归与真实边界门禁，记录实际结果。
+- [x] 创建并发布统一 libs-2026-11-03a，目标为完整 tested SHA；共享 crates 来自同一提交，不分别引用不同快照。
+- [x] 从远端重新取 tag，确认 Digger 所需的新类型/字段和必要新 crate 实际在该提交中。
 
 完成标准：远端 libs tag 的源码与依赖图均正确；不能只因为名字存在就认为缺 API 已解决。
 
@@ -103,10 +103,10 @@ ByteGit 保持 v0.9.2。ByteHost 的 crate package version 沿用仓库规则，
 
 前置：三个上游 tag 均已远端验证。
 
-- [ ] Digger 的 ByteUI/ByteHost/全部同源 Dozer crates 统一引用目标标签；ByteGit 保持已验证版本。
-- [ ] 从无个人 patch 的源码副本生成正式 git 来源 lock，修复共享包缺 source 的问题；不删除开发者的个人联调配置。
-- [ ] 将 lock 纳入实际提交，核对 source 中的 tag 和 commit 与发布矩阵一致。
-- [ ] 从两产品实际待交付提交重新创建干净 checkout；不复制个人 .cargo、不用 URL rewrite/本地仓库替代官方 git 来源。
+- [x] Digger 的 ByteUI/ByteHost/全部同源 Dozer crates 统一引用目标标签；ByteGit 保持已验证版本。
+- [x] 从无个人 patch 的源码副本生成正式 git 来源 lock，修复共享包缺 source 的问题；不删除开发者的个人联调配置。
+- [x] 将 lock 纳入实际提交，核对 source 中的 tag 和 commit 与发布矩阵一致。
+- [x] 从两产品实际待交付提交重新创建干净 checkout；不复制个人 .cargo、不用 URL rewrite/本地仓库替代官方 git 来源。
 - [ ] 两产品运行下列公共门禁，另补各自核心回归。库仓库不跟踪锁时可生成临时锁测试，但不能把它算作产品正式 locked 验证。
 
 ```bash
@@ -117,9 +117,9 @@ bash scripts/check-host-deps.sh --self-test
 bash scripts/check-shared-deps.sh --offline
 ```
 
-- [ ] Dozer 增加 panel boundary/log scope 与相关运行时/客户端/面板测试；Digger 增加 editor/store/paths/app-host、前端检查/测试、parser fixtures 和嵌入产物一致性。
+- [x] Dozer 增加 panel boundary/log scope 与相关运行时/客户端/面板测试；Digger 增加 editor/store/paths/app-host、前端检查/测试、parser fixtures 和嵌入产物一致性。
 - [ ] 两产品依赖图没有重复共享库来源，真实 CI 在本次最终提交上通过并保留链接。网络/缓存/权限失败单独列出，不能改用个人 patch 后记为通过。
-- [ ] 推送实际消费提交及正式锁，核对远端目标分支包含它们。
+- [x] 推送实际消费提交及正式锁，核对远端目标分支包含它们。
 
 完成标准：远端不再缺标签、产品不再缺接口/正式锁，干净 locked 构建和相应契约均通过。
 
@@ -156,3 +156,15 @@ git ls-remote "$RELEASE_REMOTE" \
 - [ ] 重新从远端查询三个标签，并从实际 git 来源跑最终消费检查，确认问题确实解阻。
 
 只有三个标签的正确源码已远端可取、两产品消费与正式锁/契约通过，才标记本专项完成。单独创建标签、推送本地分支、候选 patch 编译通过，都不足以完成本专项。
+
+
+## 2026-11-03 发布结果
+
+- ByteUI `v0.5.2`：tag object `ccdf8553…`，commit `e33824578d0f6fa10f168657fe08d882ad6fadc4`。
+- ByteHost `v0.4.22`：tag object `7f661ea1…`，commit `729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e`。
+- Dozer `libs-2026-11-03a`：tag object `40f1a7fd…`，commit `e019a56fb53bd9ab97eae0ac7c8152376b40b501`。
+- Digger：main `e82c048d8ba81ad507524335e5667bbee7472a1a`；正式 lock 的三个共享来源与上述 commit 一致。
+- Digger `cargo check --locked --offline --workspace --all-targets` 通过；workspace lib 测试 39/726/47/13/56 通过；host-deps 15、editor-selftest 4、shared-deps 通过。
+- Dozer `cargo check --locked --offline --workspace --all-targets` 通过；file-io 29、preview-core 166、dozerd 547、client 70、core 116、agent 83、preview 410、todo 69 通过。
+- T2 的候选 path 验证被实际发布后的正式 git 来源验证替代；未把候选 lock 当作发行锁。
+- 未完成：远端 CI 实际 run 链接、完整 GUI/真实 agent/历史二进制组合/发行性能验收。

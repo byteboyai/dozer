@@ -53,3 +53,13 @@
 - 修正 Dozer `check-host-deps.sh` 的自检入口顺序：`--self-test` 现在先进入隔离 workspace，不再依赖当前仓库带个人 path patch 的 `--locked` 锁；13 项自检通过。正式 locked 门禁仍需在无个人 patch 的干净副本运行。
 - ByteHost Apps 两次候选记录分别为 485/3 失败与 484/3 失败，失败集合相同；复跑时以实际输出为准，不把数字当作清理保证已通过。
 - 二次审核 R1/R2/R4 已修复：Dozer CI 同时运行真实门禁与自检；Digger 单图门禁与实机自检入口已落到原工作树，Digger 15 项门禁自检、4 项 editor-selftest 自检通过。R3（正式 tag/lock）仍阻断，Digger Cargo.toml/Cargo.lock 未改，未用 path 图或补丁包冒充发行验证。
+
+## 发布补记（共享库标签）
+
+- ByteUI `v0.5.2`：annotated tag object `ccdf8553…`，commit `e33824578d0f6fa10f168657fe08d882ad6fadc4`；main 已推送。
+- ByteHost `v0.4.22`：annotated tag object `7f661ea1…`，commit `729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e`；main 已推送。
+- Dozer `libs-2026-11-03a`：annotated tag object `40f1a7fd…`，commit `e019a56fb53bd9ab97eae0ac7c8152376b40b501`；main 已推送。正式锁使用 ByteUI/ByteHost/Dozer 的 git 来源。
+- Digger：添加 `origin=https://github.com/byteboyai/digger.git`，升级到三个已发布标签并生成正式 git 来源 lock；main 推送至 `e82c048d8ba81ad507524335e5667bbee7472a1a`。
+- Digger `cargo check --locked --offline --workspace --all-targets` 通过；workspace lib 测试 39/726/47/13/56 通过；host-deps 15、editor-selftest 4、shared-deps 通过。
+- Dozer `cargo check --locked --offline --workspace --all-targets` 通过；file-io 29、preview-core 166、dozerd 547、client 70、core 116、agent 83、preview 410、todo 69 通过。
+- GUI、真实 agent、完整历史二进制组合与发行性能仍未验收。

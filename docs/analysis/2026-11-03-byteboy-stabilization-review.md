@@ -1,13 +1,13 @@
 # ByteBoy 稳定化收口审核与修复结果
 
-日期：2026-11-03。结论：**R1、R2、R4 已修复并复测；R3 仍被未发布的 ByteUI/ByteHost/Dozer 标签阻断，不能通过收口审核。** 本轮修改了 Dozer CI 与 Digger 工作树，未创建提交、推送或发布标签。
+日期：2026-11-03。结论：**R1–R4 已修复；三个共享库标签已发布，Digger 已切换到真实 git 来源并完成 locked 验证。** GUI/真实 agent/性能验收仍按稳定化总计划保留。
 
 ## 审核对象
 
 - 本地基线：ByteUI `eb08e57`、ByteHost `0362608`、ByteGit `5472fa5`、Dozer `6e389a30`、Digger `44b84e7`。
 - Dozer 工作树保留此前的门禁、规范、文档与补丁包修改；本轮新增 CI 正式门禁调用和自检入口修正。
-- Digger 工作树已应用 `digger.patch` 中选择的文件：依赖门禁、实机自检入口、两组脚本测试、consumer-check workflow 与稳定化 review 记录；**Cargo.toml/Cargo.lock 未修改**。
-- 远端仍没有 `v0.5.2`、`v0.4.22`、`libs-2026-11-03a` 这些预留标签。
+- Digger 已落地 `digger.patch` 的依赖门禁、实机自检入口、两组脚本测试、consumer-check workflow、正式版本清单与 git 来源 lock，并推送到 main `e82c048`。
+- 远端已发布并验证 `v0.5.2`、`v0.4.22`、`libs-2026-11-03a`。
 
 ## 修复状态
 
@@ -15,7 +15,7 @@
 |---|---|---|---|
 | R1 | P1 | 已修复 | Dozer CI 同时运行正式门禁与 `--self-test` |
 | R2 | P1 | 已修复 | Digger 单图门禁落地，15 项自检通过；失败不再被吞掉 |
-| R3 | P1 | 仍阻断 | Digger 正式 Cargo.toml/lock 仍指向旧版本；新标签未发布 |
+| R3 | P1 | 已修复 | 三个标签已远端发布；Digger 正式 git 来源锁与 locked 构建通过 |
 | R4 | P2 | 已修复 | Digger 实机自检改用本次 compiler-artifact；4 项测试通过 |
 
 ## 逐项结果
@@ -32,15 +32,16 @@
 - 已将 `digger.patch` 的 `scripts/check-host-deps.sh` 与 `scripts/tests/test_host_deps.py` 落到 `../digger` 工作树。
 - 新门禁读取单次 `cargo metadata --locked --all-features` 图，cargo 失败、坏 JSON、空成员、传递/可选/构建/跨平台依赖均失败；业务包默认纳入，`digger-paths` 的纯 bytehost-apps 身份契约是唯一窄例外。
 - 复测：`python3 scripts/tests/test_host_deps.py` → **15 passed**。
-- 当前原仓库直接运行门禁会以“Cargo.lock 需要更新”失败，而不是旧的假通过；这对应未解决的 R3。
+- 正式锁更新后，原仓库直接运行门禁已通过（审视 3 个业务 crate），不再是旧脚本的假通过。
 
-### R3 · Digger 正式依赖组合与锁仍不可发行
+### R3 · Digger 正式依赖组合与锁
 
-仍阻断，未用本地 patch 或伪造锁掩盖：
+已修复：
 
-- `../digger/Cargo.toml` 仍引用 ByteUI `v0.5.1`、ByteHost `v0.4.21`、Dozer `libs-2026-11-01e`，而源码已使用 NotebookTabs、`SaveOutcome`、`SaveFile.project_root` 等新接口。
-- 远端尚未发布包含这些接口的 ByteUI/ByteHost/Dozer 标签；`Cargo.lock` 仍缺共享包 git source。
-- `cargo check --locked --offline -j 1 --workspace --all-targets` 仍因 lock 需要更新而失败。修复必须按 P3–P6 顺序发布真实标签、更新消费方清单并重新生成正式 git 来源锁；不能把候选 path 图或补丁包通过当作发行证据。
+- 远端已发布 ByteUI `v0.5.2`（commit `e33824578d0f6fa10f168657fe08d882ad6fadc4`）、ByteHost `v0.4.22`（commit `729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e`）、Dozer `libs-2026-11-03a`（commit `e019a56fb53bd9ab97eae0ac7c8152376b40b501`）。
+- Digger `Cargo.toml` 已统一到上述标签；正式 `Cargo.lock` 由无个人 `.cargo` patch 的解析生成，共享包均带 git source。
+- `cargo check --locked --offline --workspace --all-targets` 通过；`digger` workspace lib 测试 39/726/47/13/56 全部通过。
+- Digger main 已推送到 `e82c048d8ba81ad507524335e5667bbee7472a1a`。
 
 ### R4 · Digger 实机自检使用错误缓存产物
 
@@ -57,16 +58,16 @@
 | Dozer CI 源码 | 正式门禁与自检两步均已配置 |
 | Digger host-deps 自检 | 15 passed |
 | Digger editor-selftest 自检 | 4 passed |
-| Digger 正式 locked 构建 | 仍失败：Cargo.lock 需要更新（R3） |
-| 新发布标签 | 远端仍未出现 |
+| Digger 正式 locked 构建 | 通过（git 来源锁，无个人 patch） |
+| 新发布标签 | 三个远端标签均已验证 |
 
-本轮没有重新执行完整 Rust 编译、完整 GUI 或真实性能验收；R3 未解决前这些发行验收不应被宣称通过。Dozer 与 Digger 的改动仍在各自工作树中，未提交、未推送、未发 tag。
+本轮完成了标签发布、Digger 正式锁和 locked/核心测试；完整 GUI、真实 agent 与发行性能验收仍待执行。Dozer/Digger 发布提交已推送，标签已远端验证。
 
-## 剩余阻断
+## 剩余工作
 
-1. 发布包含所需 API 的 ByteUI、ByteHost 与统一 Dozer libs 标签，并在消费方清单中统一版本。
-2. 在无个人 `.cargo` patch 的干净副本生成正式 git 来源 lock，运行两产品 locked 全目标、契约与边界门禁。
-3. 完成 P7 的真实 GUI/真实 agent/性能验收；脚本自检和候选 path 编译不能替代。
+1. 完成 P7 的真实 GUI/真实 agent/性能验收；脚本自检和候选 path 编译不能替代。
+2. 记录两产品最终提交、正式锁中的各 git 来源 SHA 与远端 CI 结果。
+3. 按稳定化总计划继续 GUI、真实 agent、历史和性能验收。
 
 ## 后续复核：脚本修复通过，标签发布仍阻断
 
