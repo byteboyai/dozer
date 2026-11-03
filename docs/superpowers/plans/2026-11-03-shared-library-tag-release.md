@@ -150,10 +150,10 @@ git ls-remote "$RELEASE_REMOTE" \
 
 ## 10. T7：交付证据与完成定义
 
-- [ ] 提交发布记录，至少包含仓库 URL、标签、tag 对象/commit SHA、所含接口、上游版本、实际测试命令/结果和 CI链接。
-- [ ] 记录两产品最终提交、正式锁中的各 git 来源 SHA及干净构建日志。
-- [ ] 更新 [稳定化总计划](2026-11-03-byteboy-stabilization.md) 的发布/正式锁任务；保持尚未完成的 GUI、真实 agent 与性能待办。
-- [ ] 重新从远端查询三个标签，并从实际 git 来源跑最终消费检查，确认问题确实解阻。
+- [x] 提交发布记录，至少包含仓库 URL、标签、tag 对象/commit SHA、所含接口、上游版本、实际测试命令/结果和 CI链接。
+- [x] 记录两产品最终提交、正式锁中的各 git 来源 SHA及干净构建日志。
+- [x] 更新 [稳定化总计划](2026-11-03-byteboy-stabilization.md) 的发布/正式锁任务；保持尚未完成的 GUI、真实 agent 与性能待办。
+- [x] 重新从远端查询三个标签，并从实际 git 来源跑最终消费检查，确认问题确实解阻。
 
 只有三个标签的正确源码已远端可取、两产品消费与正式锁/契约通过，才标记本专项完成。单独创建标签、推送本地分支、候选 patch 编译通过，都不足以完成本专项。
 
@@ -167,4 +167,5 @@ git ls-remote "$RELEASE_REMOTE" \
 - Digger `cargo check --locked --offline --workspace --all-targets` 通过；workspace lib 测试 39/726/47/13/56 通过；host-deps 15、editor-selftest 4、shared-deps 通过。
 - Dozer `cargo check --locked --offline --workspace --all-targets` 通过；file-io 29、preview-core 166、dozerd 547、client 70、core 116、agent 83、preview 410、todo 69 通过。
 - T2 的候选 path 验证被实际发布后的正式 git 来源验证替代；未把候选 lock 当作发行锁。
-- 未完成：远端 CI 实际 run 链接、完整 GUI/真实 agent/历史二进制组合/发行性能验收。
+- CI：ByteUI 41572390741 success；ByteHost 41572677875 success、joint-build 重跑 41573636762 success；Dozer 41573001561/41573499793 success；Digger 41573423472 success。首次 ByteHost joint-build 41572677891 失败于旧 Digger 仍引用 ByteUI 0.5.1，Digger 更新后重跑通过。
+- 未完成：完整 GUI/真实 agent/历史二进制组合/发行性能验收。

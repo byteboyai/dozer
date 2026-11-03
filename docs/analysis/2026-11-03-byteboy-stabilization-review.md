@@ -63,16 +63,23 @@
 
 本轮完成了标签发布、Digger 正式锁和 locked/核心测试；完整 GUI、真实 agent 与发行性能验收仍待执行。Dozer/Digger 发布提交已推送，标签已远端验证。
 
+## 远端 CI 与最终提交
+
+| 对象 | 最终提交 | CI / 说明 |
+|---|---|---|
+| ByteUI `v0.5.2` | `e33824578d0f6fa10f168657fe08d882ad6fadc4` | CI run 41572390741：success |
+| ByteHost `v0.4.22` | `729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e` | CI run 41572677875：success；joint-build 41573636762：success |
+| Dozer `libs-2026-11-03a` | `e019a56fb53bd9ab97eae0ac7c8152376b40b501` | Consumer check 41573001561：success；main 文档提交 `9da10a82` 的 41573499793：success |
+| Digger main | `e82c048d8ba81ad507524335e5667bbee7472a1a` | Consumer check 41573423472：success |
+| ByteGit | `5472fa553ab34d97d9a1e4055c89d03b48eb4848` | 本批未改版本 |
+
+- ByteHost tag 首次 joint-build 41572677891 失败：当时 Digger main 仍引用 ByteUI v0.5.1，出现两份 `IconKind`。Digger 更新到已发布 ByteUI/ByteHost/Dozer 标签后，手动重跑 41573636762 已成功。
+- 两产品正式 lock 中的共享来源：ByteUI `v0.5.2#e3382457`、ByteHost `v0.4.22#729fcaff`、Dozer `libs-2026-11-03a#e019a56f`、ByteGit `v0.9.2#5472fa55`。
+- Dozer/Digger 工作树在发布提交后均为 clean；个人 `.cargo` patch 未进入提交。
+
 ## 剩余工作
 
-1. 完成 P7 的真实 GUI/真实 agent/性能验收；脚本自检和候选 path 编译不能替代。
-2. 记录两产品最终提交、正式锁中的各 git 来源 SHA 与远端 CI 结果。
-3. 按稳定化总计划继续 GUI、真实 agent、历史和性能验收。
-
-## 后续复核：脚本修复通过，标签发布仍阻断
-
-重新检查当前工作树：R1 的 Dozer CI 已分别调用正式门禁和隔离自检；R2/R4 的 Digger 单图门禁、compiler-artifact 选择和父进程超时回收已落到实际工作树。实际重跑 Dozer 13 项、Digger 门禁 15 项、实机入口 4 项测试，全部通过。上述三项不再列作当前未修复问题。
-
-R3 仍未解阻。重新查询三个官方远端的精确 tag（含 annotated tag 的剥离引用），v0.5.2、v0.4.22、libs-2026-11-03a 均无结果；ByteUI 首次查询遇到 SSL 错误，单独重试成功后仍无该 tag。两产品清单仍消费 ByteUI v0.5.1、ByteHost v0.4.21，Digger 同源 Dozer crates 仍为 libs-2026-11-01e。ByteUI package version 也仍是 0.5.1。
-
-因此本次可以确认脚本修复完成，不能确认共享库标签发布专项完成；仍需实际发布正确提交、更新消费者和正式锁，并完成干净 locked 验证。未重复运行未变化的全量构建，也没有将缺失标签状态标为通过。
+1. 真实 GUI/真实 agent 验收：Dozer 持续终端/恢复/退出、Todo 失败重试、回填状态；Digger IME/undo/焦点/保存恢复/Retry。
+2. 发行性能验收：固定 fixture 下的输入到绘制、终端停消费资源、摄取期间 RPC p95/p99、首次可连接/停止耗时。
+3. 完整历史二进制组合与外仓消费者升级；当前只验证了最新发布组合和契约/golden 基线。
+4. 历史产品库两次启动/迁移演练与真实权限环境的 FSEvent/进程身份复验（本机已通过，仍需按实际发行环境记录）。

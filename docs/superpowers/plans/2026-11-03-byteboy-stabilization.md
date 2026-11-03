@@ -213,3 +213,13 @@ Dozer 另跑 panel boundary/log scope；Digger 另跑 web check/test、parser fi
 ## 10. 新会话交接提示
 
 > 继续 ByteBoy 稳定化收口，读取本计划、实施记录与补丁包 manifest。先确认五仓库写权限和当前实际分支/远端状态，保留 Dozer 已有未提交修复，不重复实现。按 P0–P8 推进；候选 patch 验证不能代替已发布 git 来源的正式 lock 和实机验收。不要移动现有标签，不隐藏环境失败，不启动额外大重构。
+
+### 2026-11-03 发布与 CI 结果
+
+- ByteUI `v0.5.2` → `e33824578d0f6fa10f168657fe08d882ad6fadc4`；CI 41572390741 success。
+- ByteHost `v0.4.22` → `729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e`；CI 41572677875 success；joint-build 重跑 41573636762 success（首次 41572677891 因旧 Digger 仍用 ByteUI 0.5.1 失败）。
+- Dozer `libs-2026-11-03a` → `e019a56fb53bd9ab97eae0ac7c8152376b40b501`；Consumer check 41573001561、文档提交 9da10a82 的 41573499793 success。
+- Digger main `e82c048d8ba81ad507524335e5667bbee7472a1a`；Consumer check 41573423472 success。
+- ByteGit 保持 `5472fa553ab34d97d9a1e4055c89d03b48eb4848`。
+- 两产品正式 lock 的共享来源与上述标签一致；Digger locked 全目标、Dozer locked 全目标及核心测试通过。
+- 仍待：真实 GUI、真实 agent 权限金丝雀、历史二进制组合、完整发行性能与历史库迁移演练。
