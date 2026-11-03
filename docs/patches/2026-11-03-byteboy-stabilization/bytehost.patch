@@ -1,0 +1,344 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 4e9605b..07ec228 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -59,3 +59,6 @@ jobs:
+ 
+       - name: 依赖门禁变异测试(注入产品依赖/界面框架必须失败)
+         run: bash scripts/check-deps.sh --self-test
++
++      - name: 联合构建脚本故障自检
++        run: python3 scripts/tests/test_joint_build.py
+diff --git a/.github/workflows/joint-build.yml b/.github/workflows/joint-build.yml
+index 910c766..a73fb5f 100644
+--- a/.github/workflows/joint-build.yml
++++ b/.github/workflows/joint-build.yml
+@@ -7,12 +7,11 @@ name: Joint build
+ # bytehost 工作树,跑 `cargo check -p dozer-app`。这样"bytehost 的改动会破坏
+ # 消费方"在打 tag 时就能发现,不必等人工同日升级。
+ #
+-# 注意:digger **没有 GitHub 远端**(本地仓库),暂时无法纳入;它有远端后
+-# 在下面加一个 checkout + `scripts/joint-build.sh digger` 即可。
+-#
+-# 该 job 只在 tag 与手动触发时跑:PR/日常 push 由各仓库自己的 CI 负责。
++# 两消费方都必须存在并参与检查；候选构建不能替代消费方的无 patch locked 发行检查。
++# PR 在发版前验证；tag/手动触发保留发布组合回归。
+ 
+ on:
++  pull_request:
+   push:
+     tags: ["v*"]
+   workflow_dispatch:
+@@ -32,6 +31,12 @@ jobs:
+           repository: byteboyai/dozer
+           path: dozer
+ 
++      - name: Checkout digger
++        uses: actions/checkout@v4
++        with:
++          repository: byteboyai/digger
++          path: digger
++
+       - name: Install stable Rust
+         run: rustup toolchain install stable --profile minimal
+ 
+@@ -42,9 +47,10 @@ jobs:
+             ~/.cargo/registry
+             ~/.cargo/git
+             dozer/target
++            digger/target
+           key: ${{ runner.os }}-joint-${{ hashFiles('dozer/Cargo.lock') }}
+ 
+-      - name: 用当前 bytehost 构建 dozer
++      - name: 用当前 bytehost 构建两个消费方
+         env:
+           CONSUMERS_ROOT: ${{ github.workspace }}
+-        run: bytehost/scripts/joint-build.sh dozer
++        run: bytehost/scripts/joint-build.sh all
+diff --git a/crates/bytehost-apps/src/manager.rs b/crates/bytehost-apps/src/manager.rs
+index 5d4bee8..4cf72c1 100644
+--- a/crates/bytehost-apps/src/manager.rs
++++ b/crates/bytehost-apps/src/manager.rs
+@@ -2,9 +2,9 @@
+ //!
+ //! 一期实现 `static_web` 与进程型(`node`/`python`,A6c);容器在 `install_plan` 就被明确拒绝
+ //! (`UnsupportedRuntime`)。
+-//! 所有会改状态的方法都在同一把锁里执行(**单写者**:规格里 supervisor 是唯一写者),
+-//! 每次状态变化都先落盘(`AppRecord.observed`)再发事件。耗时任务句柄/进度(规格 §4.3)留到
+-//! 有真正耗时的 runtime 时再加:静态应用的安装是瞬时的。
++//! 同应用写操作通过锁分片串行化，全局生命周期 gate 协调 reconcile/suspend；
++//! 每次状态变化都先落盘(`AppRecord.observed`)再发事件。
++//! 进程型应用及受管运行时的耗时任务按各自所有者管理。
+ //!
+ //! 防 TOCTOU 的安装顺序(见 `digest` 模块文档):**先把包拷进 staging,对 staging 副本重新算摘要并
+ //! `verify`,再改名落位**;`current_version` 在最后才写。
+@@ -6262,11 +6262,12 @@ source = "web/"
+         let run_dir = rig.manager.core.registry.paths().run_dir(&a);
+         fs::create_dir_all(&run_dir).unwrap();
+ 
+-        let mut child = std::process::Command::new("sleep")
++        let child = std::process::Command::new("sleep")
+             .arg("306")
+             .process_group(0)
+             .spawn()
+             .unwrap();
++        let mut child = crate::testutil::TestChild(child);
+         write_record(
+             &run_dir,
+             &record_for(child.id(), vec!["sleep".into(), "306".into()]),
+@@ -6274,7 +6275,7 @@ source = "web/"
+         .unwrap();
+ 
+         assert!(rig.manager.reconcile().is_clean());
+-        let status = child.wait().unwrap();
++        let status = child.wait_with_timeout(Duration::from_secs(2)).unwrap();
+         assert!(!status.success(), "孤儿进程应被信号终止:{status:?}");
+         assert!(!run_dir.join("process.json").exists(), "记录应被清掉");
+     }
+diff --git a/crates/bytehost-apps/src/process/supervise.rs b/crates/bytehost-apps/src/process/supervise.rs
+index a575d28..80cdf0d 100644
+--- a/crates/bytehost-apps/src/process/supervise.rs
++++ b/crates/bytehost-apps/src/process/supervise.rs
+@@ -516,6 +516,7 @@ mod tests {
+             .process_group(0)
+             .spawn()
+             .unwrap();
++        let child = crate::testutil::TestChild(child);
+         let pid = child.id();
+         write_record(
+             dir.path(),
+@@ -531,7 +532,7 @@ mod tests {
+             reap_orphan(dir.path(), Duration::from_secs(1)).unwrap(),
+             Reaped::Killed(pid)
+         );
+-        let _ = child.wait();
++        let _ = child.wait_with_timeout(Duration::from_secs(2));
+         assert!(!alive(pid as i32));
+         assert!(!record_path(dir.path()).exists(), "记录被清掉");
+     }
+@@ -676,11 +677,12 @@ mod tests {
+     fn orphans_are_matched_by_start_time_and_never_by_a_bogus_or_non_leader_pid() {
+         let dir = tempfile::tempdir().unwrap();
+         // 1) 命令行对、启动时间对不上
+-        let mut other = Command::new("sleep")
++        let other = Command::new("sleep")
+             .arg("303")
+             .process_group(0)
+             .spawn()
+             .unwrap();
++        let mut other = crate::testutil::TestChild(other);
+         let mut rec = record_for(other.id(), vec!["sleep".into(), "303".into()]);
+         rec.lstart = Some("Thu Jan  1 00:00:00 1970".into());
+         write_record(dir.path(), &rec).unwrap();
+@@ -699,7 +701,7 @@ mod tests {
+             reap_orphan(dir.path(), Duration::from_secs(1)).unwrap(),
+             Reaped::Killed(other.id())
+         );
+-        let _ = other.wait();
++        let _ = other.wait_with_timeout(Duration::from_secs(2));
+         // 3) pid ≤ 1 / 超出 i32:绝不能走到 kill(-pid)
+         for bad in [0u32, 1, u32::MAX] {
+             write_record(
+diff --git a/crates/bytehost-apps/src/testutil.rs b/crates/bytehost-apps/src/testutil.rs
+index e60c5cb..2c7d601 100644
+--- a/crates/bytehost-apps/src/testutil.rs
++++ b/crates/bytehost-apps/src/testutil.rs
+@@ -120,3 +120,59 @@ pub(crate) fn send_raw(port: u16, raw: &str) -> Resp {
+     stream.read_to_end(&mut buf).expect("读响应");
+     parse(&buf)
+ }
++
++/// Own only a test-created child. Panic paths must reap it too.
++pub(crate) struct TestChild(pub std::process::Child);
++impl std::ops::Deref for TestChild {
++    type Target = std::process::Child;
++    fn deref(&self) -> &Self::Target {
++        &self.0
++    }
++}
++impl std::ops::DerefMut for TestChild {
++    fn deref_mut(&mut self) -> &mut Self::Target {
++        &mut self.0
++    }
++}
++impl TestChild {
++    pub fn wait_with_timeout(
++        &mut self,
++        budget: std::time::Duration,
++    ) -> std::io::Result<std::process::ExitStatus> {
++        let deadline = std::time::Instant::now() + budget;
++        loop {
++            if let Some(status) = self.0.try_wait()? {
++                return Ok(status);
++            }
++            if std::time::Instant::now() >= deadline {
++                return Err(std::io::Error::new(
++                    std::io::ErrorKind::TimedOut,
++                    "test child was not reaped within its deadline",
++                ));
++            }
++            std::thread::sleep(std::time::Duration::from_millis(10));
++        }
++    }
++}
++impl Drop for TestChild {
++    fn drop(&mut self) {
++        let _ = self.0.kill();
++        let _ = self.0.wait();
++    }
++}
++#[cfg(unix)]
++#[test]
++fn test_child_is_reaped_even_when_an_assertion_panics() {
++    let child = std::process::Command::new("sleep")
++        .arg("30")
++        .spawn()
++        .unwrap();
++    let pid = child.id();
++    let result = std::panic::catch_unwind(move || {
++        let _child = TestChild(child);
++        panic!("fixture assertion failed");
++    });
++    assert!(result.is_err());
++    // SAFETY: signal 0 checks only the child created by this test.
++    assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
++}
+diff --git a/crates/bytehost-chrome/Cargo.toml b/crates/bytehost-chrome/Cargo.toml
+index 1cb743e..00151dd 100644
+--- a/crates/bytehost-chrome/Cargo.toml
++++ b/crates/bytehost-chrome/Cargo.toml
+@@ -12,7 +12,7 @@ bytehost-core.workspace = true
+ serde.workspace = true
+ serde_json.workspace = true
+ # 控件与度量读 byteui 的主题(几何、配色、外壳区域样式)。
+-byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.5.1" }
++byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.5.2" }
+ # 控件返回 `Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>`(与 byteui 一致),不开渲染器 feature。
+ iced_widget = { version = "0.14", default-features = false }
+ iced_renderer = { version = "0.14", default-features = false }
+diff --git a/crates/bytehost-settings-ui/Cargo.toml b/crates/bytehost-settings-ui/Cargo.toml
+index da55ad0..1072db9 100644
+--- a/crates/bytehost-settings-ui/Cargo.toml
++++ b/crates/bytehost-settings-ui/Cargo.toml
+@@ -10,7 +10,7 @@ description = "共享设置窗口的 iced 视图:容器、主题页、语言页
+ bytehost-settings = { path = "../bytehost-settings" }
+ bytehost-apps = { path = "../bytehost-apps" }
+ bytehost-panel = { path = "../bytehost-panel" }
+-byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.5.1" }
++byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.5.2" }
+ # 只消费 iced 的核心契约;不打开任何渲染器后端——消费方(dozer / digger)决定后端,
+ # feature 合并后 `iced_renderer::Renderer` 是同一个类型。
+ iced = { version = "0.14", default-features = false, features = ["tokio"] }
+diff --git a/scripts/joint-build.sh b/scripts/joint-build.sh
+index dc44cc5..1cc7764 100755
+--- a/scripts/joint-build.sh
++++ b/scripts/joint-build.sh
+@@ -13,9 +13,8 @@
+ # (与人工联调同一手法),不写任何 `.cargo/config.toml`、不覆盖用户已有的本地 patch。
+ # 被这次解析改动的消费方 `Cargo.lock` 会在结束时还原。
+ #
+-# 为什么不是 GitHub Actions:dozer 与 digger 目前都没有任何 workflow;跨仓联合 CI
+-# 需要它们先有可复用 workflow 与一个跨仓 token。等这两件事具备后,本脚本的检查项
+-# 可以直接搬进 bytehost 的发版 workflow(见 docs/superpowers/plans/2026-10-30-bytehost-opt-tier5-cross-repo-governance.md)。
++# PR/tag/手动联合检查由 .github/workflows/joint-build.yml 调用。
++# 此脚本仅做候选组合；消费方发行检查必须另用不带 patch 的锁文件。
+ 
+ set -euo pipefail
+ root="$(cd "$(dirname "$0")/.." && pwd)"
+@@ -46,26 +45,32 @@ for crate in "${crates[@]}"; do
+   )
+ done
+ 
+-build_one() {
++build_one() (
+   local name="$1" dir="$2" pkg="$3"
+   if [ ! -f "$dir/Cargo.toml" ]; then
+-    echo "note: 没有 $name($dir),跳过联合构建" >&2
+-    return 0
++    echo "error: 缺少 $name($dir),联合构建失败" >&2
++    return 1
+   fi
+-  local lock_bak rc=0
++  local lock_bak
+   lock_bak="$(mktemp)"
+   cp "$dir/Cargo.lock" "$lock_bak"
+-  echo "联合构建:$name($pkg)…" >&2
+-  (cd "$dir" && cargo check -q -p "$pkg" "${patch_args[@]}") || rc=$?
+-  # 这次解析会把消费方的 Cargo.lock 改成本地 path;还原成它原来的内容。
+-  cp "$lock_bak" "$dir/Cargo.lock"
+-  rm -f "$lock_bak"
+-  if [ "$rc" -ne 0 ]; then
++  cleanup() {
++    local rc=$?
++    trap - EXIT
++    cp "$lock_bak" "$dir/Cargo.lock" || rc=1
++    rm -f "$lock_bak"
++    exit "$rc"
++  }
++  trap cleanup EXIT
++  trap 'exit 130' INT
++  trap 'exit 143' TERM
++  echo "联合构建:$name($pkg 与 workspace 全目标)…" >&2
++  if ! (cd "$dir" && cargo check --workspace --all-targets "${patch_args[@]}"); then
+     echo "联合构建失败:$name 在 bytehost 当前工作树下编译不过" >&2
+     return 1
+   fi
+   echo "联合构建通过:$name" >&2
+-}
++)
+ 
+ status=0
+ case "$which" in
+diff --git a/scripts/tests/test_joint_build.py b/scripts/tests/test_joint_build.py
+new file mode 100644
+index 0000000..f8cae7f
+--- /dev/null
++++ b/scripts/tests/test_joint_build.py
+@@ -0,0 +1,47 @@
++"""Joint checks must not skip consumers or leave a candidate lock behind."""
++import os
++from pathlib import Path
++import subprocess
++import tempfile
++import unittest
++
++SCRIPT = Path(__file__).resolve().parents[1] / "joint-build.sh"
++
++class JointBuildTests(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory(prefix="joint-build-test-")
++        self.addCleanup(self.temp.cleanup)
++        self.root = Path(self.temp.name)
++        self.consumer = self.root / "dozer"
++        self.consumer.mkdir()
++        (self.consumer / "Cargo.toml").write_text("[workspace]\nmembers=[]\n")
++        (self.consumer / "Cargo.lock").write_text("original lock\n")
++        binary = self.root / "bin"
++        binary.mkdir()
++        cargo = binary / "cargo"
++        cargo.write_text('#!/bin/sh\nprintf "candidate lock\\n" > Cargo.lock\nexit "${CARGO_RESULT:-0}"\n')
++        cargo.chmod(0o755)
++        self.env = dict(os.environ, CONSUMERS_ROOT=str(self.root), PATH=str(binary)+os.pathsep+os.environ["PATH"])
++
++    def run_check(self, selection="dozer"):
++        return subprocess.run(["bash", str(SCRIPT), selection], env=self.env, capture_output=True, text=True, timeout=10)
++
++    def test_missing_consumer_is_a_failure(self):
++        result = self.run_check("digger")
++        self.assertNotEqual(result.returncode, 0)
++        self.assertNotIn("联合构建通过", result.stderr)
++
++    def test_success_restores_the_original_lock(self):
++        result = self.run_check()
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertEqual((self.consumer / "Cargo.lock").read_text(), "original lock\n")
++
++    def test_failure_restores_the_original_lock(self):
++        self.env["CARGO_RESULT"] = "42"
++        result = self.run_check()
++        self.assertNotEqual(result.returncode, 0)
++        self.assertEqual((self.consumer / "Cargo.lock").read_text(), "original lock\n")
++        self.assertNotIn("联合构建通过", result.stderr)
++
++if __name__ == "__main__":
++    unittest.main()

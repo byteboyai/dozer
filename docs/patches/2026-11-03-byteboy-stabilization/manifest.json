@@ -1,0 +1,40 @@
+{
+  "status": "prepared_not_published",
+  "patches": [
+    {
+      "repository": "byteui",
+      "base": "eb08e57c5e489f905ccc0336107ad4c3b4291e79",
+      "patch": "byteui.patch",
+      "sha256": "7fe697e5d738a798622242e5bc4d04c2a775e5bab1ba67e3c0d9f35773e80c1b",
+      "apply_check": true
+    },
+    {
+      "repository": "bytehost",
+      "base": "036260882682ae61f193a49470a33da1e6d8fc31",
+      "patch": "bytehost.patch",
+      "sha256": "f439456b7b470aab594fa78ea5127ae3b4709b28b59654167d8055e529aed7ea",
+      "apply_check": true
+    },
+    {
+      "repository": "digger",
+      "base": "44b84e78dbb81fd0df1a14606d8ac3b3df9f6402",
+      "patch": "digger.patch",
+      "sha256": "ea523ab068db87fd5d8a2e0faed4a28600b6c6a28c2d05d7333e3ef4ae63049f",
+      "apply_check": true
+    },
+    {
+      "repository": "dozer",
+      "base": "6e389a300795d6295bdc3431223e5f84e08e1c2a",
+      "patch": "dozer-release.patch",
+      "sha256": "3c66632cff6cba7a0734e61ce03cbf5ce11e571351bf4fbd2470982d79479802",
+      "apply_check": true
+    }
+  ],
+  "candidate_tags": {
+    "byteui": "v0.5.2",
+    "bytehost": "v0.4.22",
+    "dozer": "libs-2026-11-03a"
+  },
+  "release_lock_generated": false,
+  "mode": "candidate_source_verified; published_tag_verification_pending"
+}

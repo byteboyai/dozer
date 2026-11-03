@@ -1,0 +1,50 @@
+{
+  "dozer_gate_tests": {
+    "passed": 13,
+    "failed": 0
+  },
+  "digger_gate_tests": {
+    "passed": 15,
+    "failed": 0
+  },
+  "joint_script_tests": {
+    "passed": 3,
+    "failed": 0
+  },
+  "editor_harness_script_tests": {
+    "passed": 4,
+    "failed": 0
+  },
+  "byteui_lib": {
+    "passed": 133,
+    "failed": 0
+  },
+  "bytehost_apps_lib": {
+    "passed": 485,
+    "failed": 3,
+    "seconds": 8.91,
+    "failures": "process identity/orphan recovery in restricted environment"
+  },
+  "dozer_candidate_locked_all_targets": {
+    "returncode": 0,
+    "path_patches": true,
+    "published_release_check": false
+  },
+  "digger_candidate_locked_all_targets": {
+    "returncode": 0,
+    "path_patches": true,
+    "published_release_check": false
+  },
+  "dozer_candidate_real_graph_gate": {
+    "returncode": 0,
+    "business_crates": 8
+  },
+  "digger_candidate_real_graph_gate": {
+    "returncode": 0,
+    "business_crates": 3
+  },
+  "original_sibling_repositories_modified": false,
+  "tags_published": false,
+  "gui_candidate_acceptance": "not_run",
+  "end_to_end_release_performance": "not_run"
+}

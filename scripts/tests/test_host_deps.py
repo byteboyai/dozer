@@ -39,6 +39,8 @@ class HostDepsTests(unittest.TestCase):
             opt = ", optional=true" if optional else ""
             manifest += f'[{section}]\n{dep}={{path="../fake"{opt}}}\n'
         (app / "Cargo.toml").write_text(manifest)
+        subprocess.run([CARGO, "generate-lockfile", "--offline"], cwd=self.root,
+                       env=self.env, check=True, capture_output=True)
 
     def test_new_business_members_are_checked(self):
         self.workspace(dep="wry")
@@ -75,6 +77,29 @@ class HostDepsTests(unittest.TestCase):
         result = self.run_gate()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_members_outside_the_product_prefix_are_checked(self):
+        self.workspace(name="new-business", dep="wry")
+        result = self.run_gate()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("new-business", result.stderr)
+
+    def test_empty_workspace_fails(self):
+        (self.root / "Cargo.toml").write_text('[workspace]\nmembers=[]\nresolver="3"\n')
+        result = self.run_gate()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("host-deps check: ok", result.stdout)
+
+    def test_stale_lock_fails_without_mutation(self):
+        self.workspace(dep="neutral-probe")
+        lock = self.root / "Cargo.lock"
+        before = lock.read_bytes()
+        manifest = self.root / "app/Cargo.toml"
+        manifest.write_text(manifest.read_text().replace('version="0.0.0"', 'version="0.0.1"'))
+        result = self.run_gate()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(lock.read_bytes(), before)
+        self.assertNotIn("host-deps check: ok", result.stdout)
+
     def failing_cargo(self, command):
         self.workspace()
         bin_dir = self.root / "bin"
@@ -89,8 +114,36 @@ class HostDepsTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("host-deps check: ok", result.stdout)
 
-    def test_tree_failure_is_not_success(self):
-        self.failing_cargo("tree")
+    def test_dev_only_gui_dependency_is_not_a_production_violation(self):
+        self.workspace(dep="wry", section="dev-dependencies")
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_transitive_gui_dependency_is_rejected(self):
+        self.workspace(dep="neutral-probe")
+        nested = self.root / "nested"
+        (nested / "src").mkdir(parents=True)
+        (nested / "src/lib.rs").write_text("")
+        (nested / "Cargo.toml").write_text('[package]\nname="wry"\nversion="0.0.0"\nedition="2024"\n[workspace]\n')
+        manifest = self.root / "fake/Cargo.toml"
+        manifest.write_text(manifest.read_text()+'\n[dependencies]\nwry={path="../nested"}\n')
+        subprocess.run([CARGO, "generate-lockfile", "--offline"], cwd=self.root,
+                       env=self.env, check=True, capture_output=True)
+        result = self.run_gate()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("wry", result.stderr)
+
+    def test_malformed_graph_is_not_success(self):
+        self.workspace()
+        binary = self.root / "bin"
+        binary.mkdir()
+        cargo = binary / "cargo"
+        cargo.write_text("#!/bin/sh\necho not-json\n")
+        cargo.chmod(0o755)
+        self.env["PATH"] = str(binary) + os.pathsep + self.env["PATH"]
+        result = self.run_gate()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("host-deps check: ok", result.stdout)
 
     def test_metadata_failure_is_not_success(self):
         self.failing_cargo("metadata")

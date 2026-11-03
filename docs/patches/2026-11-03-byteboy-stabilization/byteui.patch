@@ -1,0 +1,40 @@
+diff --git a/.github/workflows/candidate-check.yml b/.github/workflows/candidate-check.yml
+index e40d402..04999ed 100644
+--- a/.github/workflows/candidate-check.yml
++++ b/.github/workflows/candidate-check.yml
+@@ -78,6 +78,8 @@ jobs:
+           [patch."https://github.com/byteboyai/dozer"]
+           dozer-client = { path = "$root/dozer/crates/dozer-client" }
+           dozer-core = { path = "$root/dozer/crates/dozer-core" }
++          dozer-file-io = { path = "$root/dozer/crates/dozer-file-io" }
++          dozer-git-runtime = { path = "$root/dozer/crates/dozer-git-runtime" }
+           dozer-hook = { path = "$root/dozer/crates/dozer-hook" }
+           dozer-i18n = { path = "$root/dozer/crates/dozer-i18n" }
+           dozer-mcp = { path = "$root/dozer/crates/dozer-mcp" }
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 2f338b0..5e1946d 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,10 @@
+ # Changelog
+ 
++## 0.5.2
++
++- 新增 `IconKind::NotebookTabs`（Lucide notebook-tabs），供 Digger 写字台入口使用；既有 API 不变。
++- 候选组合检查补齐 `dozer-file-io` 与 `dozer-git-runtime` 的同源映射，覆盖当前共享库依赖闭包。
++
+ ## 未发布
+ 
+ - **行为变化:** `theme::icon_size` 的缩放入口统一走 `normalize_scale`:非有限数(NaN/±∞)、零和负数一律拒绝并保留原有效值,有限正数钳制到 `[SCALE_MIN, SCALE_MAX]`。此前 `set_scale(f32::NAN)` 会把 NaN 写入全局缩放,环境变量 `BYTEUI_ICON_SCALE=99` 会直接超出上限。
+diff --git a/Cargo.toml b/Cargo.toml
+index d63664b..a2a3ae5 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,6 +1,6 @@
+ [package]
+ name = "byteui"
+-version = "0.5.1"
++version = "0.5.2"
+ edition = "2024"
+ license = "MIT"
+ description = "ByteBoy 系产品共用的 iced 0.14 UI 组件库"

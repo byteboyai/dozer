@@ -36,6 +36,9 @@ jobs:
         run: cargo check --locked --workspace --all-targets
 
       - name: 业务层宿主依赖门禁
+        run: bash scripts/check-host-deps.sh
+
+      - name: 业务层宿主依赖门禁自检
         run: bash scripts/check-host-deps.sh --self-test
 
       - name: 共享库钉版守卫

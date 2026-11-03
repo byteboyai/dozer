@@ -1,0 +1,635 @@
+diff --git a/.github/workflows/consumer-check.yml b/.github/workflows/consumer-check.yml
+index d7da137..7e39209 100644
+--- a/.github/workflows/consumer-check.yml
++++ b/.github/workflows/consumer-check.yml
+@@ -2,7 +2,7 @@ name: Consumer check
+ 
+ # Digger 的 PR 门禁:编译 + 依赖门禁 + 核心 Rust 行为测试 + 无窗口 web 同步测试与产物一致性。
+ # 完整属性集 / Release 基准 / 图形自检在 slow-check.yml(定时或手动)。
+-# 仓库没有远端时这份 workflow 只在本地分支提交,配置 remote 后生效。
++# 已接入 byteboyai/digger；发行构建使用已发布共享库，不依赖个人 path patch。
+ 
+ on:
+   push:
+@@ -50,7 +50,10 @@ jobs:
+           cargo test --locked -p digger-store -p digger-app-host -p digger-paths
+ 
+       - name: 业务层宿主依赖门禁
+-        run: bash scripts/check-host-deps.sh
++        run: bash scripts/check-host-deps.sh --self-test
++
++      - name: 实机自检入口故障测试
++        run: python3 scripts/tests/test_editor_selftest.py
+ 
+       - name: 共享库钉版守卫
+         run: bash scripts/check-shared-deps.sh --offline
+diff --git a/Cargo.toml b/Cargo.toml
+index ca28f58..b429bee 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -26,66 +26,66 @@ pulldown-cmark = { version = "0.13", default-features = false }
+ similar = "2"
+ 
+ # 共享桌面宿主契约:窗口壳、面板、Surface、布局、焦点(bytehost-desktop)。
+-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.21" }
++bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.22" }
+ # 共享窗口骨架(S1)。
+-bytehost-chrome = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.21" }
+-bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.21" }
++bytehost-chrome = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.22" }
++bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.22" }
+ # 应用 webview 的纯安全策略(origin/nonce/存储标识/数据存储清除排队);桌面宿主唯一真相。
+-bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.21" }
++bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.22" }
+ 
+ # 应用宿主平台:注册表/生命周期、与传输无关的客户端 API、与界面框架无关的面板状态机。
+-bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.21" }
+-bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.21" }
+-bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.21" }
++bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.22" }
++bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.22" }
++bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.22" }
+ # 共享设置状态 / 视图(产品中立;Digger 只在自己的 desktop 适配层消费)。
+-bytehost-settings = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.21" }
+-bytehost-settings-ui = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.21" }
++bytehost-settings = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.22" }
++bytehost-settings-ui = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.22" }
+ 
+ # 组件库(Dozer 与 Digger 共用);iced 版本必须与 byteui 一致,一起升。
+-byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.5.1" }
++byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.5.2" }
+ 
+ # Dozer 与 Digger 共用的 Usage 面板库 + 领域类型/服务接缝(Task 19/20)。
+ # 领域 `dozer-model`(纯 serde)与 `dozer-services`(trait 接缝)供业务层 `digger-store`
+ # 实现 `UsageService`;`dozer-panel-usage` 含公共 UI 与 bytehost Surface,只许宿主适配层
+ # (`digger-desktop`)依赖。dozer 现有的 `v0.5.x` tag 是 App 发布 tag;库 crate 快照用
+ # `libs-2026-10-30a` tag(ADR:升级 bytehost/byteui 时 dozer 与 digger 同日一起升)。
+-dozer-model = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
+-dozer-services = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
+-dozer-panel-usage = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
++dozer-model = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
++dozer-services = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
++dozer-panel-usage = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
+ # 同源 Todo 面板库(S3b-1):待办数据/视图/web 资源;与其它 dozer-panel-* 同 tag。
+-dozer-panel-todo = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
++dozer-panel-todo = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
+ # 同源会话面板库(S7b):列表、历史导入与审阅状态。
+-dozer-panel-conversations = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
++dozer-panel-conversations = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
+ # 同源浏览器面板库:页签 / 地址栏 / 收藏夹状态机;网页由 bytehost web_child 的不可信子视图承载。
+-dozer-panel-browser = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
+-dozer-panel-group-chat = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
++dozer-panel-browser = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
++dozer-panel-group-chat = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
+ # 同源 Project 面板库(S5a):状态 / 更新 / 视图;依赖闭包不含 dozer-app/client/core。
+-dozer-panel-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
++dozer-panel-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
+ # 同源 Files 面板库(S5b-1):文件树状态 / 更新 / 视图 / 菜单;依赖闭包同样不含 dozer-app/client/core。
+-dozer-panel-files = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
++dozer-panel-files = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
+ # 面板库依赖的宿主件(激活上下文 / 请求身份);只许宿主适配层直接依赖。
+ # 同源预览面板库(S5b-2 P3):清单 / 协议应答 / 注入脚本 / IPC 分类 + 面板状态;不含 wry。
+-dozer-panel-preview = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
++dozer-panel-preview = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
+ # 预览库背后的路由/画像/存储纯逻辑(`dozer-panel-preview` 的公开面已重导出大部分)。
+-dozer-preview-core = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
+-dozer-panel-host = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
++dozer-preview-core = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
++dozer-panel-host = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
+ # 同源终端输入 / 渲染库(S6d-1):本地开发由 .cargo/config.toml patch 到叠分支。
+-dozer-panel-term = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
++dozer-panel-term = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
+ # 同源 Agent 面板库(S6d-2):会话/页签状态、消息与更新、恢复路径与终端滚动/选区消息。
+-dozer-panel-agent = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
++dozer-panel-agent = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
+ # 面板的 git 快照(分支/脏标/remote)与「修复项目」的 git init 共用同一个 tag,图里只有一份。
+ bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.9.2", features = ["watch"] }
+ # 共享 Git 调度运行时(与 Dozer 同源;最终由 E 收口到含该 crate 的 libs tag)。
+-dozer-git-runtime = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
++dozer-git-runtime = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
+ # Project 注册表与 Project 级共享记忆的存储和进程内服务(Dozer 与 Digger 共用同一份代码,各开各的数据库文件)。
+-dozer-store-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
++dozer-store-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
+ # S6a:守护进程 / hook / 客户端 / 核心路径库(本地 patch 到 dozer-mcp-product;tag 占位)。
+-dozer-core = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
+-dozerd = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
+-dozer-hook = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
+-dozer-client = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
++dozer-core = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
++dozerd = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
++dozer-hook = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
++dozer-client = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
+ # S6e:Agent 的 MCP 服务库(按产品裁剪工具集;Digger 只开记忆三件)。
+-dozer-mcp = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-01e" }
++dozer-mcp = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-11-03a" }
+ # rusqlite 版本必须与 Dozer 一致(0.32.1),否则 Cargo.lock 出现两份。
+ rusqlite = { version = "0.32", features = ["bundled"] }
+ 
+diff --git a/docs/superpowers/reviews/2026-11-03-stabilization.md b/docs/superpowers/reviews/2026-11-03-stabilization.md
+new file mode 100644
+index 0000000..2816917
+--- /dev/null
++++ b/docs/superpowers/reviews/2026-11-03-stabilization.md
+@@ -0,0 +1,7 @@
++# 稳定化收口（2026-11-03）
++
++远端 main 基线 44b84e7。门禁默认纳入新业务成员，cargo 失败/空成员必须失败；解析使用 --locked，不能改写 lock。自检在临时 workspace 注入，不修改生产清单。
++
++候选组合：ByteUI v0.5.2、ByteHost v0.4.22、Dozer libs-2026-11-03a。候选 patch 构建与实际已发布组合的 locked 验证分开。发布前不得把本地候选通过记作发行成功。
++
++本轮具体结果、未完成项与补丁基线见 Dozer 的跨仓稳定化记录。
+diff --git a/scripts/check-host-deps.sh b/scripts/check-host-deps.sh
+index e871d92..d146394 100755
+--- a/scripts/check-host-deps.sh
++++ b/scripts/check-host-deps.sh
+@@ -1,137 +1,53 @@
+ #!/usr/bin/env bash
+-# 门禁:Digger 的**领域 / 持久化 / 业务运行时**必须与 bytehost 宿主层解耦
+-# (规格 §4 所有权表、§11 验收 A1)。只有 desktop / app-host 适配层可以依赖 bytehost。
+-#
+-# 依赖方向(规格 §4):
+-#
+-#     digger-desktop / digger-app-host  (组合根与宿主适配)
+-#                    |
+-#                    v
+-#     digger-domain / digger-store / digger-runtime  (纯业务)
+-#
+-#     bytehost-*  <-- 允许被 desktop/app-host 依赖;绝不被业务层依赖
+-#
+-# 当前状态(Task 11):
+-#   - 只有 `digger-desktop` 这一个生产 crate 存在,它**就是**宿主适配层,
+-#     因此允许依赖 bytehost-*。
+-#   - 领域/持久化/业务运行时 crate 尚未创建。门禁在它们出现后**自动纳入**,
+-#     并通过下面的 COVERAGE GAP 列表显式记录当前未覆盖的职责。
+-#
+-# 运行:scripts/check-host-deps.sh
+-# 自检:scripts/check-host-deps.sh --self-test(注入非法依赖必须失败)
+-
++# Check every workspace member except explicit host adapters, using one locked graph.
++# Never rewrite Cargo.lock, suppress Cargo/JSON errors, or omit new business packages.
+ set -euo pipefail
+ cd "$(dirname "$0")/.."
+-
+-# 宿主适配层白名单:允许依赖 bytehost-* 的 crate。
+-HOST_ADAPTER_CRATES="digger-desktop digger-app-host diggerd digger-hook digger-mcp"
+-
+-# 业务层 crate 前缀:出现即不得依赖任何 bytehost-*。
+-BUSINESS_PREFIX="^digger-(domain|store|persistence|runtime|writing|editor|project|agent)(-.*)?$"
+-
+-# 业务层禁用:bytehost-*(宿主层)、iced*(界面框架)、wry(webview)。
+-# digger-editor 这类 crate 必须保持纯库,harness 与将来的 markdown-core 才能复用(ADR-013 §2)。
+-bytehost_banned='^(bytehost-.*|iced|iced_.*|wry)$'
+-
+-tree_of() {
+-  local pkg="$1"
+-  local out
+-  out=$(cargo tree -p "$pkg" -e normal,build --target all --prefix none 2>&1) || {
+-    echo "cargo tree 失败:" >&2
+-    echo "$out" >&2
+-    exit 1
+-  }
+-  echo "$out" | awk '{print $1}' | sort -u
++HOST_ADAPTER_CRATES='digger-desktop digger-app-host diggerd digger-hook digger-mcp'
++IDENTITY_CONTRACT='digger-paths'
++metadata=$(cargo metadata --locked --all-features --format-version 1) || {
++  echo "无法读取锁定依赖图,依赖门禁失败" >&2
++  exit 1
+ }
+-
+-# 枚举 workspace 里所有 digger-* 生产包。
+-package_names=$(
+-  cargo metadata --no-deps --format-version 1 \
+-    | python3 -c 'import json,sys
+-m=json.load(sys.stdin)
+-for p in sorted(m["packages"], key=lambda p: p["name"]):
+-    print(p["name"])'
+-)
+-packages=()
+-while IFS= read -r package; do
+-  packages+=("$package")
+-done <<< "$package_names"
+-
+-checked=0
+-for pkg in "${packages[@]}"; do
+-  # 只审视非白名单的 digger-* 业务包。
+-  if [[ "$pkg" =~ $BUSINESS_PREFIX ]]; then
+-    hits=$(tree_of "$pkg" | grep -E "$bytehost_banned" || true)
+-    if [ -n "$hits" ]; then
+-      echo "业务 crate $pkg 依赖了宿主层 / 界面框架 / webview(bytehost-*、iced*、wry;应经适配层注入,不得直连):" >&2
+-      echo "$hits" >&2
+-      exit 1
+-    fi
+-    checked=$((checked + 1))
+-  fi
+-done
+-
+-echo "digger host-deps check: ok(审视了 $checked 个业务 crate)"
+-
+-# 显式记录覆盖缺口:业务层 crate 尚未建立时,门禁尚无对象可查。
+-existing_business=0
+-for pkg in "${packages[@]}"; do
+-  [[ "$pkg" =~ $BUSINESS_PREFIX ]] && existing_business=$((existing_business + 1))
+-done
+-if [ "$existing_business" -eq 0 ]; then
+-  cat >&2 <<'GAP'
+-COVERAGE GAP(Task 11):领域 / 持久化 / 业务运行时 crate 尚未创建,本门禁当前
+-  只确认宿主适配层(digger-desktop)存在且不反向被依赖。以下职责在对应 crate
+-  建立后必须纳入并执行本门禁:
+-    - 领域模型与写作文档表示(ADR-006 / ADR-012)
+-    - Project 一致性岛(project.db,ADR-003)
+-    - 业务运行时(编码任务、Agent 会话、MCP/Skill 接入)
+-  新 crate 命名落在 BUSINESS_PREFIX 内即自动纳入。
+-GAP
+-fi
+-
++printf '%s' "$metadata" | python3 -c '
++import json, re, sys
++try:
++    graph = json.load(sys.stdin)
++    packages = {p["id"]: p for p in graph["packages"]}
++    members = graph["workspace_members"]
++    nodes = {n["id"]: n for n in graph["resolve"]["nodes"]}
++    if not members:
++        raise ValueError("workspace 成员为空")
++    adapters = set(sys.argv[1].split())
++    identity = sys.argv[2]
++    banned = re.compile(r"^(bytehost-.*|iced|iced_.*|wry)$")
++    checked = 0
++    for member in members:
++        name = packages[member]["name"]
++        if name in adapters:
++            continue
++        checked += 1
++        pending = [member]
++        seen = set()
++        while pending:
++            package = pending.pop()
++            if package in seen:
++                continue
++            seen.add(package)
++            dep_name = packages[package]["name"]
++            # ProductId/ProductDirs use the pure bytehost-apps wire contract.
++            # Continue traversing it: GUI/other host dependencies remain forbidden.
++            contract = name == identity and dep_name == "bytehost-apps"
++            if banned.fullmatch(dep_name) and not contract:
++                raise ValueError(f"业务 crate {name} 依赖了宿主层 / 界面框架 / webview: {dep_name}")
++            for dep in nodes[package]["deps"]:
++                if any(k["kind"] in (None, "build") for k in dep["dep_kinds"]):
++                    pending.append(dep["pkg"])
++    print(f"digger host-deps check: ok(审视了 {checked} 个业务 crate)")
++except (KeyError, TypeError, ValueError) as error:
++    print(f"依赖门禁失败: {error}", file=sys.stderr)
++    sys.exit(1)
++' "$HOST_ADAPTER_CRATES" "$IDENTITY_CONTRACT"
+ if [ "${1:-}" = "--self-test" ]; then
+-  echo "运行门禁变异测试…" >&2
+-  # 变异探针必须落在 workspace 根之下(cargo 要求成员在根内)。
+-  probe="crates/_host_deps_probe"
+-  root_bak="$(mktemp)"
+-  cp Cargo.toml "$root_bak"
+-  cleanup() {
+-    rm -rf "$probe" "$root_bak"
+-    cp "$root_bak" Cargo.toml 2>/dev/null || true
+-  }
+-  trap cleanup EXIT
+-  mkdir -p "$probe/src"
+-  echo "" > "$probe/src/lib.rs"
+-  abs_core="$(cd ../bytehost/crates/bytehost-core && pwd)"
+-
+-  # 每种禁用依赖各注入一次:必须被拦下;恢复后必须通过。
+-  inject() {
+-    local label="$1" dep="$2"
+-    cat > "$probe/Cargo.toml" <<TOMLEOF
+-[package]
+-name = "digger-domain-probe"
+-version = "0.0.0"
+-edition = "2024"
+-publish = false
+-[dependencies]
+-$dep
+-TOMLEOF
+-    # 门禁按 `crates/*` 通配即可发现探针,无需改根 members。
+-    if bash "$0" >/dev/null 2>&1; then
+-      echo "变异测试失败:业务包依赖 $label 后门禁仍然通过" >&2
+-      exit 1
+-    fi
+-    echo "  变异通过:业务包→$label 被拦下" >&2
+-  }
+-  inject "bytehost-*" "bytehost-core = { path = \"$abs_core\" }"
+-  inject "iced" 'iced = { workspace = true }'
+-  inject "wry" 'wry = { workspace = true }'
+-  rm -rf "$probe"
+-
+-  if ! bash "$0" >/dev/null 2>&1; then
+-    echo "变异测试失败:恢复后门禁未通过" >&2
+-    exit 1
+-  fi
+-  echo "门禁变异测试:ok(注入即失败、恢复即通过)" >&2
++  exec python3 scripts/tests/test_host_deps.py
+ fi
+diff --git a/scripts/run-editor-selftest.sh b/scripts/run-editor-selftest.sh
+index b53cd74..c4dacfc 100755
+--- a/scripts/run-editor-selftest.sh
++++ b/scripts/run-editor-selftest.sh
+@@ -21,20 +21,37 @@ case "${1:-harness}" in
+   usage) export DIGGER_LIFECYCLE_SELFTEST=usage ;;
+   *) echo "用法: $0 [harness|lifecycle|usage]" >&2; exit 2 ;;
+ esac
+-cargo build -q -p digger-desktop --bin digger
+-bin="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')"
+-exe="$( (ls -t "$bin"/*/debug/digger "$bin"/debug/digger 2>/dev/null || true) | head -1)"
+-[ -x "$exe" ] || { echo "找不到 digger 二进制(在 $bin 下)" >&2; exit 1; }
++# Select only the executable emitted by this successful build, never a cached mtime winner.
++cargo build --locked -q -p digger-desktop --bin digger --message-format=json > "$data/build.jsonl"
++exe="$(python3 - "$data/build.jsonl" <<'PYBUILD'
++import json, sys
++rows = [json.loads(line) for line in open(sys.argv[1])]
++paths = {row["executable"] for row in rows
++         if row.get("reason") == "compiler-artifact"
++         and row.get("target", {}).get("name") == "digger"
++         and "bin" in row.get("target", {}).get("kind", [])
++         and row.get("executable")}
++if len(paths) != 1:
++    raise SystemExit("expected exactly one digger executable from this build")
++print(paths.pop())
++PYBUILD
++)"
++[ -x "$exe" ] || { echo "本次构建的 digger 不可执行: $exe" >&2; exit 1; }
+ 
+ out="$data/selftest.log"
+ set +e
+-( "$exe" >"$out" 2>&1 ) &
+-pid=$!
+-( sleep "${SELFTEST_TIMEOUT:-180}"; kill "$pid" 2>/dev/null ) &
+-guard=$!
+-wait "$pid"
++python3 - "$exe" "$out" "${SELFTEST_TIMEOUT:-180}" <<'PYRUN'
++import subprocess, sys
++with open(sys.argv[2], "w") as output:
++    try:
++        result = subprocess.run([sys.argv[1]], stdout=output, stderr=subprocess.STDOUT,
++                                timeout=float(sys.argv[3]))
++        code = result.returncode
++    except subprocess.TimeoutExpired:
++        code = 124
++raise SystemExit(code if code >= 0 else 128 - code)
++PYRUN
+ code=$?
+-kill "$guard" 2>/dev/null
+ set -e
+ cat "$out"
+ # 进程正常退出但没打出 SUMMARY = 自检没跑完(例如提前被关掉),同样算失败
+@@ -44,7 +61,7 @@ if ! grep -q '^SUMMARY' "$out"; then
+   exit 1
+ fi
+ if [ "$code" -ne 0 ]; then
+-  echo "editor selftest: 失败(退出码 $code;被超时终止时为 143)" >&2
++  echo "editor selftest: 失败(退出码 $code;被超时终止时为 124)" >&2
+   exit 1
+ fi
+ echo "editor selftest: ok"
+diff --git a/scripts/tests/test_editor_selftest.py b/scripts/tests/test_editor_selftest.py
+new file mode 100644
+index 0000000..223203a
+--- /dev/null
++++ b/scripts/tests/test_editor_selftest.py
+@@ -0,0 +1,69 @@
++"""The GUI harness must run the executable from the current build."""
++import json
++import os
++from pathlib import Path
++import shutil
++import shlex
++import subprocess
++import tempfile
++import unittest
++
++SOURCE = Path(__file__).resolve().parents[1] / "run-editor-selftest.sh"
++class EditorHarnessTests(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory(prefix="editor-harness-test-")
++        self.addCleanup(self.temp.cleanup)
++        self.root = Path(self.temp.name)
++        (self.root / "scripts").mkdir()
++        shutil.copy2(SOURCE, self.root / "scripts/run-editor-selftest.sh")
++        binary = self.root / "bin"
++        binary.mkdir()
++        fresh = self.root / "fresh-digger"
++        fresh.write_text('#!/bin/sh\necho "SUMMARY current build passed"\n')
++        fresh.chmod(0o755)
++        stale = self.root / "target/debug/digger"
++        stale.parent.mkdir(parents=True)
++        stale.write_text('#!/bin/sh\necho "stale executable selected" >&2\nexit 42\n')
++        stale.chmod(0o755)
++        cargo = binary / "cargo"
++        cargo.write_text('#!/usr/bin/env python3\nimport json,os,sys\n'
++            'assert "--locked" in sys.argv and "--message-format=json" in sys.argv\n'
++            'if os.environ.get("BUILD_FAIL"): sys.exit(101)\n'
++            'if not os.environ.get("NO_ARTIFACT"):\n'
++            ' print(json.dumps({"reason":"compiler-artifact","target":{"name":"digger","kind":["bin"]},"executable":os.environ["FRESH_EXE"]}))\n')
++        cargo.chmod(0o755)
++        self.env = dict(os.environ, PATH=str(binary)+os.pathsep+os.environ["PATH"], FRESH_EXE=str(fresh))
++
++    def run_harness(self):
++        return subprocess.run(["bash", "scripts/run-editor-selftest.sh"], cwd=self.root,
++            env=self.env, capture_output=True, text=True, timeout=10)
++
++    def test_uses_only_the_executable_from_this_build(self):
++        result = self.run_harness()
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertIn("SUMMARY current build passed", result.stdout)
++        self.assertNotIn("stale executable selected", result.stderr)
++
++    def test_timeout_reaps_the_test_process(self):
++        fresh = Path(self.env["FRESH_EXE"])
++        marker = self.root / "pid"
++        fresh.write_text(f'#!/bin/sh\necho $$ > {shlex.quote(str(marker))}\nexec /bin/sleep 30\n')
++        self.env["SELFTEST_TIMEOUT"] = "1"
++        result = self.run_harness()
++        self.assertNotEqual(result.returncode, 0)
++        pid = int(marker.read_text())
++        with self.assertRaises(ProcessLookupError):
++            os.kill(pid, 0)
++
++    def test_missing_artifact_fails(self):
++        self.env["NO_ARTIFACT"] = "1"
++        self.assertNotEqual(self.run_harness().returncode, 0)
++
++    def test_failed_build_cannot_run_a_cached_executable(self):
++        self.env["BUILD_FAIL"] = "1"
++        result = self.run_harness()
++        self.assertNotEqual(result.returncode, 0)
++        self.assertNotIn("SUMMARY", result.stdout)
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/scripts/tests/test_host_deps.py b/scripts/tests/test_host_deps.py
+new file mode 100644
+index 0000000..5f3446d
+--- /dev/null
++++ b/scripts/tests/test_host_deps.py
+@@ -0,0 +1,164 @@
++"""Exercise the host-dependency gate against real Cargo graphs and command failures."""
++import os
++from pathlib import Path
++import shutil
++import subprocess
++import tempfile
++import unittest
++
++SOURCE = Path(__file__).resolve().parents[1] / "check-host-deps.sh"
++CARGO = shutil.which("cargo")
++
++
++class HostDepsTests(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory(prefix="host-deps-test-")
++        self.addCleanup(self.temp.cleanup)
++        self.root = Path(self.temp.name)
++        (self.root / "scripts").mkdir()
++        shutil.copy2(SOURCE, self.root / "scripts/check-host-deps.sh")
++        self.env = dict(os.environ, CARGO_NET_OFFLINE="true",
++                        CARGO_TARGET_DIR=str(self.root / "target"))
++
++    def run_gate(self):
++        return subprocess.run(["bash", "scripts/check-host-deps.sh"], cwd=self.root,
++                              env=self.env, capture_output=True, text=True, timeout=30)
++
++    def workspace(self, name="digger-payments", dep=None, optional=False, section="dependencies"):
++        (self.root / "Cargo.toml").write_text('[workspace]\nresolver="3"\nmembers=["app"]\nexclude=["fake"]\n')
++        app = self.root / "app"
++        (app / "src").mkdir(parents=True)
++        (app / "src/lib.rs").write_text("")
++        manifest = f'[package]\nname="{name}"\nversion="0.0.0"\nedition="2024"\n'
++        if dep:
++            fake = self.root / "fake"
++            (fake / "src").mkdir(parents=True)
++            (fake / "src/lib.rs").write_text("")
++            (fake / "Cargo.toml").write_text(
++                f'[package]\nname="{dep}"\nversion="0.0.0"\nedition="2024"\n[workspace]\n')
++            opt = ", optional=true" if optional else ""
++            manifest += f'[{section}]\n{dep}={{path="../fake"{opt}}}\n'
++        (app / "Cargo.toml").write_text(manifest)
++        subprocess.run([CARGO, "generate-lockfile", "--offline"], cwd=self.root,
++                       env=self.env, check=True, capture_output=True)
++
++    def test_new_business_members_are_checked(self):
++        self.workspace(dep="wry")
++        result = self.run_gate()
++        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertIn("业务 crate digger-payments", result.stderr)
++
++    def test_optional_dependencies_are_checked(self):
++        self.workspace(name="digger-store", dep="iced", optional=True)
++        result = self.run_gate()
++        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertIn("iced", result.stderr)
++
++    def test_build_dependencies_are_checked(self):
++        self.workspace(dep="bytehost-probe", section="build-dependencies")
++        result = self.run_gate()
++        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertIn("bytehost-probe", result.stderr)
++
++    def test_target_dependencies_are_checked(self):
++        self.workspace(dep="wry", section="target.'cfg(target_os = \"windows\")'.dependencies")
++        result = self.run_gate()
++        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertIn("业务 crate digger-payments", result.stderr)
++
++    def test_legal_business_dependency_passes(self):
++        self.workspace(dep="neutral-probe")
++        result = self.run_gate()
++        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertIn("1 个业务 crate", result.stdout)
++
++    def test_explicit_host_adapter_is_allowed(self):
++        self.workspace(name="digger-desktop", dep="wry")
++        result = self.run_gate()
++        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
++
++    def test_members_outside_the_product_prefix_are_checked(self):
++        self.workspace(name="new-business", dep="wry")
++        result = self.run_gate()
++        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertIn("new-business", result.stderr)
++
++    def test_empty_workspace_fails(self):
++        (self.root / "Cargo.toml").write_text('[workspace]\nmembers=[]\nresolver="3"\n')
++        result = self.run_gate()
++        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertNotIn("host-deps check: ok", result.stdout)
++
++    def test_stale_lock_fails_without_mutation(self):
++        self.workspace(dep="neutral-probe")
++        lock = self.root / "Cargo.lock"
++        before = lock.read_bytes()
++        manifest = self.root / "app/Cargo.toml"
++        manifest.write_text(manifest.read_text().replace('version="0.0.0"', 'version="0.0.1"'))
++        result = self.run_gate()
++        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertEqual(lock.read_bytes(), before)
++        self.assertNotIn("host-deps check: ok", result.stdout)
++
++    def test_product_identity_contract_is_allowed(self):
++        self.workspace(name="digger-paths", dep="bytehost-apps")
++        result = self.run_gate()
++        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
++
++    def test_product_identity_cannot_depend_on_gui(self):
++        self.workspace(name="digger-paths", dep="wry")
++        result = self.run_gate()
++        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertIn("wry", result.stderr)
++
++    def failing_cargo(self, command):
++        self.workspace()
++        bin_dir = self.root / "bin"
++        bin_dir.mkdir()
++        cargo = bin_dir / "cargo"
++        cargo.write_text(f'#!/bin/sh\nif [ "$1" = "{command}" ]; then\n'
++                         '  echo "injected cargo failure" >&2\n  exit 101\nfi\n'
++                         f'exec "{CARGO}" "$@"\n')
++        cargo.chmod(0o755)
++        self.env["PATH"] = str(bin_dir) + os.pathsep + self.env["PATH"]
++        result = self.run_gate()
++        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertNotIn("host-deps check: ok", result.stdout)
++
++    def test_dev_only_gui_dependency_is_not_a_production_violation(self):
++        self.workspace(dep="wry", section="dev-dependencies")
++        result = self.run_gate()
++        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
++
++    def test_transitive_gui_dependency_is_rejected(self):
++        self.workspace(dep="neutral-probe")
++        nested = self.root / "nested"
++        (nested / "src").mkdir(parents=True)
++        (nested / "src/lib.rs").write_text("")
++        (nested / "Cargo.toml").write_text('[package]\nname="wry"\nversion="0.0.0"\nedition="2024"\n[workspace]\n')
++        manifest = self.root / "fake/Cargo.toml"
++        manifest.write_text(manifest.read_text()+'\n[dependencies]\nwry={path="../nested"}\n')
++        subprocess.run([CARGO, "generate-lockfile", "--offline"], cwd=self.root,
++                       env=self.env, check=True, capture_output=True)
++        result = self.run_gate()
++        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertIn("wry", result.stderr)
++
++    def test_malformed_graph_is_not_success(self):
++        self.workspace()
++        binary = self.root / "bin"
++        binary.mkdir()
++        cargo = binary / "cargo"
++        cargo.write_text("#!/bin/sh\necho not-json\n")
++        cargo.chmod(0o755)
++        self.env["PATH"] = str(binary) + os.pathsep + self.env["PATH"]
++        result = self.run_gate()
++        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertNotIn("host-deps check: ok", result.stdout)
++
++    def test_metadata_failure_is_not_success(self):
++        self.failing_cargo("metadata")
++
++
++if __name__ == "__main__":
++    unittest.main()
