@@ -162,6 +162,7 @@ NON_UI_STRINGS = {
     ("crates/dozer-panel-project/src/update.rs", "查询总结批次失败,停止轮询"): "库内诊断日志(`crate::log::*` → tracing);不面向用户(日志保持原文)",
     ("crates/dozer-panel-todo/src/update.rs", "新分类"): "新建分类的默认名,是**用户数据的初始值**(落库后立即进入改名态);按计划「保留用户分类名」,不本地化",
     ("crates/dozer-panel-todo/src/update.rs", "任务/分类读取失败(dozerd 不可用): {message}"): "只进 `WorkspaceState.diagnostics`,由宿主 `drain_outboxes` 写 debug 日志;不面向用户(原先是 `log_debug!` 参数,抽库后库不依赖 `dozer-core`,改走诊断通道)",
+    ("crates/dozer-services/src/lib.rs", "daemon 错误: "): "协议错误前缀解析(用于提取 Busy/Limit/Timeout 分类),不是独立 UI 文案",
 }
 
 # 非 app 的后端 crate:字符串不是 UI,按 §10 归为"错误/诊断适配",由 Task 07 与

@@ -87,10 +87,13 @@ pub fn save_text_with_context(
         Some(project_root) => {
             let root = ProjectRoot::open(project_root).map_err(file_error_to_io)?;
             let relative = path.strip_prefix(project_root).map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::PermissionDenied, "目标文件不在项目根内")
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "target is outside the project root",
+                )
             })?;
             let relative = relative.to_str().ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "目标路径不是 UTF-8")
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "target path is not UTF-8")
             })?;
             (root, relative.to_string())
         }
@@ -98,10 +101,16 @@ pub fn save_text_with_context(
             let parent = path.parent().unwrap_or_else(|| Path::new("."));
             let root = ProjectRoot::open(parent).map_err(file_error_to_io)?;
             let file_name = path.file_name().ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "目标路径缺少文件名")
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "target path has no file name",
+                )
             })?;
             let file_name = file_name.to_str().ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "目标文件名不是 UTF-8")
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "target file name is not UTF-8",
+                )
             })?;
             (root, file_name.to_string())
         }

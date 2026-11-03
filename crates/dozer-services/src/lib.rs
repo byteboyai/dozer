@@ -107,7 +107,7 @@ pub trait TodoService: Send + Sync {
         Box::pin(async {
             Err(ServiceError::new(
                 ServiceErrorKind::Rejected,
-                "该服务不支持任务执行 attempt 接口",
+                "task execution attempts are not supported by this service",
             ))
         })
     }
