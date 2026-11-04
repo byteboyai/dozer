@@ -257,6 +257,8 @@
   "settings.git.disconnect": "Disconnect",
   "settings.git.generate_pat": "No PAT? Generate one",
   "settings.git.not_connected": "Not connected",
+  "settings.git.reconnect": "Reconnect",
+  "settings.git.unreconciled": "Credential saved; account details need recovery. Reconnect or disconnect.",
   "settings.git.title": "Git Accounts",
   "settings.git.validating": "Validating…",
   "settings.language.conflict": "Language was changed elsewhere. Please choose again.",

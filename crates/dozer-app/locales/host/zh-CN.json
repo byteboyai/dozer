@@ -257,6 +257,8 @@
   "settings.git.disconnect": "断开连接",
   "settings.git.generate_pat": "没有 PAT?点此生成",
   "settings.git.not_connected": "未连接",
+  "settings.git.reconnect": "重新连接",
+  "settings.git.unreconciled": "凭据已保存，账户信息待恢复。请重新连接或断开连接。",
   "settings.git.title": "Git 账户",
   "settings.git.validating": "校验中…",
   "settings.language.conflict": "语言已在别处被修改，请重新选择。",
