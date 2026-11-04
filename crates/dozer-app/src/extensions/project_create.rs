@@ -4,7 +4,7 @@
 //! ProjectCreateOverlay`,结构对照 `extensions::file_history` + 同名 overlay
 //! 的既有分工:本模块只管状态/消息/视图/异步落盘逻辑,不碰 winit/wgpu。
 
-use crate::git_accounts::{self, GitProvider, RemoteRepo};
+use crate::git_accounts::{self, GitProvider, LocalizedGitError, RemoteRepo};
 use crate::panel_host::HostRequest;
 use crate::ui_text::text;
 use byteui::interaction::icons;
@@ -563,10 +563,12 @@ pub(crate) fn card_logical_size(
     window_width: f32,
     window_height: f32,
 ) -> iced_winit::core::Size<f32> {
-    iced_winit::core::Size::new(
-        (window_width * crate::platform::overlay_window::POPUP_WIDTH_FRACTION).max(560.0),
-        (window_height * 0.75).max(520.0),
-    )
+    // 唯一几何策略在 bytehost-settings:40% 宽 / 75% 高,正常空间最小 560×520,
+    // 父窗口过小时按可用区域钳制并保留至少 16 的留白。
+    let rect = bytehost_settings::dialog::DialogGeometry::default().card_rect(
+        bytehost_settings::dialog::LogicalSize::new(window_width, window_height),
+    );
+    iced_winit::core::Size::new(rect.width, rect.height)
 }
 
 fn tab_hover_t(hover: Option<Tab>, tab: Tab) -> f32 {
@@ -966,7 +968,7 @@ fn remote_repo_field<'a>(form: &'a CloneForm, locale: &str) -> Element<'a> {
             .color(colors.dim)
             .into(),
             Some(RepoListState::Error(e)) => {
-                let detail = crate::i18n::host_render(e, locale);
+                let detail = crate::i18n::host_render(&e, locale);
                 let msg = text(crate::i18n::host_text_args(
                     "project_create.repo_list_failed",
                     "Failed to load repositories: {e}",

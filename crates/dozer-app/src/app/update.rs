@@ -2135,6 +2135,12 @@ impl App {
                 self.open_settings();
             }
             Message::Settings(msg) => {
+                // 关闭由共享对话框控制器驱动:先发 Destroy,等驱动确认实例
+                // 销毁后才释放内容与敏感输入。
+                if matches!(msg, settings::Message::Close) {
+                    self.close_settings_dialog();
+                    return;
+                }
                 // 主题切换要在设置 update(它会 set_scheme 改全局配色)之后,把
                 // 所有已开预览 webview 按新主题重载——flyfish 的 theme 是 URL
                 // 参数(见 preview::flyfish_url),不重载不会跟着变。两个预览
@@ -2204,11 +2210,20 @@ impl App {
                 let daemon = crate::host_adapters::services::services_for(&self.client).daemon;
                 let apps = self.client.clone();
                 let handle = self.handle.clone();
+                let admission = self.settings_git_admission();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::Settings(m));
                 };
-                settings::update(&mut self.settings, msg, daemon, apps, &handle, emit);
+                settings::update(
+                    &mut self.settings,
+                    msg,
+                    daemon,
+                    apps,
+                    admission,
+                    &handle,
+                    emit,
+                );
                 if let Some((id, ok)) = uninstall_result
                     && self.purge_intents.remove(&id)
                     && ok

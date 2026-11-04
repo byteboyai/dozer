@@ -10,11 +10,7 @@
 use std::sync::Arc;
 
 use iced_wgpu::wgpu;
-use iced_winit::conversion;
-use iced_winit::core::time::Instant;
-use iced_winit::core::window;
-use iced_winit::core::{Event, mouse};
-use iced_winit::runtime::user_interface::UserInterface;
+use iced_winit::core::mouse;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
@@ -24,9 +20,7 @@ use winit::window::{Window, WindowId};
 use crate::app::{App, Message};
 use crate::extensions::settings;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{
-    backdrop_card, full_window_overlay_bounds, open_child_window,
-};
+use crate::platform::overlay_window::{backdrop_card, full_window_overlay_bounds};
 
 /// 卡片逻辑尺寸——与"新建项目"弹窗(`project_create::card_logical_size`)
 /// 完全一致:宽度 = 主窗口宽度 40%(下限 560),高度 = 主窗口高度 75%(下限
@@ -37,31 +31,26 @@ fn card_logical_size(window: &Window) -> LogicalSize<f32> {
     LogicalSize::new(size.width, size.height)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SyncAction {
-    Open,
-    Close,
-    Noop,
-}
-
-pub(crate) fn sync_action(open: bool, overlay_present: bool) -> SyncAction {
-    match (open, overlay_present) {
-        (true, false) => SyncAction::Open,
-        (false, true) => SyncAction::Close,
-        (true, true) | (false, false) => SyncAction::Noop,
-    }
-}
-
 pub(crate) struct SettingsOverlay {
     window: Arc<Window>,
     gpu: OverlayGpu,
     cursor: mouse::Cursor,
     modifiers: ModifiersState,
+    /// 创建这扇窗口时的共享对话框身份。销毁 / 回包按它定位实例。
+    key: bytehost_settings::dialog::DialogKey,
 }
 
 impl SettingsOverlay {
     pub(crate) fn window_id(&self) -> WindowId {
         self.window.id()
+    }
+
+    pub(crate) fn key(&self) -> bytehost_settings::dialog::DialogKey {
+        self.key
+    }
+
+    pub(crate) fn focus(&self) {
+        self.window.focus_window();
     }
 
     pub(crate) fn request_redraw(&self) {
@@ -72,14 +61,15 @@ impl SettingsOverlay {
         self.window.clone()
     }
 
-    pub(crate) fn open(
+    pub(crate) fn try_open(
         main_window: &Arc<Window>,
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         instance: &wgpu::Instance,
         el: &ActiveEventLoop,
-    ) -> SettingsOverlay {
+        key: bytehost_settings::dialog::DialogKey,
+    ) -> Result<SettingsOverlay, String> {
         let scale = main_window.scale_factor();
         let (pos, size) = full_window_overlay_bounds(
             main_window
@@ -87,17 +77,28 @@ impl SettingsOverlay {
                 .unwrap_or(PhysicalPosition::new(0, 0)),
             main_window.inner_size(),
         );
-        let window = open_child_window(main_window, pos, size, "settings", el);
-        window.set_ime_allowed(true);
+        let (window, gpu) = bytehost_desktop::dialog::try_create_dialog_resources(
+            || {
+                let window = bytehost_desktop::overlay::try_open_child_window(
+                    main_window,
+                    pos,
+                    size,
+                    "settings",
+                    el,
+                )?;
+                window.set_ime_allowed(true);
+                Ok(window)
+            },
+            |window| OverlayGpu::try_open(window, instance, adapter, device, queue, size, scale),
+        )?;
 
-        let gpu = OverlayGpu::open(&window, instance, adapter, device, queue, size, scale);
-
-        SettingsOverlay {
+        Ok(SettingsOverlay {
             window,
             gpu,
             cursor: mouse::Cursor::Unavailable,
             modifiers: ModifiersState::default(),
-        }
+            key,
+        })
     }
 
     pub(crate) fn reposition(
@@ -119,139 +120,51 @@ impl SettingsOverlay {
         let Some(state) = app.settings.as_ref() else {
             return;
         };
-        let mut interface = UserInterface::build(
-            backdrop_card(
-                settings::settings_card(state, app.locale.active_locale()).map(Message::Settings),
-                card_logical_size(&self.window),
-            ),
-            self.gpu.viewport.logical_size(),
-            std::mem::take(&mut self.gpu.cache),
-            &mut self.gpu.renderer,
+        let content = backdrop_card(
+            settings::settings_card(state, app.locale.active_locale()).map(Message::Settings),
+            card_logical_size(&self.window),
         );
-        // 必须喂 `RedrawRequested` 而非空切片——见 `overlay_gpu.rs::redraw`
-        // 同一处注释,否则弹窗内 hover/focus 描边永远不生效。
-        let (state, _) = interface.update(
-            &[Event::Window(
-                window::Event::RedrawRequested(Instant::now()),
-            )],
-            self.cursor,
-            &mut self.gpu.renderer,
-            &mut self.gpu.clipboard,
-            &mut Vec::new(),
-        );
-        if let iced_winit::runtime::user_interface::State::Updated {
-            mouse_interaction,
-            input_method,
-            ..
-        } = state
-        {
-            crate::platform::overlay_gpu::apply_cursor(&self.window, mouse_interaction);
-            // 输入法候选条跟着文本光标走;缺了这步候选条会落在整个窗口左上角。
-            crate::platform::overlay_gpu::apply_input_method(&self.window, &input_method);
-        }
-        interface.draw(
-            &mut self.gpu.renderer,
-            &iced_winit::core::Theme::Dark,
-            &iced_winit::core::renderer::Style::default(),
-            self.cursor,
-        );
-        self.gpu.cache = interface.into_cache();
-
-        let Ok(frame) = self.gpu.surface.get_current_texture() else {
-            self.window.request_redraw();
-            return;
-        };
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        self.gpu
-            .renderer
-            .present(None, frame.texture.format(), &view, &self.gpu.viewport);
-        frame.present();
+        // 建界面 / 空事件布局 / draw / present 都在共享 `OverlayGpu` 里,
+        // 产品侧不再维护第二份渲染与输入策略。
+        self.gpu.redraw(&self.window, self.cursor, content);
     }
 
     pub(crate) fn handle_input(&mut self, app: &mut App, event: &WindowEvent) -> Vec<Message> {
-        if let WindowEvent::KeyboardInput {
+        let was_composing = self.gpu.is_composing();
+        let escape = matches!(event, WindowEvent::KeyboardInput {
             event: key_event,
             is_synthetic: false,
             ..
-        } = event
-            && key_event.state == winit::event::ElementState::Pressed
+        }
+            if key_event.state == winit::event::ElementState::Pressed
             && key_event.logical_key
                 == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
-        {
-            return vec![Message::Settings(settings::Message::Close)];
-        }
-        if let WindowEvent::ModifiersChanged(new_modifiers) = event {
-            self.modifiers = new_modifiers.state();
-        }
-        if let WindowEvent::CursorMoved { position, .. } = event {
-            self.cursor = mouse::Cursor::Available(conversion::cursor_position(
-                *position,
-                self.gpu.viewport.scale_factor(),
-            ));
-        }
-        let Some(iced_event) = conversion::window_event(
-            event.clone(),
-            self.gpu.viewport.scale_factor(),
-            self.modifiers,
-        ) else {
+        );
+        // modifiers / cursor / winit→iced 转换只有共享实现一份。
+        let Some(iced_event) =
+            self.gpu
+                .track_and_convert(&mut self.cursor, &mut self.modifiers, event)
+        else {
             return Vec::new();
         };
-        let events: [Event; 1] = [iced_event];
         let Some(state) = app.settings.as_ref() else {
             return Vec::new();
         };
-        let mut interface = UserInterface::build(
-            backdrop_card(
-                settings::settings_card(state, app.locale.active_locale()).map(Message::Settings),
-                card_logical_size(&self.window),
-            ),
-            self.gpu.viewport.logical_size(),
-            std::mem::take(&mut self.gpu.cache),
-            &mut self.gpu.renderer,
+        let content = backdrop_card(
+            settings::settings_card(state, app.locale.active_locale()).map(Message::Settings),
+            card_logical_size(&self.window),
         );
-        let mut messages = Vec::new();
-        let (state, _) = interface.update(
-            &events,
-            self.cursor,
-            &mut self.gpu.renderer,
-            &mut self.gpu.clipboard,
-            &mut messages,
-        );
-        if let iced_winit::runtime::user_interface::State::Updated {
-            mouse_interaction,
-            input_method,
-            ..
-        } = state
+        let (mut messages, status) =
+            self.gpu
+                .dispatch_with_status(&self.window, self.cursor, content, iced_event);
+        if escape
+            && !was_composing
+            && status == iced_winit::core::event::Status::Ignored
+            && messages.is_empty()
         {
-            crate::platform::overlay_gpu::apply_cursor(&self.window, mouse_interaction);
-            // 输入法候选条跟着文本光标走;缺了这步候选条会落在整个窗口左上角。
-            crate::platform::overlay_gpu::apply_input_method(&self.window, &input_method);
+            let action = settings::escape_message(state).unwrap_or(settings::Message::Close);
+            messages.push(Message::Settings(action));
         }
-        self.gpu.cache = interface.into_cache();
-        self.window.request_redraw();
         messages
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sync_action_opens_when_open_and_no_overlay() {
-        assert_eq!(sync_action(true, false), SyncAction::Open);
-    }
-
-    #[test]
-    fn sync_action_closes_when_closed_but_overlay_present() {
-        assert_eq!(sync_action(false, true), SyncAction::Close);
-    }
-
-    #[test]
-    fn sync_action_noop_when_states_already_match() {
-        assert_eq!(sync_action(true, true), SyncAction::Noop);
-        assert_eq!(sync_action(false, false), SyncAction::Noop);
     }
 }

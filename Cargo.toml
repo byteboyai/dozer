@@ -54,6 +54,8 @@ bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.
 bytehost-chrome = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.22" }
 bytehost-settings = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.22" }
 bytehost-settings-ui = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.22" }
+# 共享 Git 账户契约 + 可注入服务;Dozer 注入 dozer-git Keychain 与既有 JSON 路径。
+bytehost-git-accounts = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.22", features = ["http", "keyring"] }
 # ByteUI 共享组件库：与 bytehost 一样只在 workspace 钉一次 tag，
 # 消费 crate 用 `byteui.workspace = true`。升级时只改这一段。
 byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.5.2" }

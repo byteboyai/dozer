@@ -134,9 +134,10 @@ pub(crate) fn apply_effects(app: &mut App, effects: Vec<Effect>) {
                 });
             }
             Effect::OpenSettingsApps => {
-                app.settings = Some(crate::extensions::settings::State::load_with_tab(
-                    app.daemon_unavailable.is_some(),
-                    crate::extensions::settings::SettingsTab::Apps,
+                // 走共享控制器打开,不能直接替换内容状态绕过窗口生命周期。
+                app.open_settings_page(Some(
+                    bytehost_settings::PageId::new(bytehost_settings::APPS_ID)
+                        .expect("static apps page id"),
                 ));
                 // 触发「应用」页的数据加载(切到 Apps 页会现拉探测与列表)。
                 let _ = app.proxy.send_event(Message::Settings(

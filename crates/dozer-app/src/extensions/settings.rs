@@ -3,9 +3,14 @@
 //! 渲染宿主是独立原生窗口 `platform::settings_overlay::SettingsOverlay`。
 
 use crate::extensions::settings_apps;
-use crate::git_accounts::{self, GitAccountsState, GitProvider};
+use crate::git_accounts::{self, GitProvider};
 use crate::ui_text::text;
 use bytehost_client::AppHostApi;
+use bytehost_git_accounts::{
+    AccountSnapshot, Admission, CommitOutcome, ConnectedAccount, GitAccountError, RequestTicket,
+    SecretToken,
+};
+use bytehost_settings::git::{GitIntent, GitPageState};
 use bytehost_settings::{PageDescriptor, PageId, PageRegistry, SettingsState};
 use bytehost_settings_ui::{LanguageOption, Shell, Text};
 use byteui::theme::color::ColorScheme;
@@ -17,30 +22,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 dozer_core::scope!(LOG, module, "settings");
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConnectState {
-    NotConnected,
-    Editing {
-        token: String,
-        busy: bool,
-        error: Option<dozer_model::LocalizedText>,
-    },
-    Connected {
-        username: String,
-    },
-}
-
-impl ConnectState {
-    fn from_accounts(accounts: &GitAccountsState, provider: GitProvider) -> ConnectState {
-        match accounts.get(provider) {
-            Some(acc) => ConnectState::Connected {
-                username: acc.username.clone(),
-            },
-            None => ConnectState::NotConnected,
-        }
-    }
-}
 
 /// "高级"区块(停止/重新启动 dozerd)的状态机。`Idle`/`Stopped` 各自内嵌
 /// `error: Option<String>`——失败态就是"回到默认态/已停止态,附一行错误
@@ -79,6 +60,28 @@ pub use bytehost_settings::SaveStatus as LanguageStatus;
 pub type LanguageState = bytehost_settings::SelectionState<LocalePreference>;
 
 /// 产品注册的页面顺序:Theme / Git / Advanced / Apps / Language(默认 Theme)。
+/// Inner page controls consume Escape before closing the owning dialog.
+pub(crate) fn escape_message(state: &State) -> Option<Message> {
+    if state
+        .core
+        .current()
+        .is_some_and(|page| page.as_str() == bytehost_settings::APPS_ID)
+    {
+        if let Some(message) = state.apps.escape_message() {
+            return Some(Message::Apps(message));
+        }
+    }
+    if state
+        .core
+        .current()
+        .is_some_and(|page| page.as_str() == "dozer.advanced")
+        && matches!(state.advanced, AdvancedState::ConfirmingStop { .. })
+    {
+        return Some(Message::AdvancedStopCancel);
+    }
+    None
+}
+
 pub fn product_registry() -> PageRegistry {
     PageRegistry::new(vec![
         PageDescriptor::built_in(
@@ -86,11 +89,11 @@ pub fn product_registry() -> PageRegistry {
             "Theme",
         )
         .with_text_key("settings.tab.theme"),
-        PageDescriptor::custom(
-            PageId::new("dozer.git").expect("static id"),
-            "settings.tab.git",
+        PageDescriptor::built_in(
+            PageId::new(bytehost_settings::GIT_ID).expect("static id"),
             "Git Accounts",
-        ),
+        )
+        .with_text_key("settings.tab.git"),
         PageDescriptor::custom(
             PageId::new("dozer.advanced").expect("static id"),
             "settings.tab.advanced",
@@ -108,13 +111,19 @@ pub fn product_registry() -> PageRegistry {
         .with_text_key("settings.tab.language"),
     ])
     .expect("Dozer 设置页注册必须有效")
+    // 历史直达入口 `dozer.git` 继续可用,但导航里只有一页。
+    .with_alias(
+        PageId::new("dozer.git").expect("static legacy id"),
+        PageId::new(bytehost_settings::GIT_ID).expect("static id"),
+    )
+    .expect("legacy dozer.git alias must resolve")
 }
 
 /// 产品枚举 → 共享页面 ID。
 pub fn page_id(tab: SettingsTab) -> PageId {
     let raw = match tab {
         SettingsTab::Theme => bytehost_settings::THEME_ID,
-        SettingsTab::Git => "dozer.git",
+        SettingsTab::Git => bytehost_settings::GIT_ID,
         SettingsTab::Advanced => "dozer.advanced",
         SettingsTab::Apps => bytehost_settings::APPS_ID,
         SettingsTab::Language => bytehost_settings::LANGUAGE_ID,
@@ -127,7 +136,7 @@ pub fn page_id(tab: SettingsTab) -> PageId {
 pub fn tab_of(page: &PageId) -> Option<SettingsTab> {
     match page.as_str() {
         bytehost_settings::THEME_ID => Some(SettingsTab::Theme),
-        "dozer.git" => Some(SettingsTab::Git),
+        bytehost_settings::GIT_ID => Some(SettingsTab::Git),
         "dozer.advanced" => Some(SettingsTab::Advanced),
         bytehost_settings::APPS_ID => Some(SettingsTab::Apps),
         bytehost_settings::LANGUAGE_ID => Some(SettingsTab::Language),
@@ -185,14 +194,12 @@ pub enum LanguageSaveOutcome {
 }
 
 pub struct State {
-    pub github: ConnectState,
-    pub gitlab: ConnectState,
-    pub gitee: ConnectState,
-    /// 正在进行的 `ConnectSubmit` 异步任务句柄,按 provider 存一份。
-    /// `ConnectCancel` 用它真正中止任务,防止取消后 token 仍被异步写进
-    /// Keychain/本地文件(代码评审 finding:Cancel doesn't stop in-flight
-    /// connect task)。
-    connect_tasks: HashMap<GitProvider, tokio::task::AbortHandle>,
+    /// 共享 Git 页状态(输入、账户、请求身份)。视图与规则只有一份;
+    /// 本产品只提供服务与文案注入。
+    pub git: GitPageState,
+    /// 正在进行的 Git 异步任务句柄,按 provider 存一份。取消 / 关窗时
+    /// 真正中止任务;服务层的 `Admission` 仍然负责"已开始的任务不许落盘"。
+    git_tasks: HashMap<GitProvider, tokio::task::AbortHandle>,
     pub advanced: AdvancedState,
     /// 共享导航状态(打开 / 当前页 / 窗口代数)。页序与默认页由注册表决定。
     pub core: SettingsState,
@@ -216,8 +223,8 @@ pub struct State {
 }
 
 impl State {
-    /// 打开设置弹窗时调用——从本地 `git_accounts.json` 重建三家的连接
-    /// 展示态(不重新校验 token 有效性,只是回显上次连接成功记下的用户名)。
+    /// 打开设置弹窗时调用——建立导航与页面状态。Git 账户事实不再从本地
+    /// JSON 直接回显,而是由产品在进入 Git 页时调用共享 `query` 获取。
     ///
     /// `daemon_unavailable` 是 `App.daemon_unavailable`(整程序共享的"daemon 连不上"
     /// 状态)。每次开 Settings 都会重建一份 `State`,如果 `advanced` 一律从
@@ -238,15 +245,22 @@ impl State {
 
     /// 按共享 `PageId` 打开(未知页由注册表回退到主题页)。
     pub fn load_with_page(daemon_unavailable: bool, page: Option<PageId>) -> State {
-        let accounts = git_accounts::load();
+        Self::load_with_page_for_owner(daemon_unavailable, page, 1)
+    }
+
+    /// 按共享对话框会话号创建请求 owner。同一对话框内的重试保留 owner;
+    /// 新会话使用新 owner,旧请求的回包与持久化准入都不会影响新会话。
+    pub fn load_with_page_for_owner(
+        daemon_unavailable: bool,
+        page: Option<PageId>,
+        owner: u64,
+    ) -> State {
         let registry = product_registry();
         let mut core = SettingsState::new();
         core.open(&registry, page.as_ref());
         State {
-            github: ConnectState::from_accounts(&accounts, GitProvider::GitHub),
-            gitlab: ConnectState::from_accounts(&accounts, GitProvider::GitLab),
-            gitee: ConnectState::from_accounts(&accounts, GitProvider::Gitee),
-            connect_tasks: HashMap::new(),
+            git: GitPageState::new(owner),
+            git_tasks: HashMap::new(),
             advanced: advanced_state_for_daemon(daemon_unavailable),
             core,
             registry,
@@ -259,6 +273,15 @@ impl State {
         }
     }
 
+    /// 内容会话结束:中止所有在途任务并清掉敏感输入。账户事实保留在
+    /// 持久化层,重开时由权威查询恢复。
+    pub(crate) fn shutdown(&mut self) {
+        for (_, task) in self.git_tasks.drain() {
+            task.abort();
+        }
+        self.git.close();
+    }
+
     /// 取走"应用宿主需要刷新"标记(`App::update` 的包装函数调用)。
     pub(crate) fn take_host_changed(&mut self) -> bool {
         std::mem::take(&mut self.host_changed)
@@ -267,58 +290,6 @@ impl State {
     /// 取走待发提示(`App::drain_outboxes` 调用)。
     pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
         self.outbox.take()
-    }
-
-    fn slot_mut(&mut self, provider: GitProvider) -> &mut ConnectState {
-        match provider {
-            GitProvider::GitHub => &mut self.github,
-            GitProvider::GitLab => &mut self.gitlab,
-            GitProvider::Gitee => &mut self.gitee,
-        }
-    }
-}
-
-/// 断开 Git 账户的收尾:`saved` 是"把账户置空写回本地非敏感记录"的结果,`delete_token`
-/// 是删钥匙串 token 的动作(惰性传入,以便"本地记录没写成就不能先删 token"可测)。
-///
-/// 顺序沿用既有裁决:**先写本地记录,成功了才删钥匙串 token**——反过来做的话,本地文件
-/// 写失败会留下"钥匙串已删、json 仍写着已连接"这种更糟的不一致态(代码评审 finding:
-/// Disconnect drops failed save, leaves stale state)。写失败就整个放弃这次断开,保留
-/// 原有已连接展示,并且现在**告诉用户**(此前只写一条日志,用户看到的是点了没反应)。
-pub(crate) fn finish_disconnect(
-    state: &mut State,
-    provider: GitProvider,
-    saved: Result<(), std::io::Error>,
-    delete_token: impl FnOnce() -> Result<(), crate::git_accounts::GitAccountError>,
-) {
-    match saved {
-        Ok(()) => {
-            if let Err(e) = delete_token() {
-                state.outbox.push(
-                    LOG,
-                    crate::extensions::toast::Level::Warning,
-                    dozer_model::LocalizedText::keyed(
-                        crate::i18n::HOST_OWNER,
-                        "error.disconnect_token_delete_failed",
-                        "The account was disconnected, but the token could not be removed from the system keychain: {detail}",
-                    )
-                    .with_arg("detail", e.stable()),
-                );
-            }
-            *state.slot_mut(provider) = ConnectState::NotConnected;
-        }
-        Err(e) => {
-            state.outbox.push(
-                LOG,
-                crate::extensions::toast::Level::Error,
-                dozer_model::LocalizedText::keyed(
-                    crate::i18n::HOST_OWNER,
-                    "error.disconnect_local_save_failed",
-                    "Could not disconnect the account: writing the local record failed ({detail}); the existing connection is kept",
-                )
-                .with_arg("detail", e.to_string()),
-            );
-        }
     }
 }
 
@@ -337,13 +308,24 @@ pub enum Message {
     Close,
     CloseHover(bool),
     ThemeSelected(ColorScheme),
-    ConnectClicked(GitProvider),
-    TokenChanged(GitProvider, String),
-    ConnectCancel(GitProvider),
-    OpenTokenPage(GitProvider),
-    ConnectSubmit(GitProvider),
-    ConnectResult(GitProvider, Result<String, dozer_model::LocalizedText>),
-    Disconnect(GitProvider),
+    /// 共享 Git 页的类型化意图(连接 / 取消 / 断开 / 重试 / 打开 PAT 页)。
+    Git(GitIntent),
+    /// 敏感 Token 输入。`SecretToken` 的 Debug 打码、Drop 清零。
+    GitToken(GitProvider, SecretToken),
+    /// 权威账户查询回包。
+    GitQueryLoaded(RequestTicket, Result<AccountSnapshot, GitAccountError>),
+    /// 连接回包。
+    GitConnectLoaded(
+        GitProvider,
+        RequestTicket,
+        Result<(ConnectedAccount, CommitOutcome), GitAccountError>,
+    ),
+    /// 断开回包。
+    GitDisconnectLoaded(
+        GitProvider,
+        RequestTicket,
+        Result<CommitOutcome, GitAccountError>,
+    ),
     AdvancedStopClicked,
     AdvancedSessionCountReady(Result<u32, String>),
     AdvancedStopCancel,
@@ -379,74 +361,8 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
             state.theme_error = persist_theme(*scheme).err();
             true
         }
-        Message::ConnectClicked(provider) => {
-            *state.slot_mut(*provider) = ConnectState::Editing {
-                token: String::new(),
-                busy: false,
-                error: None,
-            };
-            true
-        }
-        Message::TokenChanged(provider, token) => {
-            if let ConnectState::Editing { token: t, .. } = state.slot_mut(*provider) {
-                *t = token.clone();
-            }
-            true
-        }
-        Message::ConnectCancel(provider) => {
-            // 真正中止掉还在跑的 validate_token/set_token/save 任务——
-            // 只改 UI 状态不够,那个任务不知道自己被"取消"了,还是会把
-            // token 写进 Keychain(代码评审 finding:Cancel doesn't stop
-            // in-flight connect task)。
-            if let Some(task) = state.connect_tasks.remove(provider) {
-                task.abort();
-            }
-            *state.slot_mut(*provider) = ConnectState::NotConnected;
-            true
-        }
-        Message::OpenTokenPage(provider) => {
-            let _ = std::process::Command::new("open")
-                .arg(provider.token_creation_url())
-                .spawn();
-            true
-        }
-        Message::Disconnect(provider) => {
-            // 先写本地非敏感记录,成功了才删 Keychain token——反过来做的话,
-            // 本地文件写失败会留下"Keychain 已删、json 仍写着已连接"这种
-            // 更糟的不一致态(代码评审 finding:Disconnect drops failed
-            // save, leaves stale state)。写失败就整个放弃这次断开,保留
-            // 原有已连接展示并告知用户(见 `finish_disconnect`)。
-            let mut accounts = git_accounts::load();
-            accounts.set(*provider, None);
-            let saved = git_accounts::save(&accounts);
-            finish_disconnect(state, *provider, saved, || {
-                git_accounts::delete_token(*provider)
-            });
-            true
-        }
-        Message::ConnectResult(provider, result) => {
-            // 任务已经跑完,不管结果如何都清掉记着的句柄。
-            state.connect_tasks.remove(provider);
-            // 结果到达时若已经不是 Editing 态(用户已经 Cancel 或又开了
-            // 新一轮),说明这是一份过期结果,丢弃不应用——否则会出现
-            // "已经点了取消,连接状态却又被悄悄改回已连接"的情况(代码
-            // 评审 finding:Cancel doesn't stop in-flight connect task)。
-            if matches!(state.slot_mut(*provider), ConnectState::Editing { .. }) {
-                match result {
-                    Ok(username) => {
-                        *state.slot_mut(*provider) = ConnectState::Connected {
-                            username: username.clone(),
-                        };
-                    }
-                    Err(e) => {
-                        if let ConnectState::Editing { busy, error, .. } = state.slot_mut(*provider)
-                        {
-                            *busy = false;
-                            *error = Some(e.clone());
-                        }
-                    }
-                }
-            }
+        Message::GitToken(provider, token) => {
+            state.git.set_token(*provider, token.expose().to_owned());
             true
         }
         Message::AdvancedStopCancel => {
@@ -512,7 +428,10 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
             true
         }
         Message::Close
-        | Message::ConnectSubmit(_)
+        | Message::Git(_)
+        | Message::GitQueryLoaded(..)
+        | Message::GitConnectLoaded(..)
+        | Message::GitDisconnectLoaded(..)
         | Message::AdvancedStopClicked
         | Message::AdvancedStopConfirm
         | Message::AdvancedRestartClicked
@@ -529,12 +448,20 @@ pub fn update<A>(
     msg: Message,
     daemon: std::sync::Arc<dyn DaemonService>,
     apps: A,
+    admission: std::sync::Arc<Admission>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Clone + Send + 'static,
 ) where
     A: AppHostApi + Clone + Send + Sync + 'static,
 {
     if let Message::Close = msg {
+        if let Some(s) = state.as_mut() {
+            for (_, task) in s.git_tasks.drain() {
+                task.abort();
+            }
+            admission.cancel_owner(s.git.owner());
+            s.git.close();
+        }
         *state = None;
         return;
     }
@@ -543,105 +470,229 @@ pub fn update<A>(
         run_apps_message(s, apps_msg, apps, handle, emit.clone());
         return;
     }
-    // 切到「应用」页要现拉探测与列表(其余页纯本地,没有加载)。
+    // 切到「应用」/「Git」页要现拉权威数据(其余页纯本地)。
     let opened_apps = matches!(&msg, Message::TabSelected(SettingsTab::Apps))
         || matches!(&msg, Message::PageSelected(id) if id.as_str() == bytehost_settings::APPS_ID);
-    if apply_sync_message(s, &msg) {
-        if opened_apps {
-            run_apps_message(
-                s,
-                settings_apps::Message::Opened,
-                apps,
-                handle,
-                emit.clone(),
-            );
+    let opened_git = matches!(&msg, Message::TabSelected(SettingsTab::Git))
+        || matches!(&msg, Message::PageSelected(id) if id.as_str() == bytehost_settings::GIT_ID);
+    // Git 回包要按请求身份应用,并可能在取消后重新查询;在纯状态分流前处理。
+    match msg {
+        Message::GitQueryLoaded(ticket, result) => {
+            match result {
+                Ok(snapshot) => {
+                    s.git.apply_query(ticket, snapshot);
+                }
+                Err(error) => {
+                    s.git.query_failed(ticket, error);
+                }
+            }
+            return;
         }
-        return;
+        Message::GitConnectLoaded(provider, ticket, result) => {
+            s.git_tasks.remove(&provider);
+            if apply_git_connect_result(s, ticket, result) {
+                spawn_git_query(s, handle, emit.clone());
+            }
+            return;
+        }
+        Message::GitDisconnectLoaded(provider, ticket, result) => {
+            s.git_tasks.remove(&provider);
+            if apply_git_disconnect_result(s, ticket, result) {
+                spawn_git_query(s, handle, emit.clone());
+            }
+            return;
+        }
+        msg => {
+            if apply_sync_message(s, &msg) {
+                if opened_apps {
+                    run_apps_message(
+                        s,
+                        settings_apps::Message::Opened,
+                        apps,
+                        handle,
+                        emit.clone(),
+                    );
+                } else if opened_git {
+                    spawn_git_query(s, handle, emit.clone());
+                }
+                return;
+            }
+            match msg {
+                Message::Git(intent) => {
+                    run_git_intent(s, intent, admission, handle, emit.clone());
+                    return;
+                }
+                Message::AdvancedStopClicked => {
+                    if !matches!(s.advanced, AdvancedState::Idle { .. }) {
+                        return;
+                    }
+                    s.advanced = AdvancedState::FetchingCount;
+                    handle.spawn(async move {
+                        let result = daemon
+                            .list_sessions()
+                            .await
+                            .map(|sessions| count_live_sessions(&sessions))
+                            .map_err(|e| e.message);
+                        emit(Message::AdvancedSessionCountReady(result));
+                    });
+                    return;
+                }
+                Message::AdvancedStopConfirm => {
+                    if !matches!(s.advanced, AdvancedState::ConfirmingStop { .. }) {
+                        return;
+                    }
+                    s.advanced = AdvancedState::Stopping;
+                    handle.spawn(async move {
+                        let result = daemon.shutdown_daemon().await.map_err(|e| e.message);
+                        emit(Message::AdvancedStopResult(result));
+                    });
+                    return;
+                }
+                Message::AdvancedRestartClicked => {
+                    if !matches!(s.advanced, AdvancedState::Stopped { .. }) {
+                        return;
+                    }
+                    s.advanced = AdvancedState::RestartingDozerd;
+                    handle.spawn(async move {
+                        let result = daemon.ensure_running().await.map_err(|e| e.message);
+                        emit(Message::AdvancedRestartResult(result));
+                    });
+                    return;
+                }
+                _ => unreachable!("已在 apply_sync_message 或上面处理"),
+            }
+        }
     }
-    let provider = match msg {
-        Message::ConnectSubmit(provider) => provider,
-        Message::AdvancedStopClicked => {
-            if !matches!(s.advanced, AdvancedState::Idle { .. }) {
-                return;
+}
+
+/// 应用连接回包。返回 `true` 表示需要重新查询权威账户事实
+/// (被取消 / 被取代的请求已经完成持久化,事实不能静默丢弃)。
+fn apply_git_connect_result(
+    state: &mut State,
+    ticket: RequestTicket,
+    result: Result<(ConnectedAccount, CommitOutcome), GitAccountError>,
+) -> bool {
+    match result {
+        Ok((account, outcome)) => {
+            if state
+                .git
+                .connect_succeeded(ticket, account, outcome.clone())
+            {
+                false
+            } else if outcome.credential_committed {
+                state.git.observe_orphan_commit(&outcome);
+                true
+            } else {
+                false
             }
-            s.advanced = AdvancedState::FetchingCount;
-            handle.spawn(async move {
-                let result = daemon
-                    .list_sessions()
-                    .await
-                    .map(|sessions| count_live_sessions(&sessions))
-                    .map_err(|e| e.message);
-                emit(Message::AdvancedSessionCountReady(result));
-            });
-            return;
         }
-        Message::AdvancedStopConfirm => {
-            if !matches!(s.advanced, AdvancedState::ConfirmingStop { .. }) {
-                return;
-            }
-            s.advanced = AdvancedState::Stopping;
-            handle.spawn(async move {
-                let result = daemon.shutdown_daemon().await.map_err(|e| e.message);
-                emit(Message::AdvancedStopResult(result));
-            });
-            return;
+        Err(error) => {
+            state.git.connect_failed(ticket, error);
+            false
         }
-        Message::AdvancedRestartClicked => {
-            if !matches!(s.advanced, AdvancedState::Stopped { .. }) {
-                return;
-            }
-            s.advanced = AdvancedState::RestartingDozerd;
-            handle.spawn(async move {
-                let result = daemon.ensure_running().await.map_err(|e| e.message);
-                emit(Message::AdvancedRestartResult(result));
-            });
-            return;
-        }
-        _ => unreachable!("已在 apply_sync_message 或上面处理"),
-    };
-    let token = match s.slot_mut(provider) {
-        ConnectState::Editing { token, busy, error } => {
-            if token.trim().is_empty() {
-                return;
-            }
-            *busy = true;
-            *error = None;
-            token.clone()
-        }
-        _ => return,
-    };
-    // 防御性清理:正常 UI 流程不会在上一次提交还没出结果时再提交一次
-    // (按钮在 busy 态会被禁用),但如果真的发生了,先中止旧任务再开新的,
-    // 不留两个任务同时跑。
-    if let Some(old) = s.connect_tasks.remove(&provider) {
-        old.abort();
     }
-    let join_handle = handle.spawn(async move {
-        let result = git_accounts::validate_token(provider, &token)
-            .await
-            .map_err(|e| e.localized());
-        let result = result.and_then(|username| {
-            git_accounts::set_token(provider, &token).map_err(|e| e.localized())?;
-            let mut accounts = git_accounts::load();
-            accounts.set(
-                provider,
-                Some(git_accounts::ConnectedAccount {
-                    username: username.clone(),
-                }),
-            );
-            git_accounts::save(&accounts).map_err(|e| {
-                dozer_model::LocalizedText::keyed(
-                    crate::i18n::HOST_OWNER,
-                    "error.git_account_local_save_failed",
-                    "Could not write the local record: {detail}",
-                )
-                .with_arg("detail", e.to_string())
-            })?;
-            Ok(username)
-        });
-        emit(Message::ConnectResult(provider, result));
+}
+
+fn apply_git_disconnect_result(
+    state: &mut State,
+    ticket: RequestTicket,
+    result: Result<CommitOutcome, GitAccountError>,
+) -> bool {
+    match result {
+        Ok(outcome) => {
+            if state.git.disconnect_succeeded(ticket, outcome.clone()) {
+                false
+            } else if outcome.credential_committed {
+                state.git.observe_orphan_commit(&outcome);
+                true
+            } else {
+                false
+            }
+        }
+        Err(error) => {
+            state.git.disconnect_failed(ticket, error);
+            false
+        }
+    }
+}
+
+fn spawn_git_query(
+    state: &mut State,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    let ticket = state.git.begin_query();
+    handle.spawn(async move {
+        let service = git_accounts::service();
+        emit(Message::GitQueryLoaded(ticket, service.query()));
     });
-    s.connect_tasks.insert(provider, join_handle.abort_handle());
+}
+
+/// 执行共享 Git 页的类型化意图。产品只提供服务注入与任务生命周期。
+fn run_git_intent(
+    state: &mut State,
+    intent: GitIntent,
+    admission: std::sync::Arc<Admission>,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Clone + Send + 'static,
+) {
+    match intent {
+        GitIntent::Connect { provider } => {
+            state.git.begin_edit(provider);
+        }
+        GitIntent::Cancel { provider } => {
+            if let Some(ticket) = state.git.cancel(provider) {
+                admission.cancel(ticket);
+            }
+            if let Some(task) = state.git_tasks.remove(&provider) {
+                task.abort();
+            }
+        }
+        GitIntent::OpenTokenPage { provider } => {
+            let _ = std::process::Command::new("open")
+                .arg(provider.token_creation_url())
+                .spawn();
+        }
+        GitIntent::Submit { provider } => {
+            let Some(ticket) = state.git.begin_connect(provider) else {
+                return;
+            };
+            admission.register(ticket);
+            if let Some(old) = state.git_tasks.remove(&provider) {
+                old.abort();
+            }
+            // 防御性复制:任务执行时页面可能已经关闭 / 输入已清零。
+            let token = SecretToken::new(state.git.token(provider));
+            let admission_for_task = admission.clone();
+            let emit_for_task = emit.clone();
+            let join = handle.spawn(async move {
+                let service = git_accounts::service_with_admission(admission_for_task);
+                let result = service
+                    .connect_with_account_at(provider, &token, Some(ticket))
+                    .await;
+                emit_for_task(Message::GitConnectLoaded(provider, ticket, result));
+            });
+            state.git_tasks.insert(provider, join.abort_handle());
+        }
+        GitIntent::Disconnect { provider } => {
+            let Some(ticket) = state.git.begin_disconnect(provider) else {
+                return;
+            };
+            admission.register(ticket);
+            if let Some(old) = state.git_tasks.remove(&provider) {
+                old.abort();
+            }
+            let admission_for_task = admission.clone();
+            let emit_for_task = emit.clone();
+            let join = handle.spawn(async move {
+                let service = git_accounts::service_with_admission(admission_for_task);
+                let result = service.disconnect_at(provider, Some(ticket));
+                emit_for_task(Message::GitDisconnectLoaded(provider, ticket, result));
+            });
+            state.git_tasks.insert(provider, join.abort_handle());
+        }
+        GitIntent::RetryQuery => spawn_git_query(state, handle, emit),
+    }
 }
 
 /// 「应用」页的消息:先过纯状态机,再执行它吐出的副作用(发请求/弹 Toast/标记主窗口刷新)。
@@ -782,114 +833,6 @@ fn run_apps_message<A>(
             tokio::time::sleep(crate::extensions::app_logs::REFRESH_INTERVAL).await;
             send(M::Tick);
         });
-    }
-}
-
-fn provider_row<'a>(
-    provider: GitProvider,
-    state: &'a ConnectState,
-    locale: &str,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let colors = byteui::theme::color::current();
-    let t = |key: &str, fallback: &str| crate::i18n::host_text(key, fallback, locale);
-    let title = text(provider.display_name())
-        .size(byteui::theme::font::body())
-        .color(colors.cream);
-    match state {
-        ConnectState::NotConnected => {
-            let status = text(t("settings.git.not_connected", "Not connected"))
-                .size(byteui::theme::font::label())
-                .color(colors.dim);
-            let connect_btn = button(
-                text(t("settings.git.connect", "Connect")).size(byteui::theme::font::body()),
-            )
-            .on_press(Message::ConnectClicked(provider))
-            .padding([6, 14])
-            .style(crate::extensions::project_create::action_button_hover_style(colors.cream));
-            row![title, status, Space::new().width(Length::Fill), connect_btn]
-                .spacing(10)
-                .align_y(Alignment::Center)
-                .into()
-        }
-        ConnectState::Connected { username } => {
-            let status = text(crate::i18n::host_text_args(
-                "settings.git.connected",
-                "Connected: {username}",
-                locale,
-                &[("username", username.as_str())],
-            ))
-            .size(byteui::theme::font::label())
-            .color(colors.gold);
-            let disconnect_btn = button(
-                text(t("settings.git.disconnect", "Disconnect")).size(byteui::theme::font::body()),
-            )
-            .on_press(Message::Disconnect(provider))
-            .padding([6, 14])
-            .style(crate::extensions::project_create::action_button_hover_style(colors.dim));
-            row![
-                title,
-                status,
-                Space::new().width(Length::Fill),
-                disconnect_btn
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center)
-            .into()
-        }
-        ConnectState::Editing { token, busy, error } => {
-            let input = byteui::form::input_text::view_on_bg(
-                "Personal Access Token",
-                token,
-                true,
-                None,
-                false,
-                None,
-                false,
-                move |v| Message::TokenChanged(provider, v),
-            );
-            let hint = iced_widget::MouseArea::new(
-                text(t("settings.git.generate_pat", "No PAT? Generate one"))
-                    .size(byteui::theme::font::label())
-                    .color(colors.gold),
-            )
-            .interaction(iced_widget::core::mouse::Interaction::Pointer)
-            .on_press(Message::OpenTokenPage(provider));
-            let confirm_label = if *busy {
-                t("settings.git.validating", "Validating…")
-            } else {
-                t("settings.git.confirm", "Confirm")
-            };
-            let confirm = button(text(confirm_label).size(byteui::theme::font::body()))
-                .style(crate::extensions::project_create::action_button_hover_style(colors.cream));
-            let confirm = if *busy {
-                confirm
-            } else {
-                confirm.on_press(Message::ConnectSubmit(provider))
-            };
-            let cancel =
-                button(text(t("settings.git.cancel", "Cancel")).size(byteui::theme::font::body()))
-                    .on_press(Message::ConnectCancel(provider))
-                    .style(
-                        crate::extensions::project_create::action_button_hover_style(colors.dim),
-                    );
-            let error_row: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                if let Some(e) = error {
-                    text(crate::i18n::host_render(e, locale))
-                        .size(byteui::theme::font::label())
-                        .color(colors.red)
-                        .into()
-                } else {
-                    Space::new().into()
-                };
-            column![
-                title,
-                input,
-                row![hint, Space::new().width(Length::Fill), cancel, confirm].spacing(8),
-                error_row,
-            ]
-            .spacing(6)
-            .into()
-        }
     }
 }
 
@@ -1091,16 +1034,16 @@ fn build_card<'a>(
                 extra,
             )
         }
-        "dozer.git" => column![
-            text(shared_text("settings.git.title", "Git Accounts"))
-                .size(byteui::theme::font::subtitle())
-                .color(colors.cream),
-            provider_row(GitProvider::GitHub, &state.github, &current_locale()),
-            provider_row(GitProvider::GitLab, &state.gitlab, &current_locale()),
-            provider_row(GitProvider::Gitee, &state.gitee, &current_locale()),
-        ]
-        .spacing(14)
-        .into(),
+        bytehost_settings::GIT_ID => {
+            // 共享视图:三 provider 行、遮盖输入、连接 / 取消 / 断开、
+            // 忙碌、失败 / 部分提交提示与重试只有这一份实现。
+            bytehost_settings_ui::git_accounts_page(bytehost_settings_ui::GitAccountsPage {
+                state: &state.git,
+                on_token: &|provider, value| Message::GitToken(provider, SecretToken::new(value)),
+                on_intent: &Message::Git,
+                text: Text::new(&shared_text),
+            })
+        }
         "dozer.advanced" => column![
             text(shared_text("settings.tab.advanced", "Advanced"))
                 .size(byteui::theme::font::subtitle())
@@ -1185,17 +1128,20 @@ fn language_options() -> [LanguageOption<LocalePreference>; 3] {
 mod tests {
     use super::*;
 
-    /// 测试专用构造:`connect_tasks` 是任务生命周期相关的簿记字段,跟这些
-    /// 纯状态转换测试无关,统一给默认值,避免每个测试都重复写。
-    fn test_state(github: ConnectState, gitlab: ConnectState, gitee: ConnectState) -> State {
+    /// 旧测试只关心「未连接」的初始态;Git 行为现在由共享 `GitPageState`
+    /// 的专门测试覆盖,这里保留三参数签名避免无关测试大改。
+    #[derive(Debug, Clone, PartialEq)]
+    enum ConnectState {
+        NotConnected,
+    }
+
+    fn test_state(_github: ConnectState, _gitlab: ConnectState, _gitee: ConnectState) -> State {
         let registry = product_registry();
         let mut core = SettingsState::new();
         core.open(&registry, None);
         State {
-            github,
-            gitlab,
-            gitee,
-            connect_tasks: HashMap::new(),
+            git: GitPageState::new(1),
+            git_tasks: HashMap::new(),
             advanced: AdvancedState::Idle { error: None },
             core,
             registry,
@@ -1206,6 +1152,45 @@ mod tests {
             theme_error: None,
             host_changed: false,
         }
+    }
+
+    #[test]
+    fn escape_cancels_the_inner_apps_confirmation_before_the_settings_dialog() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        let apps = PageId::new(bytehost_settings::APPS_ID).unwrap();
+        state.core.select(&state.registry, &apps);
+        state.apps.flow = settings_apps::Flow::ConfirmUninstall {
+            id: "demo".into(),
+            name: "Demo".into(),
+        };
+        let Some(Message::Apps(message)) = escape_message(&state) else {
+            panic!("confirmation must consume Escape");
+        };
+        assert!(state.apps.update(message, 0).is_empty());
+        assert!(matches!(state.apps.flow, settings_apps::Flow::Idle));
+        assert!(state.core.is_open());
+        assert!(escape_message(&state).is_none());
+    }
+
+    #[test]
+    fn escape_cancels_advanced_stop_confirmation_before_closing_settings() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        state
+            .core
+            .select(&state.registry, &PageId::new("dozer.advanced").unwrap());
+        state.advanced = AdvancedState::ConfirmingStop { session_count: 2 };
+        assert!(matches!(
+            escape_message(&state),
+            Some(Message::AdvancedStopCancel)
+        ));
     }
 
     fn snap(pref: LocalePreference, active: &str, rev: u64) -> LocaleSnapshot {
@@ -1225,7 +1210,7 @@ mod tests {
             ids,
             [
                 "bytehost.theme",
-                "dozer.git",
+                "bytehost.git",
                 "dozer.advanced",
                 "bytehost.apps",
                 "bytehost.language"
@@ -1242,6 +1227,24 @@ mod tests {
         assert_eq!(
             state.core.current().map(PageId::as_str),
             Some("bytehost.theme")
+        );
+    }
+
+    #[test]
+    fn legacy_dozer_git_entry_resolves_to_the_shared_git_page() {
+        let registry = product_registry();
+        let legacy = PageId::new("dozer.git").expect("legacy id");
+        let shared = PageId::new(bytehost_settings::GIT_ID).expect("shared id");
+        assert_eq!(registry.alias_target(&legacy), Some(&shared));
+        assert_eq!(registry.resolve(Some(&legacy)), Some(&shared));
+        // 导航里仍然只有一页 Git。
+        assert_eq!(
+            registry
+                .pages()
+                .iter()
+                .filter(|page| page.id.as_str().ends_with(".git"))
+                .count(),
+            1
         );
     }
 
@@ -1399,159 +1402,156 @@ mod tests {
     }
 
     #[test]
-    fn connect_clicked_opens_editing_row() {
+    fn connect_intent_opens_editing_row() {
         let mut state = test_state(
             ConnectState::NotConnected,
             ConnectState::NotConnected,
             ConnectState::NotConnected,
         );
-        apply_sync_message(&mut state, &Message::ConnectClicked(GitProvider::GitHub));
-        assert!(matches!(state.github, ConnectState::Editing { .. }));
-        assert_eq!(state.gitlab, ConnectState::NotConnected);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+        run_git_intent(
+            &mut state,
+            GitIntent::Connect {
+                provider: GitProvider::GitHub,
+            },
+            std::sync::Arc::new(Admission::new()),
+            &tokio::runtime::Handle::current(),
+            |_| {},
+        );
+        assert!(state.git.is_editing(GitProvider::GitHub));
+        assert!(!state.git.is_editing(GitProvider::GitLab));
     }
 
     #[test]
-    fn token_changed_updates_editing_draft() {
+    fn token_message_updates_editing_draft() {
         let mut state = test_state(
-            ConnectState::Editing {
-                token: String::new(),
-                busy: false,
-                error: None,
-            },
+            ConnectState::NotConnected,
             ConnectState::NotConnected,
             ConnectState::NotConnected,
         );
+        state.git.begin_edit(GitProvider::GitHub);
         apply_sync_message(
             &mut state,
-            &Message::TokenChanged(GitProvider::GitHub, "ghp_xxx".into()),
+            &Message::GitToken(
+                GitProvider::GitHub,
+                SecretToken::new("SYNTHETIC-NOT-A-REAL-TOKEN"),
+            ),
         );
         assert_eq!(
-            state.github,
-            ConnectState::Editing {
-                token: "ghp_xxx".into(),
-                busy: false,
-                error: None,
-            }
+            state.git.token(GitProvider::GitHub),
+            "SYNTHETIC-NOT-A-REAL-TOKEN"
         );
     }
 
     #[test]
-    fn connect_cancel_resets_to_not_connected() {
+    fn cancel_revokes_admission_and_aborts_the_task() {
         let mut state = test_state(
-            ConnectState::Editing {
-                token: "x".into(),
-                busy: false,
-                error: None,
-            },
+            ConnectState::NotConnected,
             ConnectState::NotConnected,
             ConnectState::NotConnected,
         );
-        apply_sync_message(&mut state, &Message::ConnectCancel(GitProvider::GitHub));
-        assert_eq!(state.github, ConnectState::NotConnected);
-    }
+        state.git.begin_edit(GitProvider::GitHub);
+        state.git.set_token(GitProvider::GitHub, "tok");
+        let ticket = state.git.begin_connect(GitProvider::GitHub).unwrap();
+        let admission = std::sync::Arc::new(Admission::new());
+        admission.register(ticket);
 
-    #[test]
-    fn connect_cancel_aborts_in_flight_task_and_discards_late_result() {
-        let mut state = test_state(
-            ConnectState::Editing {
-                token: "x".into(),
-                busy: true,
-                error: None,
-            },
-            ConnectState::NotConnected,
-            ConnectState::NotConnected,
-        );
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();
         let join = tokio::spawn(async {
             std::future::pending::<()>().await;
         });
         state
-            .connect_tasks
+            .git_tasks
             .insert(GitProvider::GitHub, join.abort_handle());
-        apply_sync_message(&mut state, &Message::ConnectCancel(GitProvider::GitHub));
-        assert_eq!(state.github, ConnectState::NotConnected);
-        assert!(!state.connect_tasks.contains_key(&GitProvider::GitHub));
-        // 取消之后,哪怕之前那次任务的结果晚一步才送达,也不应该把状态
-        // 又悄悄改回 Connected(代码评审 finding:Cancel doesn't stop
-        // in-flight connect task)。
-        apply_sync_message(
+
+        run_git_intent(
             &mut state,
-            &Message::ConnectResult(GitProvider::GitHub, Ok("octocat".into())),
+            GitIntent::Cancel {
+                provider: GitProvider::GitHub,
+            },
+            std::sync::Arc::clone(&admission),
+            &tokio::runtime::Handle::current(),
+            |_| {},
         );
-        assert_eq!(state.github, ConnectState::NotConnected);
+        assert!(!state.git.is_busy(GitProvider::GitHub));
+        assert!(!state.git.is_editing(GitProvider::GitHub));
+        assert_eq!(state.git.token(GitProvider::GitHub), "");
+        assert!(!admission.admit(ticket));
+        assert!(!state.git_tasks.contains_key(&GitProvider::GitHub));
+    }
+
+    #[test]
+    fn cancelled_request_that_committed_requests_an_authoritative_query() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        state.git.begin_edit(GitProvider::GitHub);
+        state.git.set_token(GitProvider::GitHub, "tok");
+        let ticket = state.git.begin_connect(GitProvider::GitHub).unwrap();
+        state.git.cancel(GitProvider::GitHub);
+
+        let needs_query = apply_git_connect_result(
+            &mut state,
+            ticket,
+            Ok((
+                ConnectedAccount {
+                    username: "octocat".into(),
+                },
+                CommitOutcome::complete(GitProvider::GitHub),
+            )),
+        );
+        assert!(needs_query, "已持久化的迟到结果不能被静默丢弃");
+        assert!(state.git.account(GitProvider::GitHub).is_none());
     }
 
     #[test]
     fn connect_result_ok_sets_connected() {
         let mut state = test_state(
-            ConnectState::Editing {
-                token: "x".into(),
-                busy: true,
-                error: None,
-            },
+            ConnectState::NotConnected,
             ConnectState::NotConnected,
             ConnectState::NotConnected,
         );
-        apply_sync_message(
+        state.git.begin_edit(GitProvider::GitHub);
+        state.git.set_token(GitProvider::GitHub, "tok");
+        let ticket = state.git.begin_connect(GitProvider::GitHub).unwrap();
+        let needs_query = apply_git_connect_result(
             &mut state,
-            &Message::ConnectResult(GitProvider::GitHub, Ok("octocat".into())),
+            ticket,
+            Ok((
+                ConnectedAccount {
+                    username: "octocat".into(),
+                },
+                CommitOutcome::complete(GitProvider::GitHub),
+            )),
         );
+        assert!(!needs_query);
         assert_eq!(
-            state.github,
-            ConnectState::Connected {
-                username: "octocat".into()
-            }
+            state.git.account(GitProvider::GitHub).unwrap().username,
+            "octocat"
         );
+        assert_eq!(state.git.token(GitProvider::GitHub), "");
     }
 
     #[test]
     fn connect_result_err_keeps_editing_with_error() {
         let mut state = test_state(
-            ConnectState::Editing {
-                token: "x".into(),
-                busy: true,
-                error: None,
-            },
+            ConnectState::NotConnected,
             ConnectState::NotConnected,
             ConnectState::NotConnected,
         );
-        let err = dozer_model::LocalizedText::keyed(
-            crate::i18n::HOST_OWNER,
-            "error.token_invalid",
-            "The token is invalid or has expired",
-        );
-        apply_sync_message(
-            &mut state,
-            &Message::ConnectResult(GitProvider::GitHub, Err(err.clone())),
-        );
+        state.git.begin_edit(GitProvider::GitHub);
+        state.git.set_token(GitProvider::GitHub, "tok");
+        let ticket = state.git.begin_connect(GitProvider::GitHub).unwrap();
+        apply_git_connect_result(&mut state, ticket, Err(GitAccountError::TokenInvalid));
         assert_eq!(
-            state.github,
-            ConnectState::Editing {
-                token: "x".into(),
-                busy: false,
-                error: Some(err),
-            }
+            state.git.error(GitProvider::GitHub),
+            Some(&GitAccountError::TokenInvalid)
         );
-    }
-
-    #[test]
-    fn open_token_page_spawns_without_touching_blur_state() {
-        // 失焦即关闭已移除,`OpenTokenPage` 只剩"拉起浏览器"这一个副作用;
-        // 这里只验证它被当作已处理消息(返回 true),不再有状态位可断言。
-        let mut state = test_state(
-            ConnectState::Editing {
-                token: "x".into(),
-                busy: false,
-                error: None,
-            },
-            ConnectState::NotConnected,
-            ConnectState::NotConnected,
-        );
-        assert!(apply_sync_message(
-            &mut state,
-            &Message::OpenTokenPage(GitProvider::GitHub)
-        ));
+        assert!(!state.git.is_busy(GitProvider::GitHub));
     }
 
     #[test]
@@ -1727,6 +1727,73 @@ mod tests {
     }
 
     #[test]
+    fn git_page_state_is_owned_by_the_dialog_session() {
+        let state = State::load_with_page_for_owner(false, None, 42);
+        assert_eq!(state.git.owner(), 42);
+        assert!(!state.git.is_loading());
+    }
+
+    #[test]
+    fn close_message_releases_the_content_session() {
+        let rt = runtime();
+        let mut st = open_state(AdvancedState::Idle { error: None });
+        let _ = run(
+            &mut st,
+            Message::Close,
+            &FakeDaemon::default(),
+            &FakeApps::unscripted(),
+            &rt,
+        );
+        assert!(st.is_none());
+    }
+
+    #[test]
+    fn git_query_result_updates_the_shared_page_state() {
+        let rt = runtime();
+        let mut st = open_state(AdvancedState::Idle { error: None });
+        let ticket = st.as_mut().unwrap().git.begin_query();
+        let mut accounts = bytehost_git_accounts::GitAccountsState::default();
+        accounts.set(
+            GitProvider::GitHub,
+            Some(ConnectedAccount {
+                username: "octocat".into(),
+            }),
+        );
+        let _ = run(
+            &mut st,
+            Message::GitQueryLoaded(
+                ticket,
+                Ok(AccountSnapshot {
+                    accounts,
+                    stale_providers: Vec::new(),
+                    unreconciled_providers: Vec::new(),
+                }),
+            ),
+            &FakeDaemon::default(),
+            &FakeApps::unscripted(),
+            &rt,
+        );
+        assert_eq!(
+            st.unwrap()
+                .git
+                .account(GitProvider::GitHub)
+                .unwrap()
+                .username,
+            "octocat"
+        );
+    }
+
+    #[test]
+    fn token_input_debug_is_redacted() {
+        let message = Message::GitToken(
+            GitProvider::GitHub,
+            SecretToken::new("SYNTHETIC-NOT-A-REAL-TOKEN"),
+        );
+        assert!(!format!("{message:?}").contains("SYNTHETIC-NOT-A-REAL-TOKEN"));
+        assert!(format!("{message:?}").contains("***"));
+    }
+
+    #[test]
     fn advanced_state_for_daemon_offers_restart_only_when_daemon_unreachable() {
         assert_eq!(
             advanced_state_for_daemon(false),
@@ -1740,67 +1807,61 @@ mod tests {
         );
     }
 
-    /// GitHub 已连接、其余未连接的状态(复用上面的 `test_state`,不重复列字段)。
-    fn blank_state() -> State {
-        test_state(
-            ConnectState::Connected {
+    #[test]
+    fn disconnect_success_clears_the_account() {
+        let mut s = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        s.git.begin_edit(GitProvider::GitHub);
+        s.git.set_token(GitProvider::GitHub, "tok");
+        let connect = s.git.begin_connect(GitProvider::GitHub).unwrap();
+        s.git.connect_succeeded(
+            connect,
+            ConnectedAccount {
                 username: "octocat".into(),
             },
-            ConnectState::NotConnected,
-            ConnectState::NotConnected,
-        )
-    }
-
-    #[test]
-    fn disconnect_success_clears_the_slot_and_stays_silent() {
-        let mut s = blank_state();
-        finish_disconnect(&mut s, GitProvider::GitHub, Ok(()), || Ok(()));
-        assert_eq!(s.github, ConnectState::NotConnected);
-        assert!(s.take_outbox().is_empty());
-    }
-
-    #[test]
-    fn disconnect_token_delete_failure_still_disconnects_but_warns() {
-        let mut s = blank_state();
-        finish_disconnect(&mut s, GitProvider::GitHub, Ok(()), || {
-            Err(crate::git_accounts::GitAccountError::KeychainDelete {
-                detail: "access denied".to_string(),
-            })
-        });
-        assert_eq!(s.github, ConnectState::NotConnected, "本地记录已断开");
-        let got = s.take_outbox();
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].level, crate::extensions::toast::Level::Warning);
-        let rendered = crate::i18n::host_render_stable(&got[0].text);
-        assert!(rendered.contains("access denied"), "{rendered}");
-        assert_eq!(got[0].scope.name, "settings");
-    }
-
-    #[test]
-    fn disconnect_save_failure_keeps_connected_state_and_tells_the_user() {
-        let mut s = blank_state();
-        let mut token_delete_called = false;
-        finish_disconnect(
+            CommitOutcome::complete(GitProvider::GitHub),
+        );
+        let ticket = s.git.begin_disconnect(GitProvider::GitHub).unwrap();
+        assert!(!apply_git_disconnect_result(
             &mut s,
-            GitProvider::GitHub,
-            Err(std::io::Error::other("disk full")),
-            || {
-                token_delete_called = true;
-                Ok(())
+            ticket,
+            Ok(CommitOutcome::complete(GitProvider::GitHub)),
+        ));
+        assert!(s.git.account(GitProvider::GitHub).is_none());
+    }
+
+    #[test]
+    fn disconnect_partial_metadata_warning_stays_visible() {
+        let mut s = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        s.git.begin_edit(GitProvider::GitHub);
+        s.git.set_token(GitProvider::GitHub, "tok");
+        let connect = s.git.begin_connect(GitProvider::GitHub).unwrap();
+        s.git.connect_succeeded(
+            connect,
+            ConnectedAccount {
+                username: "octocat".into(),
             },
+            CommitOutcome::complete(GitProvider::GitHub),
         );
-        assert!(
-            matches!(s.github, ConnectState::Connected { .. }),
-            "写不进本地记录就整个放弃这次断开"
-        );
-        assert!(
-            !token_delete_called,
-            "本地记录没写成,不能先把钥匙串 token 删了"
-        );
-        let got = s.take_outbox();
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].level, crate::extensions::toast::Level::Error);
-        assert!(crate::i18n::host_render_stable(&got[0].text).contains("disk full"));
+        let ticket = s.git.begin_disconnect(GitProvider::GitHub).unwrap();
+        let mut outcome = CommitOutcome::complete(GitProvider::GitHub);
+        outcome.metadata_committed = false;
+        outcome.warning = Some(GitAccountError::MetadataWrite {
+            detail: "disk full".into(),
+        });
+        apply_git_disconnect_result(&mut s, ticket, Ok(outcome));
+        assert!(s.git.account(GitProvider::GitHub).is_none());
+        assert!(matches!(
+            s.git.notice(),
+            Some(GitAccountError::MetadataWrite { .. })
+        ));
     }
 
     // ---- 服务接缝:Advanced 页(DaemonService)与「应用」页(AppHostApi 泛型)----
@@ -1839,6 +1900,7 @@ mod tests {
             msg,
             daemon(fake),
             apps.clone(),
+            std::sync::Arc::new(Admission::new()),
             rt.handle(),
             move |m| {
                 let _ = tx.send(m);

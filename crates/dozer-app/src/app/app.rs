@@ -37,6 +37,12 @@ use super::*;
 
 dozer_core::scope!(LOG, module, "shell");
 
+/// 控制器里的原生实例标识。Dozer 的 winit 子窗口没有稳定可转的 u64 id,
+/// 用会话号作为实例 token 即可满足"回包必须带身份"的契约。
+fn window_token(key: bytehost_settings::dialog::DialogKey) -> u64 {
+    key.session
+}
+
 /// 终端初始网格尺寸（列 x 行）。真实尺寸由窗口创建后的第一次
 /// `Message::PaneResized` 立刻纠正（见 `main.rs` 的 `resumed()`）；这里只是
 /// "窗口还没量出真实像素前"的兜底默认值。
@@ -381,8 +387,14 @@ pub struct App {
     /// `None` 表示当前没开。
     pub(crate) project_create: Option<project_create::State>,
     /// 设置弹窗状态(主题 + Git 账户)——见 `extensions::settings::State`。
-    /// `None` 表示当前没开。
+    /// `None` 表示当前没有内容会话;窗口生命周期以 `settings_dialog` 为准。
     pub(crate) settings: Option<settings::State>,
+    /// 共享对话框控制器:唯一权威的生命周期 / 会话 / attempt 身份。
+    pub(crate) settings_dialog: bytehost_settings::dialog::DialogController,
+    /// 待由 winit 驱动执行的类型化原生命令。
+    pending_settings_effects: Vec<bytehost_settings::dialog::DialogEffect>,
+    /// 设置页 Git 请求共享的服务层提交准入。
+    settings_git_admission: Arc<bytehost_git_accounts::Admission>,
     /// Todo 分类树节点右键菜单浮层状态,坐标复用 `files.last_right_click`。
     pub(crate) category_context_menu: Option<CategoryContextMenu>,
     /// 通用输入框右键菜单浮层状态(屏幕空间单例)。`TextInputMenuOpen` 时
@@ -906,6 +918,12 @@ impl App {
             edit_history: None,
             project_create: None,
             settings: None,
+            settings_dialog: bytehost_settings::dialog::DialogController::new(
+                1,
+                bytehost_settings::dialog::DialogKind::Settings,
+            ),
+            pending_settings_effects: Vec::new(),
+            settings_git_admission: Arc::new(bytehost_git_accounts::Admission::new()),
             category_context_menu: None,
             text_input_menu: None,
             database_source_menu: None,
@@ -2013,11 +2031,188 @@ impl App {
 
     /// 打开设置窗口,并把当前权威语言偏好注入「语言」页作已确认值。
     pub(crate) fn open_settings(&mut self) {
-        let mut state = settings::State::load(self.daemon_unavailable.is_some());
-        state
-            .language
-            .update_confirmed(self.locale.snapshot().preference.clone());
-        self.settings = Some(state);
+        self.open_settings_page(None);
+    }
+
+    /// 打开设置并选中目标页。生命周期由共享 `DialogController` 决定:
+    /// 已有窗口只 `Activate` / 切页,新会话才创建内容状态。
+    pub(crate) fn open_settings_page(&mut self, page: Option<bytehost_settings::PageId>) {
+        use bytehost_settings::dialog::DialogEffect;
+        let effects = if matches!(
+            self.settings_dialog.phase(),
+            bytehost_settings::dialog::Phase::Failed(_)
+        ) {
+            self.settings_dialog.retry()
+        } else {
+            self.settings_dialog.open()
+        };
+        let create = effects.iter().find_map(|effect| match effect {
+            DialogEffect::Create(key) => Some(*key),
+            _ => None,
+        });
+        if let Some(key) = create {
+            // 新会话不继承旧内容 / 在途请求;旧 owner 的准入与任务先撤销。
+            self.clear_settings_content();
+            let mut state = settings::State::load_with_page_for_owner(
+                self.daemon_unavailable.is_some(),
+                page.clone(),
+                key.session,
+            );
+            state
+                .language
+                .update_confirmed(self.locale.snapshot().preference.clone());
+            self.settings = Some(state);
+        } else if let (Some(state), Some(page)) = (self.settings.as_mut(), page.as_ref()) {
+            state.core.select(&state.registry, page);
+        }
+        self.pending_settings_effects.extend(effects);
+        if self.settings_page_is_git() {
+            self.spawn_settings_git_query();
+        }
+    }
+
+    fn settings_page_is_git(&self) -> bool {
+        self.settings.as_ref().is_some_and(|state| {
+            state
+                .core
+                .current()
+                .is_some_and(|page| page.as_str() == bytehost_settings::GIT_ID)
+        })
+    }
+
+    /// 从权威账户事实打开 Git 页:窗口只是展示者,重开 / 直达都必须先查。
+    pub(crate) fn spawn_settings_git_query(&mut self) {
+        let Some(state) = self.settings.as_mut() else {
+            return;
+        };
+        let ticket = state.git.begin_query();
+        let proxy = self.proxy.clone();
+        self.handle.spawn(async move {
+            let service = crate::git_accounts::service();
+            let _ = proxy.send_event(Message::Settings(settings::Message::GitQueryLoaded(
+                ticket,
+                service.query(),
+            )));
+        });
+    }
+
+    /// 用户关闭设置:立即撤销在途账户请求的提交准入并清掉敏感输入,再发
+    /// 共享控制器的 Destroy;内容在实例确认销毁后释放。
+    pub(crate) fn close_settings_dialog(&mut self) {
+        if let Some(state) = self.settings.as_mut() {
+            self.settings_git_admission.cancel_owner(state.git.owner());
+            state.shutdown();
+        }
+        let effects = self.settings_dialog.close();
+        self.pending_settings_effects.extend(effects);
+        if matches!(
+            self.settings_dialog.phase(),
+            bytehost_settings::dialog::Phase::Closed
+        ) {
+            self.clear_settings_content();
+        }
+    }
+
+    /// 驱动报告设置实例已创建 / 绑定成功。
+    pub(crate) fn settings_native_opened(&mut self, key: bytehost_settings::dialog::DialogKey) {
+        use bytehost_settings::dialog::DialogEvent;
+        let effects = self.settings_dialog.handle(DialogEvent::Opened {
+            key,
+            window: window_token(key),
+        });
+        self.apply_settings_lifecycle(effects);
+    }
+
+    /// 驱动报告设置实例已销毁。只有当前会话的实例能推进控制器。
+    pub(crate) fn settings_native_closed(&mut self, key: bytehost_settings::dialog::DialogKey) {
+        use bytehost_settings::dialog::DialogEvent;
+        if self.settings_dialog.key() != Some(key) {
+            return;
+        }
+        let effects = self.settings_dialog.handle(DialogEvent::Closed {
+            key,
+            window: window_token(key),
+        });
+        self.apply_settings_lifecycle(effects);
+    }
+
+    /// 驱动报告设置创建 / 绑定失败。
+    pub(crate) fn settings_native_failed(
+        &mut self,
+        key: bytehost_settings::dialog::DialogKey,
+        stage: &'static str,
+        detail: impl Into<String>,
+    ) {
+        use bytehost_settings::dialog::{DialogEvent, DialogFailure};
+        if self.settings_dialog.key() != Some(key) {
+            return;
+        }
+        let detail = detail.into();
+        self.push_toast_keyed(
+            LOG,
+            crate::extensions::toast::Level::Error,
+            dozer_model::LocalizedText::keyed(
+                crate::i18n::HOST_OWNER,
+                "settings.window.failed",
+                "Settings could not open: {detail}. Open Settings again to retry.",
+            )
+            .with_arg("detail", detail.clone()),
+            "settings-window-failed",
+        );
+        let effects = self.settings_dialog.handle(DialogEvent::Failed {
+            key,
+            failure: DialogFailure::new(stage, detail),
+        });
+        self.apply_settings_lifecycle(effects);
+    }
+
+    pub(crate) fn take_settings_effects(&mut self) -> Vec<bytehost_settings::dialog::DialogEffect> {
+        std::mem::take(&mut self.pending_settings_effects)
+    }
+
+    pub(crate) fn settings_git_admission(&self) -> Arc<bytehost_git_accounts::Admission> {
+        Arc::clone(&self.settings_git_admission)
+    }
+
+    /// 执行控制器回包产生的新命令;新会话要同步重建内容(关闭中重开)。
+    fn apply_settings_lifecycle(&mut self, effects: Vec<bytehost_settings::dialog::DialogEffect>) {
+        use bytehost_settings::dialog::DialogEffect;
+        for effect in &effects {
+            if let DialogEffect::Create(key) = effect {
+                let previous_page = self
+                    .settings
+                    .as_ref()
+                    .and_then(|s| s.core.current().cloned());
+                // 关闭中重开 / Failed 后新会话:旧内容与新会话隔离。
+                self.clear_settings_content();
+                let mut state = settings::State::load_with_page_for_owner(
+                    self.daemon_unavailable.is_some(),
+                    previous_page,
+                    key.session,
+                );
+                state
+                    .language
+                    .update_confirmed(self.locale.snapshot().preference.clone());
+                self.settings = Some(state);
+            }
+        }
+        if matches!(
+            self.settings_dialog.phase(),
+            bytehost_settings::dialog::Phase::Closed
+        ) {
+            self.clear_settings_content();
+        }
+        self.pending_settings_effects.extend(effects);
+        if self.settings_page_is_git() {
+            self.spawn_settings_git_query();
+        }
+    }
+
+    fn clear_settings_content(&mut self) {
+        if let Some(mut state) = self.settings.take() {
+            self.settings_git_admission.cancel_owner(state.git.owner());
+            state.shutdown();
+        }
     }
 
     /// 语言权威快照变化后同步设置页的已确认偏好(保存中的乐观值不受影响)。

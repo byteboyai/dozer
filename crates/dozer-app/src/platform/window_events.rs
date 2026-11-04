@@ -225,9 +225,9 @@ pub(crate) enum Runner {
         /// `app.project_create.is_some()` 驱动。
         project_create_overlay: Option<project_create_overlay::ProjectCreateOverlay>,
         /// 同 `search_overlay`/`file_history_overlay`/`project_create_
-        /// overlay`,设置弹窗的独立窗口宿主。生命周期由
-        /// `sync_settings_overlay` 按 `app.settings.is_some()` 单向驱动
-        /// 开/关,与其余三类互斥。
+        /// overlay`,设置弹窗的独立窗口宿主。生命周期由共享
+        /// `DialogController` 的 `Create` / `Destroy` 命令驱动
+        /// (`sync_settings_overlay`),与其余三类互斥。
         settings_overlay: Option<settings_overlay::SettingsOverlay>,
         /// 通用 confirm 弹窗的独立窗口宿主(五个 confirm 形态消费方共用)。
         /// 生命周期由 `sync_confirm_overlay` 按
@@ -1623,50 +1623,120 @@ impl Runner {
         }
     }
 
-    /// 同 `sync_file_history_overlay`,按 `app.settings.is_some()` 开/关
-    /// settings overlay 窗口。
+    /// 执行共享 `DialogController` 产出的原生命令。窗口的有无由控制器
+    /// 相位决定,不再按 `app.settings.is_some()` 维护第二套开关策略。
     fn sync_settings_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
-        let action = {
-            let Self::Ready {
-                app,
-                settings_overlay,
-                ..
-            } = self
-            else {
-                return;
+        use bytehost_settings::dialog::DialogEffect;
+
+        loop {
+            let effects = {
+                let Self::Ready { app, .. } = self else {
+                    return;
+                };
+                app.take_settings_effects()
             };
-            settings_overlay::sync_action(app.settings.is_some(), settings_overlay.is_some())
-        };
-        match action {
-            settings_overlay::SyncAction::Open => {
-                self.close_other_overlays(OverlayKind::Settings);
-                let Self::Ready {
-                    window,
-                    instance,
-                    adapter,
-                    device,
-                    queue,
-                    settings_overlay,
-                    ..
-                } = self
-                else {
-                    return;
-                };
-                *settings_overlay = Some(settings_overlay::SettingsOverlay::open(
-                    window, adapter, device, queue, instance, el,
-                ));
+            if effects.is_empty() {
+                break;
             }
-            settings_overlay::SyncAction::Close => {
-                let Self::Ready {
-                    settings_overlay, ..
-                } = self
-                else {
-                    return;
-                };
-                *settings_overlay = None;
+            for effect in effects {
+                match effect {
+                    DialogEffect::Create(key) => {
+                        let exists = {
+                            let Self::Ready {
+                                settings_overlay, ..
+                            } = self
+                            else {
+                                return;
+                            };
+                            settings_overlay
+                                .as_ref()
+                                .is_some_and(|overlay| overlay.key() == key)
+                        };
+                        if exists {
+                            if let Self::Ready { app, .. } = self {
+                                app.settings_native_failed(key, "create", "dialog already exists");
+                            }
+                            continue;
+                        }
+                        self.close_other_overlays(OverlayKind::Settings);
+                        let Self::Ready {
+                            window,
+                            instance,
+                            adapter,
+                            device,
+                            queue,
+                            settings_overlay,
+                            ..
+                        } = self
+                        else {
+                            return;
+                        };
+                        let created = settings_overlay::SettingsOverlay::try_open(
+                            window, adapter, device, queue, instance, el, key,
+                        );
+                        match created {
+                            Ok(overlay) => {
+                                *settings_overlay = Some(overlay);
+                                let Self::Ready { app, .. } = self else {
+                                    return;
+                                };
+                                app.settings_native_opened(key);
+                            }
+                            Err(error) => {
+                                // Partial native/GPU resources have been dropped by the factory.
+                                let Self::Ready { app, .. } = self else {
+                                    return;
+                                };
+                                app.settings_native_failed(key, "create", error);
+                            }
+                        }
+                    }
+                    DialogEffect::Activate(key) => {
+                        let Self::Ready {
+                            settings_overlay, ..
+                        } = self
+                        else {
+                            return;
+                        };
+                        if let Some(overlay) = settings_overlay
+                            && overlay.key() == key
+                        {
+                            overlay.focus();
+                            overlay.request_redraw();
+                        }
+                    }
+                    DialogEffect::Destroy { key, .. } => {
+                        let matches = {
+                            let Self::Ready {
+                                settings_overlay, ..
+                            } = self
+                            else {
+                                return;
+                            };
+                            settings_overlay
+                                .as_ref()
+                                .is_some_and(|overlay| overlay.key() == key)
+                        };
+                        if matches {
+                            let Self::Ready {
+                                settings_overlay, ..
+                            } = self
+                            else {
+                                return;
+                            };
+                            *settings_overlay = None;
+                        }
+                        // 即使没有存活实例也必须确认 Closed(创建中取消 /
+                        // 有界超时),否则控制器会卡在 Closing。
+                        let Self::Ready { app, .. } = self else {
+                            return;
+                        };
+                        app.settings_native_closed(key);
+                    }
+                }
             }
-            settings_overlay::SyncAction::Noop => {}
         }
+
         let Self::Ready {
             settings_overlay, ..
         } = self
@@ -1785,7 +1855,7 @@ impl Runner {
     }
 
     /// 数据库「管理驱动」弹窗:开关条件是 `app.database.drivers_popup_open()`
-    /// 布尔值,照抄 `sync_settings_overlay` 的三段 `match SyncAction` 模式。
+    /// 布尔值,沿用其余 overlay 的三段 `match SyncAction` 模式。
     fn sync_database_drivers_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
         let action = {
             let Self::Ready {
@@ -3527,7 +3597,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 }
             }
             // `handle_input` 上面这一圈 `dispatch` 里可能出现
-            // `GoToSettings`(设 `app.settings = Some(...)`)——那扇窗口的
+            // `GoToSettings`(向共享控制器排入 `Create`)——那扇窗口的
             // 生命周期由 `sync_settings_overlay` 单独驱动,这个分支只调
             // 自己的 `sync_project_create_overlay` 的话,新窗口不保证在
             // 这一帧就被建出来(代码评审 finding:GoToSettings doesn't

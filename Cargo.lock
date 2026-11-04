@@ -795,7 +795,6 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 [[package]]
 name = "bytegit"
 version = "0.9.2"
-source = "git+https://github.com/byteboyai/bytegit?tag=v0.9.2#5472fa553ab34d97d9a1e4055c89d03b48eb4848"
 dependencies = [
  "git2",
  "libc",
@@ -807,7 +806,6 @@ dependencies = [
 [[package]]
 name = "bytehost-apps"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.22#729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e"
 dependencies = [
  "bytes",
  "flate2",
@@ -829,7 +827,6 @@ dependencies = [
 [[package]]
 name = "bytehost-client"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.22#729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e"
 dependencies = [
  "bytehost-apps",
  "tokio",
@@ -839,7 +836,6 @@ dependencies = [
 [[package]]
 name = "bytehost-core"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.22#729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e"
 dependencies = [
  "serde",
  "serde_json",
@@ -848,10 +844,10 @@ dependencies = [
 [[package]]
 name = "bytehost-desktop"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.22#729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e"
 dependencies = [
  "block2 0.6.2",
  "bytehost-core",
+ "bytehost-settings",
  "bytehost-webview",
  "iced",
  "iced_renderer",
@@ -871,9 +867,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytehost-git-accounts"
+version = "0.1.0"
+dependencies = [
+ "keyring",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "zeroize",
+]
+
+[[package]]
 name = "bytehost-panel"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.22#729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e"
 dependencies = [
  "bytehost-apps",
  "bytehost-client",
@@ -882,17 +888,17 @@ dependencies = [
 [[package]]
 name = "bytehost-settings"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.22#729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e"
 dependencies = [
+ "bytehost-git-accounts",
  "serde",
 ]
 
 [[package]]
 name = "bytehost-settings-ui"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.22#729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e"
 dependencies = [
  "bytehost-apps",
+ "bytehost-git-accounts",
  "bytehost-panel",
  "bytehost-settings",
  "byteui",
@@ -902,7 +908,6 @@ dependencies = [
 [[package]]
 name = "bytehost-webview"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.22#729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e"
 dependencies = [
  "bytehost-apps",
  "serde",
@@ -952,7 +957,6 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "byteui"
 version = "0.5.2"
-source = "git+https://github.com/byteboyai/byteui?tag=v0.5.2#e33824578d0f6fa10f168657fe08d882ad6fadc4"
 dependencies = [
  "iced_futures",
  "iced_renderer",
@@ -2014,6 +2018,7 @@ dependencies = [
  "bytehost-client",
  "bytehost-core",
  "bytehost-desktop",
+ "bytehost-git-accounts",
  "bytehost-panel",
  "bytehost-settings",
  "bytehost-settings-ui",
@@ -3450,7 +3455,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 1.0.69",
- "windows 0.57.0",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -10231,7 +10236,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11233,6 +11238,20 @@ name = "zeroize"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
+dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "zerotrie"
@@ -11376,3 +11395,7 @@ dependencies = [
  "syn 3.0.9",
  "winnow 1.0.4",
 ]
+
+[[patch.unused]]
+name = "bytehost-chrome"
+version = "0.1.0"

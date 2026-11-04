@@ -1,76 +1,135 @@
-//! Git 账户连接的本地元数据(非敏感:用户名/连接状态)。Token 本身存在
-//! macOS Keychain(`keyring` crate,命名空间 `"dozer-git"`),不落地任何
-//! 明文文件——本文件的 JSON 只存显示用的用户名。设计见
-//! `docs/superpowers/specs/2026-09-18-git-account-settings-design.md`。
+//! Dozer 的 Git 账户适配层。
+//!
+//! 领域 DTO、provider endpoint / 鉴权 / 响应解析、校验 / 连接 / 断开 / 仓库列表
+//! 以及 Keychain / 元数据读写全部来自 `bytehost-git-accounts`。本文件只保留
+//! **Dozer 的注入点**:`dozer-git` Keychain service、`git_accounts.json` 路径,
+//! 以及面向既有调用点的兼容函数 / 本地化错误。
+//!
+//! 不新增任何 Token 校验、Keychain 或 provider 解析的第二份实现。
 
-use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Git 账户操作的结构化错误(Task 07:操作语义 + 原始诊断分离)。
-///
-/// `git_accounts` 在阻塞/网络线程里产生它,拿不到 locale,所以返回结构化的
-/// 原因,由呈现层按当前 locale 渲染;`detail` 是底层系统/网络报错原文,原样
-/// 保留、不翻译。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GitAccountError {
-    /// 写入系统钥匙串失败;`detail` 为系统报错原文。
-    KeychainWrite { detail: String },
-    /// 删除系统钥匙串条目失败;`detail` 为系统报错原文。
-    KeychainDelete { detail: String },
-    /// 网络请求(发起/读取)失败;`detail` 为底层报错原文。
-    Network { detail: String },
-    /// 解析服务商响应失败;`detail` 为解析器报错原文。
-    ParseResponse { detail: String },
-    /// 令牌无效或已过期(whoami 非 2xx)。
-    TokenInvalid,
-    /// whoami 响应缺少 `login` 字段。
-    MissingLoginField,
-    /// 仓库列表响应不是数组。
-    NotArray,
-    /// 拉取仓库列表时令牌失效(非 2xx)。
-    RepoListTokenExpired,
+use std::sync::Arc;
+
+use bytehost_git_accounts::{
+    AccountService, Admission, JsonFileMetadataStore, KeyringCredentialStore, MetadataStore,
+    ReqwestTransport, SecretToken,
+};
+
+pub use bytehost_git_accounts::{
+    ConnectedAccount, GitAccountError, GitAccountsState, GitProvider, RemoteRepo,
+};
+
+/// Dozer 的 Keychain service(保持历史命名,不迁移)。
+pub const KEYCHAIN_SERVICE: &str = "dozer-git";
+
+/// Dozer 元数据文件名(保持历史路径 / schema)。
+pub const METADATA_FILE: &str = "git_accounts.json";
+
+fn file_path() -> PathBuf {
+    dozer_core::paths::config_dir().join(METADATA_FILE)
 }
 
-impl GitAccountError {
-    /// 语言无关的稳定诊断串(英文),用于日志/去重;含原始 `detail`,不翻译。
-    pub fn stable(&self) -> String {
-        match self {
-            GitAccountError::KeychainWrite { detail } => {
-                format!("Failed to write to the system keychain: {detail}")
-            }
-            GitAccountError::KeychainDelete { detail } => {
-                format!("Failed to delete from the system keychain: {detail}")
-            }
-            GitAccountError::Network { detail } => format!("Network request failed: {detail}"),
-            GitAccountError::ParseResponse { detail } => format!("Failed to parse response: {detail}"),
-            GitAccountError::TokenInvalid => "Token is invalid or has expired".to_string(),
-            GitAccountError::MissingLoginField => "Response is missing the login field".to_string(),
-            GitAccountError::NotArray => "Response is not an array".to_string(),
-            GitAccountError::RepoListTokenExpired => {
-                "Failed to load the repository list: the token may have expired; reconnect the account"
-                    .to_string()
-            }
-        }
-    }
+fn metadata() -> JsonFileMetadataStore {
+    JsonFileMetadataStore::new(file_path())
+}
 
-    /// 渲染成当前 locale 的宿主文案(key + fallback + 原始诊断参数)。
-    pub fn localized(&self) -> dozer_model::LocalizedText {
+fn credentials() -> KeyringCredentialStore {
+    KeyringCredentialStore::new(KEYCHAIN_SERVICE)
+}
+
+pub type Service = AccountService<KeyringCredentialStore, JsonFileMetadataStore, ReqwestTransport>;
+
+pub(crate) fn service() -> Service {
+    AccountService::new(credentials(), metadata(), ReqwestTransport)
+}
+
+/// 同一产品(同一设置对话框 / 全部请求)共享的提交准入。每个异步任务
+/// 新建的 `AccountService` 必须带上它,取消 / 乱序请求才不会继续落盘。
+pub fn service_with_admission(admission: Arc<Admission>) -> Service {
+    AccountService::new_with_admission(credentials(), metadata(), ReqwestTransport, admission)
+}
+
+pub fn load() -> GitAccountsState {
+    load_from(&file_path())
+}
+
+pub fn save(state: &GitAccountsState) -> io::Result<()> {
+    save_to(&file_path(), state)
+}
+
+/// 与旧实现一致:缺失 / 损坏文件按空状态处理(重开时 `query` 还会以凭据校正)。
+fn load_from(path: &Path) -> GitAccountsState {
+    JsonFileMetadataStore::new(path).load().unwrap_or_default()
+}
+
+fn save_to(path: &Path, state: &GitAccountsState) -> io::Result<()> {
+    bytehost_git_accounts::MetadataStore::save(&JsonFileMetadataStore::new(path), state)
+        .map_err(|error| io::Error::other(error.stable()))
+}
+
+/// 读不到按未连接处理,不 panic(同 SSH 面板的既有口径)。
+pub fn get_token(provider: GitProvider) -> Option<String> {
+    bytehost_git_accounts::CredentialStore::get(&credentials(), provider)
+        .ok()
+        .flatten()
+        .map(|token| token.expose().to_owned())
+}
+
+pub fn set_token(provider: GitProvider, token: &str) -> Result<(), GitAccountError> {
+    bytehost_git_accounts::CredentialStore::set(&credentials(), provider, &SecretToken::new(token))
+}
+
+/// 条目本来就不存在视为成功——断开一个从未真正连上的账户不报错。
+pub fn delete_token(provider: GitProvider) -> Result<(), GitAccountError> {
+    bytehost_git_accounts::CredentialStore::delete(&credentials(), provider)
+}
+
+pub(crate) fn extract_username(
+    provider: GitProvider,
+    json: &str,
+) -> Result<String, GitAccountError> {
+    provider
+        .extract_username(json)
+        .map(|account| account.username)
+}
+
+pub(crate) fn parse_repo_list(
+    provider: GitProvider,
+    json: &str,
+) -> Result<Vec<RemoteRepo>, GitAccountError> {
+    provider.parse_repo_list(json)
+}
+
+/// 校验 PAT 并返回用户名。
+pub async fn validate_token(provider: GitProvider, token: &str) -> Result<String, GitAccountError> {
+    service()
+        .validate_token(provider, &SecretToken::new(token))
+        .await
+        .map(|account| account.username)
+}
+
+/// 拉取 provider 账户名下的个人仓库。
+pub async fn list_repos(
+    provider: GitProvider,
+    token: &str,
+) -> Result<Vec<RemoteRepo>, GitAccountError> {
+    service()
+        .list_repos(provider, &SecretToken::new(token))
+        .await
+}
+
+/// 让既有调用点继续使用 `.localized()`;实现只有一份,映射到 Dozer 文案 key。
+pub trait LocalizedGitError {
+    fn localized(&self) -> dozer_model::LocalizedText;
+}
+
+impl LocalizedGitError for GitAccountError {
+    fn localized(&self) -> dozer_model::LocalizedText {
         use dozer_model::LocalizedText;
         let owner = crate::i18n::HOST_OWNER;
         match self {
-            GitAccountError::KeychainWrite { detail } => LocalizedText::keyed(
-                owner,
-                "error.keychain_write_failed",
-                "Failed to write to the system keychain: {detail}",
-            )
-            .with_arg("detail", detail.clone()),
-            GitAccountError::KeychainDelete { detail } => LocalizedText::keyed(
-                owner,
-                "error.keychain_delete_failed",
-                "Failed to delete from the system keychain: {detail}",
-            )
-            .with_arg("detail", detail.clone()),
             GitAccountError::Network { detail } => LocalizedText::keyed(
                 owner,
                 "error.network_request_failed",
@@ -103,399 +162,118 @@ impl GitAccountError {
                 "error.repo_list_token_expired",
                 "Failed to load the repository list: the token may have expired; reconnect the account",
             ),
+            GitAccountError::CredentialRead { detail } => LocalizedText::keyed(
+                owner,
+                "error.keychain_read_failed",
+                "Failed to read from the system keychain: {detail}",
+            )
+            .with_arg("detail", detail.clone()),
+            GitAccountError::CredentialWrite { detail } => LocalizedText::keyed(
+                owner,
+                "error.keychain_write_failed",
+                "Failed to write to the system keychain: {detail}",
+            )
+            .with_arg("detail", detail.clone()),
+            GitAccountError::CredentialDelete { detail } => LocalizedText::keyed(
+                owner,
+                "error.keychain_delete_failed",
+                "Failed to delete from the system keychain: {detail}",
+            )
+            .with_arg("detail", detail.clone()),
+            GitAccountError::MetadataRead { detail }
+            | GitAccountError::MetadataWrite { detail } => LocalizedText::keyed(
+                owner,
+                "error.git_account_local_save_failed",
+                "Could not save the local Git account record: {detail}",
+            )
+            .with_arg("detail", detail.clone()),
+            GitAccountError::StaleRequest => LocalizedText::keyed(
+                owner,
+                "error.git_account_stale_request",
+                "The account request was superseded; try again",
+            ),
+            GitAccountError::Unsupported { detail } => LocalizedText::keyed(
+                owner,
+                "error.git_account_unsupported",
+                "This account operation is not supported: {detail}",
+            )
+            .with_arg("detail", detail.clone()),
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum GitProvider {
-    GitHub,
-    GitLab,
-    Gitee,
-}
-
-impl GitProvider {
-    #[cfg(test)]
-    pub const ALL: [GitProvider; 3] =
-        [GitProvider::GitHub, GitProvider::GitLab, GitProvider::Gitee];
-
-    pub fn as_key(self) -> &'static str {
-        match self {
-            GitProvider::GitHub => "github",
-            GitProvider::GitLab => "gitlab",
-            GitProvider::Gitee => "gitee",
-        }
-    }
-
-    pub fn display_name(self) -> &'static str {
-        match self {
-            GitProvider::GitHub => "GitHub",
-            GitProvider::GitLab => "GitLab",
-            GitProvider::Gitee => "Gitee",
-        }
-    }
-
-    pub fn whoami_url(self) -> &'static str {
-        match self {
-            GitProvider::GitHub => "https://api.github.com/user",
-            GitProvider::GitLab => "https://gitlab.com/api/v4/user",
-            GitProvider::Gitee => "https://gitee.com/api/v5/user",
-        }
-    }
-
-    pub fn token_creation_url(self) -> &'static str {
-        match self {
-            GitProvider::GitHub => "https://github.com/settings/tokens/new",
-            GitProvider::GitLab => "https://gitlab.com/-/user_settings/personal_access_tokens",
-            GitProvider::Gitee => "https://gitee.com/profile/personal_access_tokens/new",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConnectedAccount {
-    pub username: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct GitAccountsState {
-    pub github: Option<ConnectedAccount>,
-    pub gitlab: Option<ConnectedAccount>,
-    pub gitee: Option<ConnectedAccount>,
-}
-
-impl GitAccountsState {
-    pub fn get(&self, provider: GitProvider) -> Option<&ConnectedAccount> {
-        match provider {
-            GitProvider::GitHub => self.github.as_ref(),
-            GitProvider::GitLab => self.gitlab.as_ref(),
-            GitProvider::Gitee => self.gitee.as_ref(),
-        }
-    }
-
-    pub fn set(&mut self, provider: GitProvider, account: Option<ConnectedAccount>) {
-        match provider {
-            GitProvider::GitHub => self.github = account,
-            GitProvider::GitLab => self.gitlab = account,
-            GitProvider::Gitee => self.gitee = account,
-        }
-    }
-}
-
-fn file_path() -> PathBuf {
-    dozer_core::paths::config_dir().join("git_accounts.json")
-}
-
-pub fn load() -> GitAccountsState {
-    load_from(&file_path())
-}
-
-pub fn save(state: &GitAccountsState) -> io::Result<()> {
-    save_to(&file_path(), state)
-}
-
-fn load_from(path: &Path) -> GitAccountsState {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-fn save_to(path: &Path, state: &GitAccountsState) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(state).expect("GitAccountsState 总能序列化");
-    std::fs::write(path, json)
-}
-
-fn keyring_entry(provider: GitProvider) -> Result<keyring::Entry, keyring::Error> {
-    keyring::Entry::new("dozer-git", provider.as_key())
-}
-
-/// 读不到按未连接处理,不 panic(同 `extensions::ssh::keyring_password`
-/// 的既有口径)。
-pub fn get_token(provider: GitProvider) -> Option<String> {
-    keyring_entry(provider)
-        .ok()
-        .and_then(|e| e.get_password().ok())
-}
-
-pub fn set_token(provider: GitProvider, token: &str) -> Result<(), GitAccountError> {
-    keyring_entry(provider)
-        .and_then(|e| e.set_password(token))
-        .map_err(|e| GitAccountError::KeychainWrite {
-            detail: e.to_string(),
-        })
-}
-
-/// 条目本来就不存在(`keyring::Error::NoEntry`)视为成功——"断开一个从没
-/// 真正连上的账户"不应该报错。
-pub fn delete_token(provider: GitProvider) -> Result<(), GitAccountError> {
-    match keyring_entry(provider) {
-        Ok(entry) => match entry.delete_credential() {
-            Ok(()) => Ok(()),
-            Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(GitAccountError::KeychainDelete {
-                detail: e.to_string(),
-            }),
-        },
-        Err(e) => Err(GitAccountError::KeychainDelete {
-            detail: e.to_string(),
-        }),
-    }
-}
-
-/// 三家 whoami 接口(GitHub `/user`、GitLab `/api/v4/user`、Gitee
-/// `/api/v5/user`)返回的用户名字段都叫 `login`,不需要按 provider 分支。
-pub(crate) fn extract_username(json: &str) -> Result<String, GitAccountError> {
-    let value: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| GitAccountError::ParseResponse {
-            detail: e.to_string(),
-        })?;
-    value
-        .get("login")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or(GitAccountError::MissingLoginField)
-}
-
-/// 调用服务商 whoami 接口校验 `token` 有效,成功返回用户名。三家鉴权方式
-/// 不同:GitHub 用 `Authorization: Bearer`,GitLab 用 `PRIVATE-TOKEN` 头,
-/// Gitee 用 `access_token` query 参数(Gitee API v5 的既定用法)。不做
-/// 401/403/404 的文案区分(YAGNI),非 2xx 一律归为"令牌无效或已过期"。
-pub async fn validate_token(provider: GitProvider, token: &str) -> Result<String, GitAccountError> {
-    let client = reqwest::Client::new();
-    let mut req = client
-        .get(provider.whoami_url())
-        .header("User-Agent", "dozer");
-    req = match provider {
-        GitProvider::GitHub => req.header("Authorization", format!("Bearer {token}")),
-        GitProvider::GitLab => req.header("PRIVATE-TOKEN", token),
-        GitProvider::Gitee => req.query(&[("access_token", token)]),
-    };
-    let resp = req.send().await.map_err(|e| GitAccountError::Network {
-        detail: e.to_string(),
-    })?;
-    if !resp.status().is_success() {
-        return Err(GitAccountError::TokenInvalid);
-    }
-    let body = resp.text().await.map_err(|e| GitAccountError::Network {
-        detail: e.to_string(),
-    })?;
-    extract_username(&body)
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct RemoteRepo {
-    pub full_name: String,
-    pub clone_url: String,
-}
-
-fn list_repos_url(provider: GitProvider) -> &'static str {
-    match provider {
-        GitProvider::GitHub => {
-            "https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner"
-        }
-        GitProvider::GitLab => {
-            "https://gitlab.com/api/v4/projects?membership=true&owned=true&per_page=100&order_by=last_activity_at"
-        }
-        GitProvider::Gitee => "https://gitee.com/api/v5/user/repos?per_page=100&sort=updated",
-    }
-}
-
-/// 三家仓库列表接口返回数组,字段名不同(设计文档已注明:实现前建议用
-/// 真实账户核实一次响应形状,这里的字段名如与实际不符以真实响应为准
-/// 调整)。单个条目缺期望字段直接跳过,不让整个列表因为一条脏数据报错。
-pub(crate) fn parse_repo_list(
-    provider: GitProvider,
-    json: &str,
-) -> Result<Vec<RemoteRepo>, GitAccountError> {
-    let value: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| GitAccountError::ParseResponse {
-            detail: e.to_string(),
-        })?;
-    let items = value.as_array().ok_or(GitAccountError::NotArray)?;
-    let (name_field, url_field) = match provider {
-        GitProvider::GitHub => ("full_name", "clone_url"),
-        GitProvider::GitLab => ("path_with_namespace", "http_url_to_repo"),
-        GitProvider::Gitee => ("full_name", "html_url"),
-    };
-    let repos = items
-        .iter()
-        .filter_map(|item| {
-            let full_name = item.get(name_field)?.as_str()?.to_string();
-            let clone_url = item.get(url_field)?.as_str()?.to_string();
-            Some(RemoteRepo {
-                full_name,
-                clone_url,
-            })
-        })
-        .collect();
-    Ok(repos)
-}
-
-/// 拉取 `provider` 账户名下的个人仓库(不含组织/团队,只取第一页,见
-/// `docs/superpowers/specs/2026-09-18-project-create-remote-repo-picker-
-/// design.md`「非目标」)。鉴权头写法同 `validate_token`。
-pub async fn list_repos(
-    provider: GitProvider,
-    token: &str,
-) -> Result<Vec<RemoteRepo>, GitAccountError> {
-    let client = reqwest::Client::new();
-    let mut req = client
-        .get(list_repos_url(provider))
-        .header("User-Agent", "dozer");
-    req = match provider {
-        GitProvider::GitHub => req.header("Authorization", format!("Bearer {token}")),
-        GitProvider::GitLab => req.header("PRIVATE-TOKEN", token),
-        GitProvider::Gitee => req.query(&[("access_token", token)]),
-    };
-    let resp = req.send().await.map_err(|e| GitAccountError::Network {
-        detail: e.to_string(),
-    })?;
-    if !resp.status().is_success() {
-        return Err(GitAccountError::RepoListTokenExpired);
-    }
-    let body = resp.text().await.map_err(|e| GitAccountError::Network {
-        detail: e.to_string(),
-    })?;
-    parse_repo_list(provider, &body)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_repo_list_github_shape() {
-        let json = r#"[
-            {"full_name":"abc/python_project","clone_url":"https://github.com/abc/python_project.git"},
-            {"full_name":"abc/rust_project","clone_url":"https://github.com/abc/rust_project.git"}
-        ]"#;
-        let repos = parse_repo_list(GitProvider::GitHub, json).unwrap();
-        assert_eq!(repos.len(), 2);
-        assert_eq!(repos[0].full_name, "abc/python_project");
-        assert_eq!(
-            repos[0].clone_url,
-            "https://github.com/abc/python_project.git"
-        );
+    fn dir() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     #[test]
-    fn parse_repo_list_gitlab_shape() {
-        let json = r#"[
-            {"path_with_namespace":"abc/site","http_url_to_repo":"https://gitlab.com/abc/site.git"}
-        ]"#;
-        let repos = parse_repo_list(GitProvider::GitLab, json).unwrap();
-        assert_eq!(repos.len(), 1);
-        assert_eq!(repos[0].full_name, "abc/site");
-        assert_eq!(repos[0].clone_url, "https://gitlab.com/abc/site.git");
-    }
-
-    #[test]
-    fn parse_repo_list_gitee_shape() {
-        let json = r#"[
-            {"full_name":"abc/demo","html_url":"https://gitee.com/abc/demo"}
-        ]"#;
-        let repos = parse_repo_list(GitProvider::Gitee, json).unwrap();
-        assert_eq!(repos.len(), 1);
-        assert_eq!(repos[0].clone_url, "https://gitee.com/abc/demo");
-    }
-
-    #[test]
-    fn parse_repo_list_empty_array_is_empty_vec() {
-        assert_eq!(parse_repo_list(GitProvider::GitHub, "[]").unwrap(), vec![]);
-    }
-
-    #[test]
-    fn parse_repo_list_skips_items_missing_expected_fields() {
-        let json = r#"[{"full_name":"a/b"}, {"full_name":"c/d","clone_url":"https://x/c/d.git"}]"#;
-        let repos = parse_repo_list(GitProvider::GitHub, json).unwrap();
-        assert_eq!(repos.len(), 1);
-        assert_eq!(repos[0].full_name, "c/d");
-    }
-
-    #[test]
-    fn parse_repo_list_rejects_non_array_json() {
-        assert!(parse_repo_list(GitProvider::GitHub, r#"{"login":"x"}"#).is_err());
-    }
-
-    #[test]
-    fn parse_repo_list_rejects_invalid_json() {
-        assert!(parse_repo_list(GitProvider::GitHub, "not json").is_err());
-    }
-
-    #[test]
-    fn extract_username_reads_login_field() {
-        assert_eq!(
-            extract_username(r#"{"login":"octocat","id":1}"#).unwrap(),
-            "octocat"
-        );
-    }
-
-    #[test]
-    fn extract_username_rejects_missing_login() {
-        assert!(extract_username(r#"{"id":1}"#).is_err());
-    }
-
-    #[test]
-    fn extract_username_rejects_invalid_json() {
-        assert!(extract_username("not json").is_err());
-    }
-
-    #[test]
-    fn git_provider_keys_and_urls_are_distinct() {
-        for p in GitProvider::ALL {
-            assert!(!p.as_key().is_empty());
-            assert!(p.whoami_url().starts_with("https://"));
-            assert!(p.token_creation_url().starts_with("https://"));
-        }
-        assert_ne!(GitProvider::GitHub.as_key(), GitProvider::GitLab.as_key());
-        assert_ne!(GitProvider::GitLab.as_key(), GitProvider::Gitee.as_key());
-    }
-
-    #[test]
-    fn load_from_missing_file_returns_default() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nope.json");
-        assert_eq!(load_from(&path), GitAccountsState::default());
-    }
-
-    #[test]
-    fn save_then_load_round_trips() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("git_accounts.json");
+    fn metadata_round_trips_the_legacy_shape() {
+        let dir = dir();
+        let path = dir.path().join(METADATA_FILE);
         let mut state = GitAccountsState::default();
         state.set(
             GitProvider::GitHub,
             Some(ConnectedAccount {
-                username: "octocat".to_string(),
+                username: "octocat".into(),
             }),
         );
         save_to(&path, &state).unwrap();
         assert_eq!(load_from(&path), state);
+        let json = std::fs::read_to_string(&path).unwrap();
+        assert!(json.contains("\"github\""));
+        assert!(json.contains("\"octocat\""));
+        assert!(!json.contains("token"));
     }
 
     #[test]
-    fn load_from_corrupt_file_returns_default() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("bad.json");
-        std::fs::write(&path, "not json").unwrap();
-        assert_eq!(load_from(&path), GitAccountsState::default());
-    }
-
-    #[test]
-    fn get_and_set_route_to_matching_field() {
-        let mut state = GitAccountsState::default();
-        assert_eq!(state.get(GitProvider::Gitee), None);
-        state.set(
-            GitProvider::Gitee,
-            Some(ConnectedAccount {
-                username: "abc".to_string(),
-            }),
+    fn missing_and_corrupt_files_load_as_empty() {
+        let dir = dir();
+        assert_eq!(
+            load_from(&dir.path().join("missing.json")),
+            GitAccountsState::default()
         );
-        assert_eq!(state.get(GitProvider::Gitee).unwrap().username, "abc");
-        assert_eq!(state.get(GitProvider::GitHub), None);
+        let bad = dir.path().join("bad.json");
+        std::fs::write(&bad, "not json").unwrap();
+        assert_eq!(load_from(&bad), GitAccountsState::default());
+    }
+
+    #[test]
+    fn provider_dtos_come_from_the_shared_crate() {
+        assert_eq!(GitProvider::ALL.len(), 3);
+        assert_eq!(GitProvider::GitHub.as_key(), "github");
+        assert_eq!(
+            GitProvider::GitHub.whoami_url(),
+            "https://api.github.com/user"
+        );
+        assert!(
+            GitProvider::Gitee
+                .token_creation_url()
+                .starts_with("https://")
+        );
+    }
+
+    #[test]
+    fn username_and_repo_parsing_are_shared() {
+        assert_eq!(
+            extract_username(GitProvider::GitHub, r#"{"login":"octocat"}"#).unwrap(),
+            "octocat"
+        );
+        let repos = parse_repo_list(
+            GitProvider::GitLab,
+            r#"[{"path_with_namespace":"a/b","http_url_to_repo":"u"}]"#,
+        )
+        .unwrap();
+        assert_eq!(repos[0].full_name, "a/b");
+    }
+
+    #[test]
+    fn localized_errors_never_embed_a_token() {
+        let error = GitAccountError::TokenInvalid;
+        let text = error.localized();
+        assert!(!format!("{text:?}").contains("ghp_"));
     }
 }

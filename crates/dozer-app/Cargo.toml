@@ -26,6 +26,7 @@ bytehost-webview.workspace = true
 bytehost-panel.workspace = true
 # 设置窗口的共享实现(bytehost-settings / bytehost-settings-ui):Dozer 只做页面注册与本地适配。
 bytehost-settings.workspace = true
+bytehost-git-accounts.workspace = true
 bytehost-settings-ui.workspace = true
 # 公共桌面宿主契约:稳定身份、请求身份、布局 DTO(bytehost-core,按发布 tag 引用)。
 bytehost-core.workspace = true
